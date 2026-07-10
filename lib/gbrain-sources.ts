@@ -10,8 +10,15 @@
  */
 
 import { execFileSync, spawnSync } from "child_process";
+import { realpathSync } from "fs";
 import { withErrorContext } from "./gstack-memory-helpers";
 import { execGbrainJson, NEEDS_SHELL_ON_WINDOWS } from "./gbrain-exec";
+import {
+  detectAutopilot,
+  decideSourceRemove,
+  type AutopilotProbe,
+  type DecideRemoveOpts,
+} from "./gbrain-guards";
 
 export interface SourceState {
   /** "absent" — id not registered. "match" — id at expected path. "drift" — id at different path. */
@@ -70,6 +77,33 @@ export interface EnsureOptions {
    * mutations of process.env.PATH unless env is passed explicitly).
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * #1734 test hooks for the drift-remove guards. Production callers leave
+   * these unset (real autopilot detection + real remove decision). Tests pin
+   * them so a live autopilot on the dev machine can't flip test outcomes.
+   */
+  autopilotProbe?: AutopilotProbe;
+  removeDecision?: DecideRemoveOpts;
+}
+
+/**
+ * Path equality with realpath normalization (macOS /tmp -> /private/tmp,
+ * symlinked worktrees). A registered path that resolves to the same real
+ * directory is NOT drift — declaring it drift triggers a destructive
+ * remove+add and a full re-index for a no-op (#1985 reporter hit the remove
+ * on an unmoved repo).
+ */
+function samePath(registered: string | undefined, requested: string): boolean {
+  if (!registered) return false;
+  if (registered === requested) return true;
+  const real = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  return real(registered) === real(requested);
 }
 
 /**
@@ -142,9 +176,10 @@ export async function ensureSourceRegistered(
   return withErrorContext(`ensureSourceRegistered:${id}`, () => {
     const probed = probeSource(id, env);
 
-    // Disambiguate match-but-different-path
+    // Disambiguate match-but-different-path (realpath-normalized: a symlink
+    // alias of the same directory is a match, not drift).
     let state: SourceState = probed;
-    if (probed.status === "match" && probed.registered_path !== path) {
+    if (probed.status === "match" && !samePath(probed.registered_path, path)) {
       state = { status: "drift", registered_path: probed.registered_path };
     }
 
@@ -165,12 +200,40 @@ export async function ensureSourceRegistered(
     // stage for any source that has drifted to a new path. This matches the
     // flag the orchestrator's own safeSourcesRemove() already passes.
     if (state.status === "drift") {
-      const rm = spawnSync("gbrain", ["sources", "remove", id, "--yes", "--confirm-destructive"], {
-        encoding: "utf-8",
-        timeout: 30_000,
-        env,
-        shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
-      });
+      // Loud drift observability: if this line shows up on every sync for some
+      // environment, drift is perpetual there and the reindex-in-place design
+      // from #1985 should be promoted (drop+rebuild re-embeds the full index).
+      console.error(
+        `[gbrain-sources] drift: ${id} registered at ${state.registered_path} -> re-registering at ${path}`,
+      );
+
+      // #1734: this remove deletes the source's pages/chunks/embeddings, so it
+      // runs only behind the same data-loss guards as the orchestrator's
+      // safeSourcesRemove(). A refusal is FATAL here (not best-effort): without
+      // the remove the add cannot proceed, and returning changed=false would
+      // silently hide the drifted registration.
+      const ap = detectAutopilot(env ?? process.env, options.autopilotProbe ?? {});
+      if (ap.active) {
+        throw new Error(
+          `refusing drift re-register of ${id}: autopilot active (${ap.signal}). ` +
+            `Stop autopilot, then re-run /sync-gbrain.`,
+        );
+      }
+      const decision = decideSourceRemove(id, env ?? process.env, options.removeDecision ?? {});
+      if (!decision.allow) {
+        throw new Error(`refusing drift re-register of ${id}: ${decision.reason}`);
+      }
+
+      const rm = spawnSync(
+        "gbrain",
+        ["sources", "remove", id, "--yes", "--confirm-destructive", ...decision.extraArgs],
+        {
+          encoding: "utf-8",
+          timeout: 30_000,
+          env,
+          shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
+        },
+      );
       if (rm.status !== 0) {
         throw new Error(`gbrain sources remove ${id} failed: ${rm.stderr || rm.stdout || `exit ${rm.status}`}`);
       }
