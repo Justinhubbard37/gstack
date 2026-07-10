@@ -139,6 +139,14 @@ BEFORE invoking the orchestrator:
   slow (cold pooler connection, #1964). Tell the user in one line: "Engine
   probe timed out (>15s) — proceeding; raise `GSTACK_GBRAIN_PROBE_TIMEOUT_MS`
   if your pooler is slow." Do NOT treat this as a broken config.
+- **`thin-client`**: proceed to Step 2 — this machine is a thin client of a
+  remote-HTTP MCP brain (#2051): no local engine BY DESIGN, so the code,
+  memory, and dream stages will SKIP with a thin-client reason (code indexing
+  runs on the brain server; memory syncs via the remote brain's artifacts
+  pull). Only the brain-sync push runs locally. Tell the user in one line:
+  "Thin client of a remote brain — local stages skip by design; brain queries
+  work via remote MCP (reachability is verified at use time, not probed
+  here)." Do NOT route this into the broken-config remediation.
 - **`no-cli`**: STOP. "Local gbrain CLI not installed. Run `/setup-gbrain`
   first."
 - **`missing-config`** AND `gbrain_mcp_mode == "remote-http"`: tell the user

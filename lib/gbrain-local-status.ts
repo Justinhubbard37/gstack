@@ -22,6 +22,12 @@
  * Timeout → probe exceeded GSTACK_GBRAIN_PROBE_TIMEOUT_MS (default 15s) with no
  *           recognized error — engine is likely healthy but slow (e.g. a cold
  *           pooler connection, #1964). Consumers treat this as usable.
+ * Thin-client → config carries gbrain's remote_mcp marker (#2051): NO local
+ *           engine by design; queries go to a remote-HTTP MCP brain. Usable
+ *           for brain-aware prose gates; sync stages that need a LOCAL engine
+ *           (code/memory/dream) skip. Remote reachability is verified at USE
+ *           time (gbrain calls degrade gracefully), never by a classifier
+ *           network probe — that's the #1964 pathology.
  * Ok → DB reachable, sources list returned valid JSON.
  */
 
@@ -47,7 +53,8 @@ export type LocalEngineStatus =
   | "missing-config"
   | "broken-config"
   | "broken-db"
-  | "timeout";
+  | "timeout"
+  | "thin-client";
 
 export interface ClassifyOptions {
   /** Bypass the 60s cache. Used after any state-mutating operation. */
@@ -258,6 +265,26 @@ function freshClassify(env?: NodeJS.ProcessEnv): LocalEngineStatus {
   // 2. Config file present?
   if (!existsSync(gbrainConfigPath(env))) return "missing-config";
 
+  // 2.5 Thin client? gbrain's own marker (mirrors gbrain isThinClient():
+  // truthy remote_mcp in config). A thin client has NO local engine — gbrain
+  // REFUSES `sources` commands on it (THIN_CLIENT_REFUSED_COMMANDS, exit 1
+  // with no recognized error string), so the probe below would fall to the
+  // defensive broken-config default and silently suppress brain-aware blocks
+  // (#2051). Detected PRE-probe from the config file: zero network cost,
+  // immune to gbrain error-string drift. Remote reachability is deliberately
+  // NOT probed here — a classifier network probe is the #1964 pathology.
+  try {
+    const cfg = JSON.parse(readFileSync(gbrainConfigPath(env), "utf-8")) as {
+      remote_mcp?: unknown;
+    };
+    if (cfg && typeof cfg === "object" && cfg.remote_mcp) {
+      return "thin-client";
+    }
+  } catch {
+    // Unparseable config: fall through to the probe, whose stderr
+    // classification surfaces broken-config with the raw error upstream.
+  }
+
   // 3. Probe gbrain sources list.
   //
   // Seed DATABASE_URL from ~/.gbrain/config.json (via buildGbrainEnv, the
@@ -288,7 +315,11 @@ function freshClassify(env?: NodeJS.ProcessEnv): LocalEngineStatus {
     if (e.code === "ENOENT") return "no-cli";
 
     // Pattern match against gbrain's known error strings. Order matters:
-    // "Cannot connect to database" is the more specific DB-unreachable signal.
+    // thin-client refusal first (backstop for a config the pre-probe check
+    // couldn't read — gbrain's dispatch guard says e.g. "`gbrain sources` is
+    // not routable ... (thin-client of <url>)"), then the more specific
+    // DB-unreachable signal.
+    if (/thin[- ]client/i.test(stderr)) return "thin-client";
     if (stderr.includes("Cannot connect to database")) return "broken-db";
     if (stderr.includes("config.json")) return "broken-config";
 

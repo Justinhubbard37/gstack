@@ -31,7 +31,7 @@ import {
   utimesSync,
 } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 
 import { spawnSync } from "child_process";
 
@@ -61,8 +61,10 @@ interface FakeEnv {
  */
 function makeEnv(opts: {
   withGbrain?: boolean;
-  gbrainBehavior?: "ok" | "broken-db" | "broken-config" | "throws" | "slow";
+  gbrainBehavior?: "ok" | "broken-db" | "broken-config" | "throws" | "slow" | "thin-refusal";
   withConfig?: boolean;
+  /** #2051: config carries gbrain's remote_mcp thin-client marker. */
+  thinClientConfig?: boolean;
 }): FakeEnv {
   const tmp = mkdtempSync(join(tmpdir(), "gbrain-local-status-test-"));
   const bindir = join(tmp, "bin");
@@ -76,7 +78,12 @@ function makeEnv(opts: {
   mkdirSync(gstackHome, { recursive: true });
   mkdirSync(configDir, { recursive: true });
 
-  if (opts.withConfig) {
+  if (opts.thinClientConfig) {
+    writeFileSync(
+      configPath,
+      JSON.stringify({ remote_mcp: { mcp_url: "https://brain.example.com/mcp" } }),
+    );
+  } else if (opts.withConfig) {
     writeFileSync(
       configPath,
       JSON.stringify({ engine: "pglite", database_url: "pglite:///fake" }),
@@ -102,7 +109,7 @@ function makeEnv(opts: {
 }
 
 function makeFakeGbrainScript(
-  behavior: "ok" | "broken-db" | "broken-config" | "throws" | "slow",
+  behavior: "ok" | "broken-db" | "broken-config" | "throws" | "slow" | "thin-refusal",
 ): string {
   // "slow": healthy engine on a cold pooler connection (#1964) — sleeps past
   // the (test-lowered) probe timeout, then would answer fine.
@@ -127,7 +134,9 @@ exit 0
         ? 'echo "Error: malformed config.json at ~/.gbrain/config.json" >&2'
         : behavior === "throws"
           ? 'echo "unexpected gbrain failure" >&2'
-          : "";
+          : behavior === "thin-refusal"
+            ? 'echo "Error: gbrain sources is not routable to the remote brain (thin-client of https://brain.example.com/mcp)" >&2'
+            : "";
   const exitCode = behavior === "ok" ? 0 : 1;
   return `#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -430,5 +439,74 @@ describe("lib/gbrain-local-status — cache behavior", () => {
     } finally {
       env2.cleanup();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2051: thin-client classification + the end-to-end --is-ok gate
+// ---------------------------------------------------------------------------
+
+describe("lib/gbrain-local-status — thin-client (#2051)", () => {
+  let env: FakeEnv | null = null;
+  let restoreEnv: (() => void) | null = null;
+
+  afterEach(() => {
+    if (restoreEnv) restoreEnv();
+    if (env) env.cleanup();
+    env = null;
+    restoreEnv = null;
+  });
+
+  it("returns 'thin-client' when config carries gbrain's remote_mcp marker (pre-probe, no engine call)", () => {
+    // The fake gbrain would answer "ok" if probed — proving the marker is
+    // read from config BEFORE any probe (zero network, no error-string
+    // dependence).
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "ok", thinClientConfig: true });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("returns 'thin-client' via the stderr refusal fallback when the config marker is unreadable", () => {
+    // Regular (non-thin) config on disk, but gbrain itself refuses with the
+    // dispatch-guard message — the catch-path backstop.
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "thin-refusal", withConfig: true });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  // The eng-review 3A tripwire: the END-TO-END gate, not just the classifier
+  // return. --is-ok drives setup:1299 and gstack-config gbrain-refresh — this
+  // exit code is what decides whether brain-aware blocks render for a
+  // thin-client user (the #2051 report).
+  it("--is-ok exits 0 on a thin-client fixture (end-to-end gate)", () => {
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "ok", thinClientConfig: true });
+    const detectBin = join(import.meta.dir, "..", "bin", "gstack-gbrain-detect");
+    const bunDir = dirname(process.execPath);
+    const r = spawnSync(detectBin, ["--is-ok"], {
+      encoding: "utf-8",
+      env: {
+        HOME: env.home,
+        PATH: `${env.bindir}:${bunDir}:/usr/bin:/bin`,
+        GSTACK_HOME: env.gstackHome,
+        GSTACK_DETECT_NO_CACHE: "1",
+      },
+    });
+    expect(r.status).toBe(0);
+  });
+
+  it("--is-ok still exits 1 on broken-config (thin-client did not widen the gate)", () => {
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "broken-config", withConfig: true });
+    const detectBin = join(import.meta.dir, "..", "bin", "gstack-gbrain-detect");
+    const bunDir = dirname(process.execPath);
+    const r = spawnSync(detectBin, ["--is-ok"], {
+      encoding: "utf-8",
+      env: {
+        HOME: env.home,
+        PATH: `${env.bindir}:${bunDir}:/usr/bin:/bin`,
+        GSTACK_HOME: env.gstackHome,
+        GSTACK_DETECT_NO_CACHE: "1",
+      },
+    });
+    expect(r.status).toBe(1);
   });
 });

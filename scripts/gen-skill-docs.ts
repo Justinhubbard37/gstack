@@ -47,9 +47,15 @@ function loadGbrainOverride(): { detected: boolean } {
   const detectionPath = path.join(stateDir, 'gbrain-detection.json');
   try {
     const json = JSON.parse(fs.readFileSync(detectionPath, 'utf-8')) as { gbrain_local_status?: string };
-    // "timeout" = slow-but-healthy engine (#1964) — same treatment as "ok",
-    // matching gstack-gbrain-detect --is-ok.
-    return { detected: json.gbrain_local_status === 'ok' || json.gbrain_local_status === 'timeout' };
+    // "timeout" = slow-but-healthy engine (#1964); "thin-client" = remote-HTTP
+    // MCP brain with no local engine by design (#2051). Both usable — same
+    // treatment as "ok", matching gstack-gbrain-detect --is-ok.
+    return {
+      detected:
+        json.gbrain_local_status === 'ok' ||
+        json.gbrain_local_status === 'timeout' ||
+        json.gbrain_local_status === 'thin-client',
+    };
   } catch {
     return { detected: false };
   }

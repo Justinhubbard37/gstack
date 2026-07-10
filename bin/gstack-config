@@ -411,9 +411,11 @@ case "${1:-}" in
     fi
 
     case "$STATUS" in
-      ok|timeout)
-        # "timeout" = slow-but-healthy engine (#1964) — same treatment as
-        # "ok", matching gstack-gbrain-detect --is-ok and gen-skill-docs.
+      ok|timeout|thin-client)
+        # "timeout" = slow-but-healthy engine (#1964); "thin-client" =
+        # remote-HTTP MCP brain, no local engine by design (#2051) — same
+        # treatment as "ok", matching gstack-gbrain-detect --is-ok and
+        # gen-skill-docs.
         echo "Detected gbrain v$VERSION (local-status: $STATUS)."
         # Render brain-aware blocks INTO the global install so EVERY project's
         # Claude sessions get them (other projects read SKILL.md + sections from

@@ -719,6 +719,9 @@ function dreamMarkerPid(): number | null {
  *   broken-db      → "config points at unreachable DB; see /setup-gbrain Step 1.5"
  *   timeout        → kept for Record totality; stages PROCEED on timeout (#1964)
  *                    via the gate's warnProbeTimeout path, never this skip.
+ *   thin-client    → remote-HTTP MCP brain, no local engine by design (#2051);
+ *                    local sync stages skip (gbrain refuses sources/sync there),
+ *                    but suppression gates treat the brain as USABLE.
  */
 function skipStageForLocalStatus(
   stage: "code" | "memory" | "dream",
@@ -735,6 +738,10 @@ function skipStageForLocalStatus(
       "config points at unreachable DB; see /setup-gbrain Step 1.5",
     "timeout":
       "engine probe timed out; raise GSTACK_GBRAIN_PROBE_TIMEOUT_MS if your pooler is slow",
+    "thin-client":
+      "thin client (remote-HTTP MCP brain, no local engine by design, #2051); " +
+      "code indexing runs on the brain server, memory syncs via the remote " +
+      "brain's artifacts pull — nothing to do locally",
   };
   const reason = reasons[status as Exclude<LocalEngineStatus, "ok">];
   return {
