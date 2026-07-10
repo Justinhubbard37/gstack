@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.60.0.0] - 2026-07-09
+
+## **Nine guard bugs fixed in one wave.**
+## **Every fix ships with a tripwire that proves the guard actually guards.**
+
+This release closes out the silent-failure class across gstack: guards and tools that reported success while doing nothing. Question cards render again on current Claude Code builds. /careful catches chained, substituted, and capital-flag deletes it used to wave through. The design CLI fails loudly on bad flags instead of billing you for a guess. Shared team brains (thin clients) get brain-aware planning instead of silent suppression. Four of the fixes came from community PRs, absorbed with authorship intact and hardened on top.
+
+### The six numbers that matter
+
+Source: this branch's diff against v1.58.5.0. Every new test was first run against the unfixed code and confirmed failing, then confirmed passing after the fix.
+
+| What | Before | After |
+|------|--------|-------|
+| AskUserQuestion on Claude Code 2.1.89+ | "Tool result missing due to internal error" | card renders |
+| `rm -R /`, `rm -rf $(cmd)/node_modules` via /careful | silent allow | ask |
+| `design variants --count abc` | 0 variants, exit 0 | exit 1 with usage hint |
+| Thin-client team brains | broken-config, brain blocks suppressed | usable, sync stages skip with reason |
+| /office-hours SESSION_COUNT | ~2x inflated | exact |
+| New tripwire test cases | n/a | 72 |
+
+The first row is the one to feel. The question-card primitive every interactive skill depends on was orphaned on current Claude Code builds: the preference hook emitted `permissionDecision:'defer'`, whose semantics became "pause for external resumption" in CC v2.1.89. The fix is a two-branch pass-through (exact-empty stdout, or additionalContext-only output for plan-tune memory nuggets), plus a corrected protocol reference doc so the mistake cannot be re-learned from our own docs.
+
+### What this means for you
+
+Interactive skills ask you questions again on current Claude Code. Safety guards fail closed: chained deletes, command substitution, capital `-R`, and destructive credential phrasings ("reset my secrets") all reach a human now. If your team runs a shared remote brain, `/sync-gbrain` and brain-aware planning work on thin clients out of the box. Run `/gstack-upgrade` to get all of it. The hook fix arrives with the file update, no settings change needed.
+
+### Itemized changes
+
+#### Fixed
+
+- **AskUserQuestion orphaned on Claude Code 2.1.89+ (#2035, #2006).** `question-preference-hook` pass-through is now exit 0 with exactly empty stdout (or additionalContext-only output for plan-tune memory nuggets), never `permissionDecision:'defer'`. `defer()` renamed `passThrough()`; the protocol contract in `docs/spikes/claude-code-hook-mutation.md` corrected in the same commit; 13 assertions rewritten across 3 test files; the tripwire asserts exact-empty stdout so a garbage write cannot slip past an optional-chained parse. Existing installs pick the fix up via `/gstack-upgrade` (the registered hook shim execs the TypeScript live).
+- **/careful chained-rm bypass (#2039).** Contributed by @jbetala7: the safe-exception shortcut applies only to single commands; any shell separator falls through to the warning. Hardened on top: `$(` and backtick substitution count as separators, and both greps accept capital `-R` (the BSD/macOS recursive flag). `rm -rf /; rm -rf node_modules`, `rm -rf $(./wipe-all)/node_modules`, and `rm -R /` all ask now; `rm -Rf node_modules` alone still allows.
+- **/context-restore loading a sibling worktree's checkpoint (#2052).** Contributed by @jbetala7: restore prefers the current branch's own checkpoint over newer sibling-worktree saves (scans 200 newest, partitions by branch frontmatter), and keeps the Conductor handoff fallback when the branch has no checkpoint.
+- **/sync-gbrain drift re-register on gbrain 0.42+ (#1985).** Contributed by @jbetala7: the drift remove passes `--confirm-destructive`. Hardened on top: the remove routes through the #1734 data-loss guards (refuses loudly while an autopilot runs), propagates `--keep-storage`, realpath-normalizes drift detection (a symlink alias of the same directory is a match, not drift, the probable cause of the reporter's unmoved-repo drift), and logs old vs new path whenever drift fires.
+- **Developer-profile double counting (#2067).** Contributed by @mvann: `mode:"resources"` bookkeeping rows no longer inflate SESSION_COUNT, TIER, or the builder-to-founder nudge; 8 regression tests pin the tier boundaries from both sides.
+- **One-way-door credential net inert and leaky (#2024).** revoke/reset/rotate now share one noun list with plurals ("reset my secrets" classifies one-way), and the net is wired into the runtime: `gstack-question-preference --check <id> --summary-stdin` pipes the question text (stdin, never argv, so quotes and newlines survive), and the enforcement hook falls back to the classifier for unregistered ids, so an ad-hoc destructive question with a stored never-ask preference can no longer auto-decide.
+- **design CLI silent NaN flags (#2032).** `--count`, `--retry`, and `--timeout` share one loud contract via `design/src/flag-utils.ts`: non-integer input errors with exit 1 ("3.7" is rejected, not truncated), above-max clamps with a stderr warning, and the variants ceiling derives from the style list instead of a magic 7. Previously `--retry abc` made generate a silent no-op and `--timeout abc` killed the serve board at boot.
+- **Thin-client brains misclassified as broken (#2051).** New `thin-client` engine state, read from gbrain's own `remote_mcp` config marker before any probe. Usable at every suppression gate (`--is-ok`, gen-skill-docs detection, `gstack-config gbrain-refresh`) while the local sync stages skip with an accurate reason (code indexing runs on the brain server; memory syncs via the remote brain's artifacts pull). The detect JSON reports `gbrain_thin_client: {probed: false}`: config verified, reachability checked at use time where gbrain calls degrade gracefully. detectMcpMode also recognizes gbrain servers registered under variant names or matched by the config's `mcp_url`.
+
+#### Closed as already fixed, with receipts
+
+- #1965 (GBRAIN_PREPARE pooler breakage): `lib/gbrain-exec.ts:86` never sets it; pinned by `test/build-gbrain-env.test.ts:121-142`.
+- #1950 (Windows git-bash learnings silently dropped): `bin/gstack-learnings-log:10-15` cygpath fix + stderr surfacing; pinned by `test/bin-windows-bun-import-paths.test.ts`.
+- #1964 (slow engines misclassified): `probeTimeoutMs()` honors `GSTACK_GBRAIN_PROBE_TIMEOUT_MS`; timeout classifies usable; pinned by `test/gbrain-local-status.test.ts`.
+
+#### For contributors
+
+- 11 bisect commits; 4 community PRs absorbed with authorship preserved. Contributed by @jbetala7 (#2040, #2054, #2031) and @mvann (#1991). Thank you both.
+- 72 new test cases across 9 files, each verified failing against the unfixed code before the fix landed.
+- Three follow-ups filed in TODOS.md: wire `design/test/` into CI (all 8 existing files are invisible to every runner today, plus a documented pre-existing timing flake), /context-save worktree-identity hardening (the #2052 residual), and conditional gbrain reindex-in-place gated on the new drift log.
+
 ## [1.58.5.0] - 2026-06-21
 
 ## **A fresh install now lands on a concrete first move, not a dead end.**

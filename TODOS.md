@@ -45,6 +45,74 @@ a silent mistake breaks all 52 skills. High blast radius — needs its own focus
 
 ## Test infrastructure
 
+### P2: Wire `design/test/` into CI (all 8 files are invisible to every runner)
+
+**What:** Add `design/test/` to the `bun test` glob (`package.json:21`) and
+`TEST_ROOTS` (`scripts/test-free-shards.ts:32`) after auditing its 8 files for
+server-spawning/flakiness (they were plausibly excluded on purpose). While in
+there, fix the known timing flake: `variants-retry-after.test.ts` "HTTP-date:
+honors a future date with no extra leading exponential" fails ~1-2 in 9 runs
+under parallel suite load (verified pre-existing on v1.58.5.0 during the
+June 2026 fix wave — wall-clock assertion with a ~2s window).
+
+**Why:** Every test in `design/test/` runs only when someone types the path by
+hand — a silent coverage hole, the fix wave's theme at meta-level. The wave's
+own design tests went into `test/design-flag-utils.test.ts` to dodge this.
+
+**Pros:** design binary gets CI coverage; kills a latent "we have tests" illusion.
+**Cons:** unaudited files may spawn servers or flake; audit first, wire second.
+
+**Context:** Filed from the June 2026 fix-wave eng review (issue 11 + flake
+receipts). Start with the audit: which of the 8 files are hermetic? Wire the
+hermetic ones, quarantine or fix the rest.
+
+**Effort:** S-M (human ~1d, CC ~30min). **Depends on:** None.
+
+### P2: /context-save worktree-identity hardening (the #2052 residual)
+
+**What:** Persist a stable worktree identity (path hash or worktree name) into
+checkpoint frontmatter at save time; `/context-restore` prefers identity match
+over branch-name match. PR #2054 (@jbetala7, absorbed in the June 2026 wave)
+fixed restore ORDERING (current-branch first), but branch frontmatter is not a
+stable worktree identity: same-name branches across clones/remotes, renamed
+branches, and detached HEAD can still restore the wrong checkpoint.
+
+**Why:** Closes the residual wrong-checkpoint class entirely instead of the
+common case. Codex outside-voice concurred during the wave's eng review.
+
+**Pros:** Eliminates cross-clone checkpoint collisions.
+**Cons:** Frontmatter schema change; needs a migration story for old
+checkpoints (no-identity checkpoints rank as fallback, like #2054's
+no-branch handling).
+
+**Context:** Filed from the June 2026 fix-wave eng review (NOT-in-scope item).
+Start at `context-restore/SKILL.md.tmpl` Step 1 + `/context-save`'s frontmatter
+writer; mirror #2054's partition logic with identity as the first key.
+
+**Effort:** S (human ~4h, CC ~20min). **Depends on:** #2054 (landed in the wave).
+
+### P3: gbrain reindex-in-place on perpetual drift (conditional — check the drift log first)
+
+**What:** IF the `[gbrain-sources] drift:` stderr line (added in the June 2026
+wave) shows drift firing on every sync for some environment, implement #1985's
+reporter design: refresh an existing source in place with `gbrain reindex-code`
+instead of remove+add (which drops and re-embeds the full index — 768 pages /
+6,786 embeddings in the reporter's case).
+
+**Why:** Perpetual drift means paying full re-embed cost every sync. The wave's
+`realpathSync` normalization (symlink aliases are a match, not drift) may have
+eliminated the drift class entirely — that's why this is conditional.
+
+**Pros:** Avoids repeated embedding spend for affected environments.
+**Cons:** Speculative until the drift log produces evidence; reindex-in-place
+has its own consistency questions (stale chunks for deleted files).
+
+**Context:** Filed from the June 2026 fix-wave eng review (4A observability).
+Trigger condition documented in `lib/gbrain-sources.ts` at the drift log line.
+
+**Effort:** M (human ~1d, CC ~45min). **Depends on:** drift-log evidence from
+the wave's `ensureSourceRegistered` logging.
+
 ### Eval harness: live progress + incremental result persistence (kill the silent hour)
 
 **Priority:** P1
