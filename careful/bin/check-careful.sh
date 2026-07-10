@@ -36,9 +36,13 @@ HAS_SEPARATOR=false
 case "$CMD" in
   # Real separators, plus JSON-escaped newlines (\n / \r) which survive the
   # grep extraction path as literal two-char sequences and still mark a chain.
-  *';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*|*'\n'*|*'\r'*) HAS_SEPARATOR=true ;;
+  # Command/backtick substitution counts as chaining too: a token like
+  # `$(./wipe-all)/node_modules` ends in a whitelisted suffix while running
+  # anything inside the substitution. Plain $VAR expansion stays allowed —
+  # only `$(` triggers.
+  *';'*|*'|'*|*'&'*|*'$('*|*'`'*|*$'\n'*|*$'\r'*|*'\n'*|*'\r'*) HAS_SEPARATOR=true ;;
 esac
-if [ "$HAS_SEPARATOR" = false ] && printf '%s' "$CMD" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+|--recursive\s+)' 2>/dev/null; then
+if [ "$HAS_SEPARATOR" = false ] && printf '%s' "$CMD" | grep -qE 'rm\s+(-[a-zA-Z]*[rR][a-zA-Z]*\s+|--recursive\s+)' 2>/dev/null; then
   SAFE_ONLY=true
   RM_ARGS=$(printf '%s' "$CMD" | sed -E 's/.*rm[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*//;s/--recursive[[:space:]]*//')
   for target in $RM_ARGS; do
@@ -63,8 +67,8 @@ fi
 WARN=""
 PATTERN=""
 
-# rm -rf / rm -r / rm --recursive
-if printf '%s' "$CMD" | grep -qE 'rm\s+(-[a-zA-Z]*r|--recursive)' 2>/dev/null; then
+# rm -rf / rm -r / rm -R / rm --recursive (capital -R is BSD/macOS recursive)
+if printf '%s' "$CMD" | grep -qE 'rm\s+(-[a-zA-Z]*[rR]|--recursive)' 2>/dev/null; then
   WARN="Destructive: recursive delete (rm -r). This permanently removes files."
   PATTERN="rm_recursive"
 fi

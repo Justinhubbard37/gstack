@@ -121,6 +121,66 @@ describe('check-careful.sh', () => {
       expect(output.permissionDecision).toBe('ask');
       expect(output.message).toContain('recursive delete');
     });
+
+    // Command substitution is a chaining form: the substitution token can end in
+    // a whitelisted suffix while running anything inside $(...) or backticks,
+    // and the safe-exception early exit would skip ALL downstream checks.
+    test('rm -rf $(./wipe-all)/node_modules warns (command substitution)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -rf $(./wipe-all)/node_modules'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
+
+    test('rm -rf `./wipe-all`/node_modules warns (backtick substitution)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -rf `./wipe-all`/node_modules'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
+
+    // Capital -R is the documented recursive flag on BSD rm (macOS) and accepted
+    // by GNU rm. Both greps previously required a lowercase r, so `rm -R /`
+    // silently allowed.
+    test('rm -R / warns (capital -R recursive)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -R /'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
+
+    test('rm -fR /home/user warns (capital R in flag cluster)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -fR /home/user'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
+
+    test('rm -Rf node_modules allows (capital R, single safe target)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -Rf node_modules'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBeUndefined();
+    });
+
+    // The JSON-escaped-newline separator branch (literal two-char \n surviving
+    // the grep extraction path) had dedicated code but no test exercising it.
+    test('newline-chained rm warns (escaped-newline separator branch)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -rf /etc/x\nrm -rf node_modules'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
+
+    // Deliberate false positive, pinned: a safe-prefix chain ending in a safe rm
+    // is indistinguishable from the dangerous-first exploit shape without real
+    // shell parsing, so warn-on-all-chains is the designed fail-closed direction.
+    // A future per-segment parser must consciously change this test.
+    test('cd app && rm -rf node_modules asks (fail-closed on chains, by design)', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('cd app && rm -rf node_modules'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
   });
 
   // --- SQL destructive commands ---
