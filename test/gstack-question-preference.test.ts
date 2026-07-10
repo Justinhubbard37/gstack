@@ -39,6 +39,20 @@ function run(...args: string[]): { stdout: string; stderr: string; status: numbe
   };
 }
 
+function runWithStdin(input: string, ...args: string[]): { stdout: string; stderr: string; status: number } {
+  const res = spawnSync(BIN, args, {
+    env: { ...process.env, GSTACK_HOME: tmpHome },
+    encoding: 'utf-8',
+    cwd: ROOT,
+    input,
+  });
+  return {
+    stdout: res.stdout ?? '',
+    stderr: res.stderr ?? '',
+    status: res.status ?? -1,
+  };
+}
+
 // -----------------------------------------------------------------------
 // --check
 // -----------------------------------------------------------------------
@@ -100,6 +114,49 @@ describe('--check with preferences set', () => {
     setPref('ship-test-failure-triage', 'ask-only-for-one-way');
     const r = run('--check', 'ship-test-failure-triage');
     expect(r.stdout.trim()).toContain('ASK_NORMALLY');
+  });
+});
+
+// #2024: the keyword net only fires when the question TEXT reaches the
+// classifier. --summary-stdin pipes it (stdin, not argv — summaries carry
+// quotes/newlines/shell metacharacters). Without the summary, an unregistered
+// id with never-ask auto-decides even for destructive phrasings.
+describe('--check --summary-stdin (#2024 keyword net plumb-through)', () => {
+  function setPref(id: string, pref: string) {
+    return run('--write', JSON.stringify({ question_id: id, preference: pref, source: 'plan-tune' }));
+  }
+
+  test('destructive summary on unregistered never-ask id → ASK_NORMALLY (keyword net fires)', () => {
+    setPref('adhoc-cleanup-question', 'never-ask');
+    const r = runWithStdin('Should I reset my secrets now?', '--check', 'adhoc-cleanup-question', '--summary-stdin');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('ASK_NORMALLY');
+    expect(r.stdout).toContain('one-way door overrides');
+  });
+
+  test('same id WITHOUT summary still AUTO_DECIDEs (id-only fallback, current semantics)', () => {
+    setPref('adhoc-cleanup-question', 'never-ask');
+    const r = run('--check', 'adhoc-cleanup-question');
+    expect(r.stdout.trim()).toContain('AUTO_DECIDE');
+  });
+
+  test('benign summary on unregistered never-ask id → AUTO_DECIDE (no over-match)', () => {
+    setPref('adhoc-cleanup-question', 'never-ask');
+    const r = runWithStdin('Reorganize the TODOs file?', '--check', 'adhoc-cleanup-question', '--summary-stdin');
+    expect(r.stdout.trim()).toContain('AUTO_DECIDE');
+  });
+
+  test('summary with quotes/newlines/dashes survives the stdin transport', () => {
+    setPref('adhoc-cleanup-question', 'never-ask');
+    const summary = 'Run "cleanup" --now\nthen rotate the access keys?';
+    const r = runWithStdin(summary, '--check', 'adhoc-cleanup-question', '--summary-stdin');
+    expect(r.stdout).toContain('ASK_NORMALLY');
+  });
+
+  test('empty stdin with --summary-stdin → id-only behavior (fail-safe)', () => {
+    setPref('adhoc-cleanup-question', 'never-ask');
+    const r = runWithStdin('', '--check', 'adhoc-cleanup-question', '--summary-stdin');
+    expect(r.stdout.trim()).toContain('AUTO_DECIDE');
   });
 });
 

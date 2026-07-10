@@ -45,6 +45,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawnSync } from 'child_process';
 import { isConductor } from '../../../lib/is-conductor';
+import { classifyQuestion } from '../../../scripts/one-way-doors';
 
 interface HookStdin {
   session_id?: string;
@@ -434,7 +435,21 @@ async function main(): Promise<void> {
     if (!pref.preference || pref.preference === 'always-ask') { fullyAutoDecidable = false; break; }
 
     const entry = registry[questionId];
-    const doorType = entry?.door_type || 'two-way';
+    let doorType: string = entry?.door_type || 'two-way';
+    if (!entry) {
+      // #2024: an unregistered id used to default straight to two-way without
+      // consulting the keyword net, so an ad-hoc DESTRUCTIVE question with a
+      // stored never-ask preference auto-decided. classifyQuestion is a pure
+      // regex pass over the question text; on any failure keep the default
+      // (enforcement still requires an explicit stored preference).
+      try {
+        if (classifyQuestion({ summary: qText.replace(MARKER_RE, '').trim() }).oneWay) {
+          doorType = 'one-way';
+        }
+      } catch (e) {
+        logHookError(`one-way classifier failed: ${(e as Error).message}`);
+      }
+    }
     // Safety override — even never-ask doesn't bypass one-way doors.
     if (doorType === 'one-way') { fullyAutoDecidable = false; break; }
 

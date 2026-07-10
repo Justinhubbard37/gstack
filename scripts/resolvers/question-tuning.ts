@@ -23,7 +23,11 @@ export function generateQuestionTuning(ctx: TemplateContext): string {
   const bin = binDir(ctx);
   return `## Question Tuning (skip entirely if \`QUESTION_TUNING: false\`)
 
-Before each AskUserQuestion, choose \`question_id\` from \`scripts/question-registry.ts\` or \`{skill}-{slug}\`, then run \`${bin}/gstack-question-preference --check "<id>"\`. \`AUTO_DECIDE\` means choose the recommended option and say "Auto-decided [summary] → [option] (your preference). Change with /plan-tune." \`ASK_NORMALLY\` means ask.
+Before each AskUserQuestion, choose \`question_id\` from \`scripts/question-registry.ts\` or \`{skill}-{slug}\`, then run the check with the question summary piped on stdin (the summary lets the one-way keyword net catch ad-hoc destructive questions whose id has no registry entry — #2024; stdin, never argv, so quotes/newlines survive):
+\`\`\`bash
+printf '%s' "<question summary>" | ${bin}/gstack-question-preference --check "<id>" --summary-stdin
+\`\`\`
+\`AUTO_DECIDE\` means choose the recommended option and say "Auto-decided [summary] → [option] (your preference). Change with /plan-tune." \`ASK_NORMALLY\` means ask.
 
 **Embed the question_id as a marker in the question text** so hooks can identify it deterministically (plan-tune cathedral T14 / D18 progressive markers). Append \`<gstack-qid:{question_id}>\` somewhere in the rendered question (the leading line or trailing line is fine; the marker doesn't render visibly to the user when wrapped in HTML-style angle brackets, but the hook strips it). Without the marker the PreToolUse enforcement hook treats the AUQ as observed-only and never auto-decides — so always include it when the question matches a registered \`question_id\`.
 
@@ -51,7 +55,7 @@ export function generateQuestionPreferenceCheck(ctx: TemplateContext): string {
   const bin = binDir(ctx);
   return `## Question Preference Check (skip if \`QUESTION_TUNING: false\`)
 
-Before each AskUserQuestion, run: \`${bin}/gstack-question-preference --check "<id>"\`.
+Before each AskUserQuestion, run: \`printf '%s' "<question summary>" | ${bin}/gstack-question-preference --check "<id>" --summary-stdin\`.
 \`AUTO_DECIDE\` → auto-choose recommended with inline annotation. \`ASK_NORMALLY\` → ask.`;
 }
 

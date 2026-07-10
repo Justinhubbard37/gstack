@@ -298,6 +298,47 @@ describe('enforces never-ask preferences', () => {
     });
     expectPassThrough(r);
   });
+
+  // #2024: unregistered ids used to default straight to two-way without ever
+  // consulting the keyword classifier — an ad-hoc DESTRUCTIVE question with a
+  // stored never-ask preference auto-decided. The hook now falls back to
+  // classifyQuestion on the question text when the registry lookup misses.
+  test('unregistered id + never-ask + destructive text → pass-through (keyword net fires, #2024)', () => {
+    writeProjectPref('adhoc-credential-cleanup', 'never-ask');
+    const r = runHook({
+      session_id: 's-kw-1',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'tu-kw-1',
+      tool_input: {
+        questions: [
+          {
+            question: '<gstack-qid:adhoc-credential-cleanup> Reset my secret and proceed?',
+            options: ['A) Yes (recommended)', 'B) No'],
+          },
+        ],
+      },
+    });
+    expectPassThrough(r);
+  });
+
+  test('unregistered id + never-ask + benign text → still deny (auto-decide unchanged)', () => {
+    writeProjectPref('adhoc-credential-cleanup', 'never-ask');
+    const r = runHook({
+      session_id: 's-kw-2',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'tu-kw-2',
+      tool_input: {
+        questions: [
+          {
+            question: '<gstack-qid:adhoc-credential-cleanup> Reorganize the TODOs file?',
+            options: ['A) Yes (recommended)', 'B) No'],
+          },
+        ],
+      },
+    });
+    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.parsed?.hookSpecificOutput?.permissionDecisionReason).toContain('plan-tune auto-decide');
+  });
 });
 
 // ----------------------------------------------------------------------
