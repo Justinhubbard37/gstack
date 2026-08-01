@@ -131,6 +131,9 @@ export interface ComparisonResult {
   unchanged: number;
   tool_count_before: number;
   tool_count_after: number;
+  /** After-tests that had a same-named entry in the before run. 0 = nothing was
+   *  actually compared, so no stability claim is warranted. */
+  matched?: number;
 }
 
 // --- Shared helpers ---
@@ -171,8 +174,14 @@ export function extractToolSummary(transcript: any[]): Record<string, number> {
 }
 
 /**
- * Find the most recent prior eval file for comparison.
+ * Find the most recent prior COMPLETED eval file for comparison.
  * Prefers same branch, falls back to any branch.
+ *
+ * In-progress accumulators (`_partial: true`, written by savePartial after every
+ * test) are never candidates: the current run's own partial carries the current
+ * tier + branch and the freshest timestamp, so including it made every run
+ * compare against itself and report "no regressions" unconditionally. The
+ * exclusion is by role (the `_partial` flag), not by filename.
  */
 export function findPreviousRun(
   evalDir: string,
@@ -196,6 +205,7 @@ export function findPreviousRun(
       const raw = fs.readFileSync(fullPath, 'utf-8');
       // Quick parse — only grab the fields we need
       const data = JSON.parse(raw);
+      if (data._partial) continue; // in-progress run, not a baseline
       if (data.tier !== tier) continue;
       entries.push({ file: fullPath, branch: data.branch || '', timestamp: data.timestamp || '' });
     } catch { continue; }
@@ -226,6 +236,7 @@ export function compareEvalResults(
   const deltas: TestDelta[] = [];
   let improved = 0, regressed = 0, unchanged = 0;
   let toolCountBefore = 0, toolCountAfter = 0;
+  let matched = 0;
 
   // Index before tests by name
   const beforeMap = new Map<string, EvalTestEntry>();
@@ -246,6 +257,7 @@ export function compareEvalResults(
 
     let statusChange: TestDelta['status_change'] = 'unchanged';
     if (beforeTest) {
+      matched++;
       if (!beforeTest.passed && afterTest.passed) { statusChange = 'improved'; improved++; }
       else if (beforeTest.passed && !afterTest.passed) { statusChange = 'regressed'; regressed++; }
       else { unchanged++; }
@@ -314,6 +326,7 @@ export function compareEvalResults(
     unchanged,
     tool_count_before: toolCountBefore,
     tool_count_after: toolCountAfter,
+    matched,
   };
 }
 
@@ -512,7 +525,17 @@ export function generateCommentary(c: ComparisonResult): string[] {
     }
   }
 
-  // 4. Overall summary
+  // 4. No baseline — say so. A run with nothing to compare against must never
+  //    read as "stable"; silence or a false all-clear is worse than no output.
+  if (c.matched === 0 && c.deltas.length > 0) {
+    notes.push(
+      `NO BASELINE: none of these ${c.deltas.length} test(s) appear in ${path.basename(c.before_file)}. ` +
+      'Nothing was compared, so this run says nothing about regressions.',
+    );
+    return notes;
+  }
+
+  // 5. Overall summary
   if (c.deltas.length >= 3 && regressions.length === 0) {
     const overallParts: string[] = [];
 
@@ -742,7 +765,11 @@ export class EvalCollector {
         const comparison = compareEvalResults(prevResult, result, prevFile, filepath);
         process.stderr.write(formatComparison(comparison) + '\n');
       } else {
-        process.stderr.write('\nFirst run — no comparison available.\n');
+        process.stderr.write(
+          `\nNO BASELINE: no completed prior ${this.tier} run found in ${this.evalDir}` +
+          ' (the in-progress accumulator is not a baseline). Nothing compared —' +
+          ' this run says nothing about regressions.\n',
+        );
       }
     } catch (err: any) {
       process.stderr.write(`\nCompare error: ${err.message}\n`);

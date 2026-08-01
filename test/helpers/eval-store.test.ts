@@ -58,6 +58,19 @@ function makeResult(overrides?: Partial<EvalResult>): EvalResult {
   };
 }
 
+/** Capture everything a block writes to stderr (finalize prints there). */
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const original = process.stderr.write.bind(process.stderr);
+  let captured = '';
+  (process.stderr as any).write = (chunk: any) => { captured += String(chunk); return true; };
+  try {
+    await fn();
+  } finally {
+    (process.stderr as any).write = original;
+  }
+  return captured;
+}
+
 // --- EvalCollector tests ---
 
 describe('EvalCollector', () => {
@@ -117,6 +130,41 @@ describe('EvalCollector', () => {
     expect(filepath1).toBeTruthy();
     expect(filepath2).toBe(''); // second call returns empty
     expect(fs.readdirSync(tmpDir).filter(f => f.endsWith('.json') && !f.startsWith('_partial'))).toHaveLength(1);
+  });
+
+  test('with no completed prior run, says NO BASELINE instead of comparing against its own partial', async () => {
+    // addTest writes the in-progress accumulator into the same dir. If that
+    // counted as a baseline, the run would compare against itself and print a
+    // reassuring all-clear forever.
+    const collector = new EvalCollector('e2e', tmpDir);
+    collector.addTest(makeEntry({ name: 'test-1', passed: true }));
+
+    const output = await captureStderr(async () => { await collector.finalize(); });
+
+    expect(fs.existsSync(path.join(tmpDir, '_partial-e2e.json'))).toBe(true); // the trap exists
+    expect(output).toContain('NO BASELINE');
+    expect(output).not.toContain('vs previous');
+    expect(output).not.toContain('Stable run');
+  });
+
+  test('with a genuine prior run, reports the real delta', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.5-main-e2e-20260312-100000.json'),
+      JSON.stringify(makeResult({
+        timestamp: '2026-03-12T10:00:00Z',
+        tests: [makeEntry({ name: 'test-1', passed: true, turns_used: 5 })],
+      })),
+    );
+
+    const collector = new EvalCollector('e2e', tmpDir);
+    collector.addTest(makeEntry({ name: 'test-1', passed: false, turns_used: 5 }));
+
+    const output = await captureStderr(async () => { await collector.finalize(); });
+
+    expect(output).toContain('vs previous');
+    expect(output).toContain('REGRESSION');
+    expect(output).toContain('1 regressed');
+    expect(output).not.toContain('NO BASELINE');
   });
 
   test('empty collector writes valid file', async () => {
@@ -257,6 +305,34 @@ describe('findPreviousRun', () => {
 
     const result = findPreviousRun(tmpDir, 'e2e', 'main', path.join(tmpDir, filename));
     expect(result).toBeNull(); // only file is excluded
+  });
+
+  test('never returns the in-progress accumulator as a baseline', () => {
+    // The current run's own partial carries the current tier + branch and the
+    // freshest timestamp. If it were a candidate, every run would compare
+    // against itself and report "no regressions" forever.
+    fs.writeFileSync(
+      path.join(tmpDir, '_partial-e2e.json'),
+      JSON.stringify(makeResult({ branch: 'main', timestamp: '2026-03-14T10:00:00Z', _partial: true })),
+    );
+
+    const result = findPreviousRun(tmpDir, 'e2e', 'main', path.join(tmpDir, 'current.json'));
+    expect(result).toBeNull();
+  });
+
+  test('prefers a completed run over a newer in-progress accumulator', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.5-main-e2e-20260312-100000.json'),
+      JSON.stringify(makeResult({ branch: 'main', timestamp: '2026-03-12T10:00:00Z' })),
+    );
+    // Newer, same tier + branch, but in-progress — must lose to the older completed run.
+    fs.writeFileSync(
+      path.join(tmpDir, '_partial-e2e.json'),
+      JSON.stringify(makeResult({ branch: 'main', timestamp: '2026-03-14T10:00:00Z', _partial: true })),
+    );
+
+    const result = findPreviousRun(tmpDir, 'e2e', 'main', path.join(tmpDir, 'current.json'));
+    expect(result).toContain('0.3.5-main-e2e');
   });
 
   test('filters by tier', () => {
@@ -522,6 +598,29 @@ describe('generateCommentary', () => {
     const notes = generateCommentary(c);
     expect(notes.some(n => n.includes('Overall'))).toBe(true);
     expect(notes.some(n => n.includes('No regressions'))).toBe(true);
+  });
+
+  test('says NO BASELINE instead of "stable" when nothing matched the prior run', () => {
+    // A baseline file existed but shares no test names (renamed/retired suite),
+    // so zero tests were actually compared. Claiming stability here is a lie.
+    const c: ComparisonResult = {
+      before_file: 'a.json', after_file: 'b.json',
+      before_branch: 'main', after_branch: 'main',
+      before_timestamp: '', after_timestamp: '',
+      deltas: [
+        { name: 'a', before: { passed: false, cost_usd: 0 }, after: { passed: true, cost_usd: 0.10 }, status_change: 'unchanged' },
+        { name: 'b', before: { passed: false, cost_usd: 0 }, after: { passed: true, cost_usd: 0.10 }, status_change: 'unchanged' },
+        { name: 'c', before: { passed: false, cost_usd: 0 }, after: { passed: true, cost_usd: 0.10 }, status_change: 'unchanged' },
+      ],
+      total_cost_delta: 0.30, total_duration_delta: 0,
+      improved: 0, regressed: 0, unchanged: 3,
+      tool_count_before: 0, tool_count_after: 0,
+      matched: 0,
+    };
+
+    const notes = generateCommentary(c);
+    expect(notes.some(n => n.includes('NO BASELINE'))).toBe(true);
+    expect(notes.some(n => n.includes('Stable run'))).toBe(false);
   });
 
   test('returns empty for stable run with no significant changes', () => {
