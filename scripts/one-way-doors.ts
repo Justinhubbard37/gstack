@@ -63,11 +63,11 @@ const DESTRUCTIVE_PATTERNS: RegExp[] = [
   /\brollback\b/i,
 
   // Credentials / auth — allow filler words ("the", "my") between verb and noun.
-  // All three verbs share ONE noun list (#2024: mismatched alternations let
-  // "reset my secret" / "reset my access key" / "revoke my secret" leak as
-  // two-way), with optional plural (`s?` — \b(...)\b alone cannot match
-  // "credentials"). Keep these parallel: a verb-specific noun list is how
-  // this class of false negative happens.
+  // Keep the noun alternation IDENTICAL across revoke/reset/rotate — a noun in
+  // one but not the others is a false-negative safety hole (#2024: "reset my
+  // secret" / "reset my access key" / "revoke my secret" leaked as two-way).
+  // Optional plural `s?` on the noun: \b(...)\b alone cannot match
+  // "credentials" / "tokens" / "passwords".
   /\brevoke\s+[\w\s]*\b(api key|token|secret|credential|access key|password)s?\b/i,
   /\breset\s+[\w\s]*\b(api key|token|secret|credential|access key|password)s?\b/i,
   /\brotate\s+[\w\s]*\b(api key|token|secret|credential|access key|password)s?\b/i,

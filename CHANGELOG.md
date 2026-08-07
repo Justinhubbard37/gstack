@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.60.0.0] - 2026-07-09
+## [1.61.0.0] - 2026-07-09
 
 ## **Nine guard bugs fixed in one wave.**
 ## **Every fix ships with a tripwire that proves the guard actually guards.**
@@ -31,11 +31,11 @@ Interactive skills ask you questions again on current Claude Code. Safety guards
 #### Fixed
 
 - **AskUserQuestion orphaned on Claude Code 2.1.89+ (#2035, #2006).** `question-preference-hook` pass-through is now exit 0 with exactly empty stdout (or additionalContext-only output for plan-tune memory nuggets), never `permissionDecision:'defer'`. `defer()` renamed `passThrough()`; the protocol contract in `docs/spikes/claude-code-hook-mutation.md` corrected in the same commit; 13 assertions rewritten across 3 test files; the tripwire asserts exact-empty stdout so a garbage write cannot slip past an optional-chained parse. Existing installs pick the fix up via `/gstack-upgrade` (the registered hook shim execs the TypeScript live).
-- **/careful chained-rm bypass (#2039).** Contributed by @jbetala7: the safe-exception shortcut applies only to single commands; any shell separator falls through to the warning. Hardened on top: `$(` and backtick substitution count as separators, and both greps accept capital `-R` (the BSD/macOS recursive flag). `rm -rf /; rm -rf node_modules`, `rm -rf $(./wipe-all)/node_modules`, and `rm -R /` all ask now; `rm -Rf node_modules` alone still allows.
+- **/careful chained-rm bypass (#2039).** Contributed by @jbetala7 (PR #2040): the safe-exception shortcut no longer judges a chained command by its last (safe) target. Hardened on top of the anchored full-command whitelist: the flag cluster accepts capital `-R` (the BSD/macOS recursive flag — `rm -R /` warned nowhere before; `rm -Rf node_modules` alone still allows) and safe-target tokens exclude `(` and backtick, so command substitution ending in a whitelisted suffix (`rm -rf $(./wipe-all)/node_modules`) cannot ride the whitelist.
 - **/context-restore loading a sibling worktree's checkpoint (#2052).** Contributed by @jbetala7: restore prefers the current branch's own checkpoint over newer sibling-worktree saves (scans 200 newest, partitions by branch frontmatter), and keeps the Conductor handoff fallback when the branch has no checkpoint.
 - **/sync-gbrain drift re-register on gbrain 0.42+ (#1985).** Contributed by @jbetala7: the drift remove passes `--confirm-destructive`. Hardened on top: the remove routes through the #1734 data-loss guards (refuses loudly while an autopilot runs), propagates `--keep-storage`, realpath-normalizes drift detection (a symlink alias of the same directory is a match, not drift, the probable cause of the reporter's unmoved-repo drift), and logs old vs new path whenever drift fires.
 - **Developer-profile double counting (#2067).** Contributed by @mvann: `mode:"resources"` bookkeeping rows no longer inflate SESSION_COUNT, TIER, or the builder-to-founder nudge; 8 regression tests pin the tier boundaries from both sides.
-- **One-way-door credential net inert and leaky (#2024).** revoke/reset/rotate now share one noun list with plurals ("reset my secrets" classifies one-way), and the net is wired into the runtime: `gstack-question-preference --check <id> --summary-stdin` pipes the question text (stdin, never argv, so quotes and newlines survive), and the enforcement hook falls back to the classifier for unregistered ids, so an ad-hoc destructive question with a stored never-ask preference can no longer auto-decide.
+- **One-way-door credential net: plurals + runtime wiring (#2024).** The credential nouns now match plurals ("reset my secrets" / "rotate the credentials" classify one-way), and the keyword net is wired into the runtime for the first time: `gstack-question-preference --check <id> --summary-stdin` pipes the question text (stdin, never argv, so quotes and newlines survive), and the enforcement hook falls back to the classifier for unregistered ids, so an ad-hoc destructive question with a stored never-ask preference can no longer auto-decide.
 - **design CLI silent NaN flags (#2032).** `--count`, `--retry`, and `--timeout` share one loud contract via `design/src/flag-utils.ts`: non-integer input errors with exit 1 ("3.7" is rejected, not truncated), above-max clamps with a stderr warning, and the variants ceiling derives from the style list instead of a magic 7. Previously `--retry abc` made generate a silent no-op and `--timeout abc` killed the serve board at boot.
 - **Thin-client brains misclassified as broken (#2051).** New `thin-client` engine state, read from gbrain's own `remote_mcp` config marker before any probe. Usable at every suppression gate (`--is-ok`, gen-skill-docs detection, `gstack-config gbrain-refresh`) while the local sync stages skip with an accurate reason (code indexing runs on the brain server; memory syncs via the remote brain's artifacts pull). The detect JSON reports `gbrain_thin_client: {probed: false}`: config verified, reachability checked at use time where gbrain calls degrade gracefully. detectMcpMode also recognizes gbrain servers registered under variant names or matched by the config's `mcp_url`.
 
@@ -50,6 +50,41 @@ Interactive skills ask you questions again on current Claude Code. Safety guards
 - 11 bisect commits; 4 community PRs absorbed with authorship preserved. Contributed by @jbetala7 (#2040, #2054, #2031) and @mvann (#1991). Thank you both.
 - 72 new test cases across 9 files, each verified failing against the unfixed code before the fix landed.
 - Three follow-ups filed in TODOS.md: wire `design/test/` into CI (all 8 existing files are invisible to every runner today, plus a documented pre-existing timing flake), /context-save worktree-identity hardening (the #2052 residual), and conditional gbrain reindex-in-place gated on the new drift log.
+
+## [1.60.1.0] - 2026-07-09
+
+## **The /autoplan dual-voice eval is back on the board, catching real regressions.**
+## **Eval timeouts now return evidence instead of hanging the suite.**
+
+The dual-voice eval proves both halves of /autoplan's Phase 1, the Claude review subagent and the Codex outside voice, actually fire. It now registers its skills the way real installs do (project-level `.claude/skills/`), so it exercises the same slash-command path users hit. Claude Code 2.x resolves slash commands strictly from registered skills, and the eval's old sandbox layout predates that. The eval harness also gained a hard guarantee: when a spawned session hits its timeout, the runner returns everything it collected instead of waiting on orphaned child processes.
+
+### The numbers that matter
+
+Source: investigation transcripts and timings in `~/.gstack/projects/garrytan-gstack/e2e-runs/2026-07-10-*` plus the new regression test (reproducible: `bun test test/session-runner-timeout.test.ts`).
+
+| Metric | Before | After |
+|--------|--------|-------|
+| /autoplan session in the eval sandbox | 0 turns, "Unknown command" | 43+ tool calls, both voices fire |
+| Runner return after a 3s timeout with an orphaned child | hung past the 30s test cap | 8.1s |
+| Timed-out 600s eval run wall time | 1431s (blocked on orphan pipes) | returns at timeout + 5s grace |
+
+The orphan fix matters beyond one eval: any timed-out `claude -p` child that leaves a subprocess holding stdout kept the whole suite waiting. Streamed transcript lines now survive the cancel, so assertions run against real evidence even on timeout.
+
+### What this means for you
+
+`bun run test:evals` timeouts fail fast with a transcript instead of silently eating 10+ extra minutes per hung test. And if /autoplan's dual-voice wiring ever breaks, the eval will say so instead of failing for its own reasons.
+>>>>>>> origin/main
+
+### Itemized changes
+
+#### Fixed
+
+- `test/skill-e2e-autoplan-dual-voice.test.ts`: sandbox installs /autoplan and its review skills at project level (`.claude/skills/`), matching real slash-command resolution on Claude Code 2.x; the transcript filter reads raw stream-json shapes (the old `entry.type === 'tool_use'` filter matched nothing, so assertions only ever saw the final result text); hang protection accepts the Phase 1 review dispatch as progress evidence (full Phase 1 completion takes 15+ minutes of subagent work and belongs to the skill, not the eval); budget raised to 10 min / 40 turns.
+- `test/helpers/session-runner.ts`: on spawn timeout, cancel the stdout reader and race the stderr drain against child exit plus a 5s grace window, so orphaned grandchildren cannot hold `runSkillTest` past bun's per-test timeout. Regression-locked by `test/session-runner-timeout.test.ts` (fails in 30s without the fix, passes in 8s with it).
+
+#### For contributors
+
+- TODOS.md: filed the periodic-CI coverage decision: `evals-periodic.yml` runs 9 of ~66 e2e files, so ~57 run only when local diff-selection happens to pick them, which is how this eval rotted unnoticed.
 
 ## [1.58.5.0] - 2026-06-21
 

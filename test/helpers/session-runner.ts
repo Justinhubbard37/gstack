@@ -173,13 +173,9 @@ export async function runSkillTest(options: {
   // restores operator MCP along with the operator env.
   if (isHermeticEnabled()) args.push('--strict-mcp-config');
 
-  // Write prompt to a temp file OUTSIDE workingDirectory to avoid race conditions
-  // where afterAll cleanup deletes the dir before cat reads the file (especially
-  // with --concurrent --retry). Using os.tmpdir() + unique suffix keeps it stable.
-  const promptFile = path.join(os.tmpdir(), `.prompt-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  fs.writeFileSync(promptFile, prompt);
-
-  const proc = Bun.spawn(['sh', '-c', `cat "${promptFile}" | claude ${args.map(a => `"${a}"`).join(' ')}`], {
+  // Spawn claude directly with array-form args (no shell interpolation).
+  // Prompt is piped via stdin using a Blob to avoid temp files and shell escaping.
+  const proc = Bun.spawn(['claude', ...args], {
     cwd: workingDirectory,
     // Hermetic by default (see test/helpers/hermetic-env.ts): operator
     // session context (CONDUCTOR_*, CLAUDECODE, ~/.claude config, ~/.gstack)
@@ -189,6 +185,7 @@ export async function runSkillTest(options: {
     // suite exercising the INTERACTIVE prose-fallback path opts out by passing
     // `env: { GSTACK_HEADLESS: '' }` — extraEnv wins because it spreads last.
     env: hermeticChildEnv({ GSTACK_HEADLESS: '1', ...extraEnv }),
+    stdin: new Blob([prompt]),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -201,6 +198,13 @@ export async function runSkillTest(options: {
   const timeoutId = setTimeout(() => {
     timedOut = true;
     proc.kill();
+    // proc.kill() signals claude itself (direct spawn, no shell wrapper),
+    // but tool subprocesses claude spawned can survive as orphans that
+    // inherited our stdout/stderr pipes, so without cancel() the read loop
+    // below blocks until the orphan finally exits (observed: a 600s timeout
+    // stretching past 1400s and tripping bun's per-test timeout instead of
+    // returning a result).
+    reader.cancel().catch(() => { /* stream already closed */ });
   }, timeout);
 
   // Stream NDJSON from stdout for real-time progress
@@ -227,6 +231,11 @@ export async function runSkillTest(options: {
         if (!line.trim()) continue;
         collectedLines.push(line);
 
+        // Track time to first NDJSON line (measures latency from spawn to first Claude response)
+        if (firstResponseMs === 0) {
+          firstResponseMs = Date.now() - startTime;
+        }
+
         // Real-time progress to stderr + persistent logs
         try {
           const event = JSON.parse(line);
@@ -238,8 +247,7 @@ export async function runSkillTest(options: {
                 liveToolCount++;
                 const now = Date.now();
                 const elapsed = Math.round((now - startTime) / 1000);
-                // Track timing telemetry
-                if (firstResponseMs === 0) firstResponseMs = now - startTime;
+                // Track inter-turn latency (tool call to tool call)
                 if (lastToolTime > 0) {
                   const interTurn = now - lastToolTime;
                   if (interTurn > maxInterTurnMs) maxInterTurnMs = interTurn;
@@ -289,11 +297,20 @@ export async function runSkillTest(options: {
     collectedLines.push(buf);
   }
 
-  stderr = await stderrPromise;
+  // Same orphan hazard as stdout: an orphaned grandchild holding stderr open
+  // would block the drain forever. Race it against child exit + a short grace
+  // window; the normal path (pipes close with the child) still wins the race
+  // and keeps full stderr.
+  stderr = await Promise.race([
+    stderrPromise,
+    (async () => {
+      await proc.exited;
+      await new Promise((r) => setTimeout(r, 5_000));
+      return '';
+    })(),
+  ]);
   const exitCode = await proc.exited;
   clearTimeout(timeoutId);
-
-  try { fs.unlinkSync(promptFile); } catch { /* non-fatal */ }
 
   if (timedOut) {
     exitReason = 'timeout';

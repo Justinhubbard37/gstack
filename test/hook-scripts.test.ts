@@ -97,10 +97,9 @@ describe('check-careful.sh', () => {
       expect(output.message).toContain('recursive delete');
     });
 
-    // Regression: the safe-exception extracts targets from only the LAST `rm` in
-    // the command (greedy match), so a chain that ends in a safe target must not
-    // wave through a destructive earlier rm. The shortcut only applies to a
-    // single rm invocation; any shell separator falls through to the warning.
+    // The safe exception matches the COMPLETE command against an anchored
+    // whitelist shape — anything else (chains, comments, substitution) falls
+    // through to the destructive-pattern warning.
     test('rm -rf /; rm -rf node_modules warns (semicolon chain, dangerous first)', () => {
       const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -rf /; rm -rf node_modules'));
       expect(exitCode).toBe(0);
@@ -122,9 +121,9 @@ describe('check-careful.sh', () => {
       expect(output.message).toContain('recursive delete');
     });
 
-    // Command substitution is a chaining form: the substitution token can end in
-    // a whitelisted suffix while running anything inside $(...) or backticks,
-    // and the safe-exception early exit would skip ALL downstream checks.
+    // Command substitution can end in a whitelisted suffix while running
+    // anything inside $(...) or backticks — the whitelist's target tokens
+    // exclude `(` and backtick so these cannot ride the safe exception.
     test('rm -rf $(./wipe-all)/node_modules warns (command substitution)', () => {
       const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -rf $(./wipe-all)/node_modules'));
       expect(exitCode).toBe(0);
@@ -162,8 +161,8 @@ describe('check-careful.sh', () => {
       expect(output.permissionDecision).toBeUndefined();
     });
 
-    // The JSON-escaped-newline separator branch (literal two-char \n surviving
-    // the grep extraction path) had dedicated code but no test exercising it.
+    // JSON-escaped newline (literal two-char \n surviving the grep extraction
+    // path) breaks the anchored whitelist shape → falls through to the warn.
     test('newline-chained rm warns (escaped-newline separator branch)', () => {
       const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('rm -rf /etc/x\nrm -rf node_modules'));
       expect(exitCode).toBe(0);
@@ -177,6 +176,21 @@ describe('check-careful.sh', () => {
     // A future per-segment parser must consciously change this test.
     test('cd app && rm -rf node_modules asks (fail-closed on chains, by design)', () => {
       const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('cd app && rm -rf node_modules'));
+      expect(exitCode).toBe(0);
+      expect(output.permissionDecision).toBe('ask');
+      expect(output.message).toContain('recursive delete');
+    });
+
+    test.each([
+      'rm -rf /; rm -rf node_modules',
+      'rm -rf / && rm -rf node_modules',
+      'rm -rf / # rm -rf node_modules',
+      'rm -rf node_modules; rm -rf /',
+      'rm -rf node_modules || rm -rf /',
+      'echo ok && rm -rf /',
+      'rm -rf node_modules\nrm -rf /',
+    ])('never lets a safe-looking target hide a destructive command: %s', (command) => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput(command));
       expect(exitCode).toBe(0);
       expect(output.permissionDecision).toBe('ask');
       expect(output.message).toContain('recursive delete');

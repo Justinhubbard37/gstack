@@ -6,13 +6,14 @@
  * on PATH that emits canned exit codes + stderr matching the patterns the
  * classifier looks for.
  *
- * Six status cases:
+ * Seven status cases:
  *   1. no-cli         — gbrain absent from PATH
  *   2. missing-config — gbrain present, config.json absent (honors GBRAIN_HOME)
  *   3. broken-config  — gbrain present, config exists, stderr contains "config.json"
  *   4. broken-db      — gbrain present, config exists, stderr contains "Cannot connect to database"
  *   5. timeout        — probe exceeds GSTACK_GBRAIN_PROBE_TIMEOUT_MS with no recognized error (#1964)
- *   6. ok             — gbrain present, config exists, sources list returns valid JSON
+ *   6. engine-locked  — PGLite CLI exits 124 because another process owns the DB (#2194)
+ *   7. ok             — gbrain present, config exists, sources list returns valid JSON
  *
  * Plus cache behavior: hit, TTL expiry, invariant invalidation (HOME change,
  * probe-timeout change), --no-cache bypass. Timeout tests keep runtime sane by
@@ -61,7 +62,7 @@ interface FakeEnv {
  */
 function makeEnv(opts: {
   withGbrain?: boolean;
-  gbrainBehavior?: "ok" | "broken-db" | "broken-config" | "throws" | "slow" | "thin-refusal";
+  gbrainBehavior?: "ok" | "broken-db" | "broken-config" | "engine-locked" | "throws" | "slow" | "thin-refusal";
   withConfig?: boolean;
   /** #2051: config carries gbrain's remote_mcp thin-client marker. */
   thinClientConfig?: boolean;
@@ -109,7 +110,7 @@ function makeEnv(opts: {
 }
 
 function makeFakeGbrainScript(
-  behavior: "ok" | "broken-db" | "broken-config" | "throws" | "slow" | "thin-refusal",
+  behavior: "ok" | "broken-db" | "broken-config" | "engine-locked" | "throws" | "slow" | "thin-refusal",
 ): string {
   // "slow": healthy engine on a cold pooler connection (#1964) — sleeps past
   // the (test-lowered) probe timeout, then would answer fine.
@@ -132,12 +133,14 @@ exit 0
       ? 'echo "Cannot connect to database: . Fix: Check your connection URL in ~/.gbrain/config.json" >&2'
       : behavior === "broken-config"
         ? 'echo "Error: malformed config.json at ~/.gbrain/config.json" >&2'
+        : behavior === "engine-locked"
+          ? 'echo "gbrain sources: connect timed out (default 10000ms; pass --timeout=Ns to override)." >&2'
         : behavior === "throws"
           ? 'echo "unexpected gbrain failure" >&2'
           : behavior === "thin-refusal"
             ? 'echo "Error: gbrain sources is not routable to the remote brain (thin-client of https://brain.example.com/mcp)" >&2'
             : "";
-  const exitCode = behavior === "ok" ? 0 : 1;
+  const exitCode = behavior === "ok" ? 0 : behavior === "engine-locked" ? 124 : 1;
   return `#!/bin/sh
 if [ "$1" = "--version" ]; then
   echo "gbrain 0.33.1.0"
@@ -232,6 +235,19 @@ describe("lib/gbrain-local-status — status classification", () => {
     env = makeEnv({ withGbrain: true, gbrainBehavior: "throws", withConfig: true });
     restoreEnv = applyEnv(env);
     expect(localEngineStatus({ noCache: true })).toBe("broken-config");
+  });
+
+  it("returns 'engine-locked' when PGLite exits 124 with its own connect timeout (#2194)", () => {
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "engine-locked", withConfig: true });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("engine-locked");
+  });
+
+  it("classifies a non-PGLite connect timeout as unreachable DB, not malformed config", () => {
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "engine-locked", withConfig: true });
+    restoreEnv = applyEnv(env);
+    writeFileSync(env.configPath, JSON.stringify({ engine: "postgres", database_url: "postgres://fake" }));
+    expect(localEngineStatus({ noCache: true })).toBe("broken-db");
   });
 
   it("returns 'ok' when sources list succeeds", () => {
