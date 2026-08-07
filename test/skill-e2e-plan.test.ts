@@ -549,7 +549,13 @@ Summarize what the "Spec Review Loop" section does — specifically:
 
 Write your summary to ${ohDir}/spec-review-summary.md`,
       workingDirectory: ohDir,
-      maxTurns: 8,
+      // 12, not 8 (#2473): the Spec Review Loop content is CARVED out of
+      // SKILL.md into office-hours/sections/, so the agent legitimately needs
+      // discovery hops (grep SKILL.md -> ls sections/ -> read the section)
+      // before it can write. The 8-turn budget predates the carve — observed
+      // failures wrote a correct summary on tool-turn 8 and hit the cap on
+      // the closing text turn (error_max_turns at 9 turns, deterministic).
+      maxTurns: 12,
       timeout: 120_000,
       testName: 'office-hours-spec-review',
       runId,
