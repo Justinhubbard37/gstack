@@ -45,6 +45,37 @@ a silent mistake breaks all 52 skills. High blast radius — needs its own focus
 
 ## Test infrastructure
 
+### P1: Free suite exit code is untrustworthy — in-process force-exits mask failures
+
+**Priority:** P1
+
+**What:** At least five browse test files end with `setTimeout(() => process.exit(0), 500)`
+(browse/test/commands.test.ts:101, snapshot.test.ts:36, batch.test.ts:47,
+handoff.test.ts:31, content-security.test.ts:465). The timer fires inside the SHARED
+`bun test` process, exiting 0 before bun prints its final summary — so `bun test` can
+report exit 0 while real test failures scrolled by earlier. Remove the force-exits and
+fix the underlying handle leaks they paper over (lingering Playwright/daemon handles
+that once made the suite hang), or scope the exit to a spawned child process.
+
+**Why:** Observed 2026-08-07: three genuinely failing tests (eval-list-cli,
+benchmark-cli, observability check 11) rode green `bun test` exit codes across
+multiple runs; the failures only surfaced by grepping logs for "(fail)" lines. A test
+suite that exits 0 on failure is worse than no suite — it manufactures false
+confidence at commit time and in any CI job that trusts the exit code.
+
+**Pros:** Restores the one contract everything (CI, /ship, humans) relies on: exit
+code == truth. Also un-hides the missing final summary block.
+**Cons:** The force-exits exist because the suite once hung on leaked handles;
+removing them without fixing the leaks trades silent failure for hangs. Needs a
+focused pass: find each leaked handle (daemon children, PTY, Playwright contexts),
+close them in afterAll, then delete the exits one file at a time.
+
+**Context / where to start:** `grep -rn "process.exit(0)" browse/test/` — the
+setTimeout variants are the offenders (server-no-import-side-effects.test.ts:62 is a
+spawned-child probe, fine). Repro: run the full free suite and note the log ends at
+the browse files with no "Ran N tests" summary. Receipts:
+~/.gstack-dev/logs/free-suite-main-check.log (3 masked fails, exit 0).
+
 ### P2: Periodic CI matrix covers 9 of ~66 e2e files — decide the coverage contract
 
 **Priority:** P2
