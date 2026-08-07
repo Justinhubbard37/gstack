@@ -427,7 +427,11 @@ This is a local-only repo so use the local branch (main) instead of origin/main 
 Write your retrospective to ${dir}/retro-output.md`,
       workingDirectory: dir,
       maxTurns: 25,
-      timeout: 240_000,
+      // 360s, not 240s: same runner-contention class as review-dashboard-via.
+      // /retro is a long multi-step flow — a clean pass measured 225s and the
+      // next CI run timed out at the 240s line (exitReason "timeout", 3/3
+      // attempts). Outer bun timeout below rises to 480s for headroom.
+      timeout: 360_000,
       testName: 'retro-base-branch',
       runId,
     });
@@ -444,7 +448,7 @@ Write your retrospective to ${dir}/retro-output.md`,
       const content = fs.readFileSync(retroPath, 'utf-8');
       expect(content.length).toBeGreaterThan(100);
     }
-  }, 300_000);
+  }, 480_000);
 });
 
 // --- Retro E2E ---
