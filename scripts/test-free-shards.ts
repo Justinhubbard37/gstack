@@ -27,21 +27,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import { isPaidTestFile } from '../test/helpers/paid-test-set';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test'] as const;
 const TEST_FILE_REGEX = /\.test\.(?:[cm]?[jt]s|tsx|jsx)$/;
-
-// Tests that require API spend, external services, or e2e harnesses.
-// These are filtered out before any sharding or curation.
-const PAID_EVAL_TESTS = [
-  /^browse\/test\/security-review-fullstack\.test\.ts$/,
-  /^test\/skill-e2e-.*\.test\.ts$/,
-  /^test\/skill-llm-eval\.test\.ts$/,
-  /^test\/skill-routing-e2e\.test\.ts$/,
-  /^test\/codex-e2e\.test\.ts$/,
-  /^test\/gemini-e2e\.test\.ts$/,
-] as const;
 
 // POSIX-only patterns that indicate a test will fail on windows-latest no
 // matter how the runner shards. Codex's v1.18.0.0 review flagged the first
@@ -118,7 +108,7 @@ export function normalizeRelativePath(filePath: string): string {
 export function isFreeTestFile(relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath);
   if (!TEST_FILE_REGEX.test(normalized)) return false;
-  return !PAID_EVAL_TESTS.some(pattern => pattern.test(normalized));
+  return !isPaidTestFile(normalized);
 }
 
 /**
