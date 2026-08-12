@@ -44,6 +44,7 @@ The plan → review → ship loop loses its most pointless click. Draft a plan, 
 - Four stochastic plan-mode/finding-floor smokes declared `periodic` were still self-gating on the blocking `gate` tier — they no longer run in (or block) the gate lane, and the invariant test above prevents declared-vs-actual tier drift from recurring. Weekly-cron wiring for PTY-driven periodic tests is tracked in TODOS.
 - CI eval containers now register `plan-eng-review` and `plan-design-review` as discoverable skills (registration loops, dangling-target checks, and frontmatter verification all extended) — previously only two skills were registered.
 - The no-op regression suite covers all three plan-review skills outside plan mode, asserts the gate question actually rendered (unconditionally), and proves a pasted named target is consumed via cumulative-buffer token tracking.
+- `/ship`'s credential pre-push guard now installs correctly from git worktrees after consent — the custom-hooks-path detection compared against the worktree's own git dir instead of the shared common dir, so every Conductor worktree read as "custom hooks path" and skipped the install.
 
 ### For contributors
 - Skeleton/ratio ceilings ratcheted with attribution comments (plan-eng 68k/1.10, plan-design 89k, investigate 1.10) for the exceptions block + shared preamble reword.
