@@ -2654,3 +2654,71 @@ CI-hard-fail contract has to land five times.
 five green files at the tail of a release. Zero user-facing value; pure DRY.
 
 **Effort:** S (human ~3h, CC ~20min). **Depends on:** None.
+
+## Egress-receipt follow-ups (filed via /plan-eng-review + /codex on the v1.62 port wave)
+
+### P2: egress ledger rotation with chain-genesis records
+
+**What:** Rotate `~/.gstack/security/egress.jsonl` at a size threshold (match
+`attempts.jsonl`'s 10MB/5-generation pattern in `browse/src/security.ts`), where
+each new generation's FIRST record embeds the prior file's tail hash so
+`gstack-egress verify` can walk across generations.
+
+**Why:** v1.62 ships WARN-at-25MB (visible growth) but nothing bounds the file.
+Rotation was deliberately deferred: it changes the verify contract, and a wrong
+implementation makes healthy ledgers verify as "broken".
+
+**Pros:** Bounded disk forever; verify stays meaningful across generations.
+**Cons:** Chain-genesis semantics are subtle; needs its own focused tests
+(cross-generation verify, mid-rotation crash).
+
+**Context:** `lib/egress-receipt.ts` (`appendChained`/`verifyLedger`) carries the
+design sketch in its rotation TODO comment. Start from the `attempts.jsonl`
+rotation precedent.
+
+**Effort:** S (human ~4h, CC ~25min). **Depends on:** v1.62 port wave landed.
+
+### P3: launch-nonce token bootstrap (local-process impersonation)
+
+**What:** Add a launch-time nonce to the `/extension-token` bootstrap: `browse`
+mints a nonce at headed launch, seeds it into the extension (CDP
+`chrome.storage` injection or a launcher-written sidecar), and the endpoint
+requires it alongside the pinned origin.
+
+**Why:** v1.62's pinned-origin check authenticates browser contexts; any local
+PROCESS can still forge an Origin header with curl. That threat is explicitly
+outside the current model (any local process can hit the port anyway) — this
+TODO documents the deliberate boundary and the designed path across it.
+
+**Pros:** Closes the local-process impersonation path (strongest of the three
+options evaluated in the v1.62 plan review).
+**Cons:** Largest bootstrap change; CDP seeding is fiddly across the three
+launch paths (`--load-extension`, baked-in Browser.app, real-Chrome fallback);
+low present-day value.
+
+**Context:** `browse/src/server.ts` `/extension-token` handler +
+`GSTACK_EXTENSION_ID`; launch paths in `browse/src/browser-manager.ts` (~358,
+~455, ~1562); `extension/background.js` bootstrap.
+
+**Effort:** M (human ~2 days, CC ~1h). **Depends on:** none.
+
+### P3: eval-watch shard-awareness
+
+**What:** Teach `scripts/eval-watch.ts` (hardcoded `_partial-e2e.json` path at
+~line 17) about the sharded layout: watch `<evalDir>/shards/*/_partial-e2e.json`
+and aggregate live progress across shard subdirs.
+
+**Why:** v1.62's sharded runner gives each shard its own eval subdir (so shards
+baseline against their own priors); `findPreviousRun`, `eval-compare`,
+`eval-list`, and `eval-summary` were all made shard-aware, but the live watcher
+intentionally stayed flat — it shows nothing during sharded runs.
+
+**Pros:** Live progress during `eval:bg:gate` sharded runs again.
+**Cons:** Multi-file watch + aggregation UI; low stakes (the run-scoped detach
+log already streams per-shard results).
+
+**Context:** `scripts/eval-watch.ts`; shard layout defined in
+`scripts/test-paid-shards.ts` (slug = test filename); `listEvalJsonFiles` in
+`test/helpers/eval-store.ts` already enumerates the layout — reuse it.
+
+**Effort:** S (human ~2h, CC ~15min). **Depends on:** v1.62 port wave landed.

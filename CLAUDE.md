@@ -429,19 +429,21 @@ migration script to `gstack-upgrade/migrations/`. Read CONTRIBUTING.md's "Upgrad
 migrations" section for the format and testing requirements. The upgrade skill runs
 these automatically after `./setup` during `/gstack-upgrade`.
 
-## Compiled binaries — NEVER commit browse/dist/ or design/dist/
+## Compiled binaries — never commit browse/dist/, design/dist/, or make-pdf/dist/
 
-The `browse/dist/` and `design/dist/` directories contain compiled Bun binaries
-(`browse`, `find-browse`, `design`, ~58MB each). These are Mach-O arm64 only — they
-do NOT work on Linux, Windows, or Intel Macs. The `./setup` script already builds
-from source for every platform, so the checked-in binaries are redundant. They are
-tracked by git due to a historical mistake and should eventually be removed with
-`git rm --cached`.
+The `browse/dist/`, `design/dist/`, and `make-pdf/dist/` directories contain
+compiled Bun binaries (`browse`, `find-browse`, `design`, ~62MB each). These are
+Mach-O arm64 only — they do NOT work on Linux, Windows, or Intel Macs. The
+`./setup` script builds from source for every platform.
 
-**NEVER stage or commit these files.** They show up as modified in `git status`
-because they're tracked despite `.gitignore` — ignore them. When staging files,
-always use specific filenames (`git add file1 file2`) — never `git add .` or
-`git add -A`, which will accidentally include the binaries.
+These directories are **untracked and gitignored** (`.gitignore:3-6`; the
+`browse/dist/` binaries were untracked in `64d5a3e4`, v0.11.16.0; the others were
+never tracked). They will NOT appear in `git status`. If a dist binary ever does
+show up in `git status`, something force-added it (`git add -f`) — do not commit
+it; unstage it and find out how it got there.
+
+When staging files, always use specific filenames (`git add file1 file2`) — never
+`git add .` or `git add -A`, which can sweep in build outputs and junk.
 
 ## Redaction guard (PII / secrets / legal content)
 
