@@ -173,9 +173,10 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // default-on Codex outside-voice (codexPreflight block + CODEX_MODE branch
     // prose, replacing the smaller opt-in question) land this at ~6.6% over the
     // v1.53.0.0 baseline. Headroom for those intentional additions.
-    // 1.08 → 1.09: the scope-gate exceptions block put the union ~95 B over
-    // the 1.08 line (123,440 / 114,209 baseline = 1.0808).
-    maxSizeRatio: 1.09,
+    // 1.08 → 1.10: the scope-gate exceptions block (+ its adversarial-review
+    // hardening: host-anchored mode signal, precedence, passing-mention
+    // guards) and the plan-mode preamble reword land the union at 1.092.
+    maxSizeRatio: 1.10,
   },
   'plan-design-review': {
     skill: 'plan-design-review',
