@@ -39,7 +39,16 @@ export function getProjectEvalDir(): string {
   return LEGACY_EVAL_DIR;
 }
 
-const DEFAULT_EVAL_DIR = getProjectEvalDir();
+/**
+ * Lazy + memoized so importing this module never spawns the gstack-slug
+ * subprocess. Callers that pass an explicit dir or set GSTACK_EVAL_DIR
+ * (the sharded paid runner does, per shard) never pay for slug detection.
+ */
+let memoizedDefaultEvalDir: string | null = null;
+function defaultEvalDir(): string {
+  if (memoizedDefaultEvalDir === null) memoizedDefaultEvalDir = getProjectEvalDir();
+  return memoizedDefaultEvalDir;
+}
 
 // --- Interfaces ---
 
@@ -104,6 +113,8 @@ export interface EvalResult {
   total_duration_ms: number;
   wall_clock_ms?: number;     // wall-clock from collector creation to finalization (shows parallelism)
   tests: EvalTestEntry[];
+  /** Shard slug when the run was collected under <evalDir>/shards/<slug>/. */
+  shard?: string;
   _partial?: boolean;  // true for incremental saves, absent in final
 }
 
@@ -185,6 +196,16 @@ export function listEvalJsonFiles(evalDir: string): string[] {
 }
 
 /**
+ * Shard slug for an eval dir: when the dir is directly under a `shards/`
+ * directory (the sharded paid runner's per-shard GSTACK_EVAL_DIR layout),
+ * the dir name is the slug; otherwise null.
+ */
+export function shardSlugOfEvalDir(evalDir: string): string | null {
+  const normalized = path.resolve(evalDir);
+  return path.basename(path.dirname(normalized)) === 'shards' ? path.basename(normalized) : null;
+}
+
+/**
  * Find the most recent finalized (non-partial) eval file for a tier, scanning
  * `evalDir` and one level of `shards/<slug>/` subdirs. Shared by the budget
  * regression gate and any tooling that needs "the latest real run".
@@ -246,7 +267,9 @@ export function extractToolSummary(transcript: any[]): Record<string, number> {
 
 /**
  * Find the most recent prior COMPLETED eval file for comparison.
- * Prefers same branch, falls back to any branch.
+ * Scans the eval dir plus one level of `shards/<slug>/` subdirs. Prefers
+ * same shard slug (a shard's own history over another shard's or the flat
+ * dir's), then same branch, then falls back to anything.
  *
  * In-progress accumulators (`_partial: true`, written by savePartial after every
  * test) are never candidates: the current run's own partial carries the current
@@ -260,25 +283,22 @@ export function findPreviousRun(
   branch: string,
   excludeFile: string,
 ): string | null {
-  let files: string[];
-  try {
-    files = fs.readdirSync(evalDir).filter(f => f.endsWith('.json'));
-  } catch {
-    return null; // dir doesn't exist
-  }
-
   // Parse top-level fields from each file (cheap — no full tests array needed)
-  const entries: Array<{ file: string; branch: string; timestamp: string }> = [];
-  for (const file of files) {
-    if (file === path.basename(excludeFile)) continue;
-    const fullPath = path.join(evalDir, file);
+  const entries: Array<{ file: string; branch: string; timestamp: string; shard: string | null }> = [];
+  for (const fullPath of listEvalJsonFiles(evalDir)) {
+    if (path.resolve(fullPath) === path.resolve(excludeFile)) continue;
     try {
       const raw = fs.readFileSync(fullPath, 'utf-8');
       // Quick parse — only grab the fields we need
       const data = JSON.parse(raw);
-      if (isPartialEval(data, file)) continue; // in-progress run, not a baseline
+      if (isPartialEval(data, fullPath)) continue; // in-progress run, not a baseline
       if (data.tier !== tier) continue;
-      entries.push({ file: fullPath, branch: data.branch || '', timestamp: data.timestamp || '' });
+      entries.push({
+        file: fullPath,
+        branch: data.branch || '',
+        timestamp: data.timestamp || '',
+        shard: data.shard || shardSlugOfEvalDir(path.dirname(fullPath)),
+      });
     } catch { continue; }
   }
 
@@ -287,11 +307,17 @@ export function findPreviousRun(
   // Sort by timestamp descending
   entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-  // Prefer same branch
-  const sameBranch = entries.find(e => e.branch === branch);
-  if (sameBranch) return sameBranch.file;
-
-  // Fallback: any branch
+  // Prefer same shard slug (null = the flat dir), then same branch, then any.
+  const targetShard = shardSlugOfEvalDir(path.dirname(excludeFile));
+  const preferences: Array<(e: typeof entries[number]) => boolean> = [
+    e => e.shard === targetShard && e.branch === branch,
+    e => e.shard === targetShard,
+    e => e.branch === branch,
+  ];
+  for (const matches of preferences) {
+    const hit = entries.find(matches);
+    if (hit) return hit.file;
+  }
   return entries[0].file;
 }
 
@@ -743,11 +769,13 @@ export class EvalCollector {
   private tests: EvalTestEntry[] = [];
   private finalized = false;
   private evalDir: string;
+  private shard: string | null;
   private createdAt = Date.now();
 
   constructor(tier: 'e2e' | 'llm-judge', evalDir?: string) {
     this.tier = tier;
-    this.evalDir = evalDir || DEFAULT_EVAL_DIR;
+    this.evalDir = evalDir || process.env.GSTACK_EVAL_DIR || defaultEvalDir();
+    this.shard = shardSlugOfEvalDir(this.evalDir);
   }
 
   addTest(entry: EvalTestEntry): void {
@@ -778,6 +806,7 @@ export class EvalCollector {
         total_cost_usd: Math.round(totalCost * 100) / 100,
         total_duration_ms: totalDuration,
         tests: this.tests,
+        ...(this.shard ? { shard: this.shard } : {}),
         _partial: true,
       };
 
@@ -815,6 +844,7 @@ export class EvalCollector {
       total_duration_ms: totalDuration,
       wall_clock_ms: Date.now() - this.createdAt,
       tests: this.tests,
+      ...(this.shard ? { shard: this.shard } : {}),
     };
 
     // Write eval file

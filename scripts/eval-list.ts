@@ -6,9 +6,7 @@
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import { getProjectEvalDir } from '../test/helpers/eval-store';
+import { getProjectEvalDir, listEvalJsonFiles } from '../test/helpers/eval-store';
 
 const EVAL_DIR = getProjectEvalDir();
 
@@ -37,14 +35,8 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === '--limit') { limit = parseLimit(args[++i]); }
 }
 
-// Read eval files
-let files: string[];
-try {
-  files = fs.readdirSync(EVAL_DIR).filter(f => f.endsWith('.json'));
-} catch {
-  console.log('No eval runs yet. Run: EVALS=1 bun run test:evals');
-  process.exit(0);
-}
+// Read eval files (flat dir plus one level of shards/<slug>/)
+const files = listEvalJsonFiles(EVAL_DIR);
 
 if (files.length === 0) {
   console.log('No eval runs yet. Run: EVALS=1 bun run test:evals');
@@ -68,7 +60,7 @@ interface RunSummary {
 const runs: RunSummary[] = [];
 for (const file of files) {
   try {
-    const data = JSON.parse(fs.readFileSync(path.join(EVAL_DIR, file), 'utf-8'));
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
     if (filterBranch && data.branch !== filterBranch) continue;
     if (filterTier && data.tier !== filterTier) continue;
     const totalTurns = (data.tests || []).reduce((s: number, t: any) => s + (t.turns_used || 0), 0);

@@ -182,6 +182,59 @@ describe('EvalCollector', () => {
   });
 });
 
+// --- GSTACK_EVAL_DIR + shard slug tests ---
+
+describe('EvalCollector eval-dir resolution', () => {
+  const savedEnv = process.env.GSTACK_EVAL_DIR;
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.GSTACK_EVAL_DIR;
+    else process.env.GSTACK_EVAL_DIR = savedEnv;
+  });
+
+  test('honors GSTACK_EVAL_DIR set after import — no --preload needed', async () => {
+    // The default eval dir must resolve lazily at construction, not at module
+    // load: the sharded runner sets GSTACK_EVAL_DIR in each shard child's env
+    // and shard tests import this module long before any collector exists.
+    const envDir = path.join(tmpDir, 'env-dir');
+    process.env.GSTACK_EVAL_DIR = envDir;
+    const collector = new EvalCollector('e2e');
+    collector.addTest(makeEntry());
+    await captureStderr(async () => { await collector.finalize(); });
+    expect(fs.readdirSync(envDir).filter(f => !f.startsWith('_partial'))).toHaveLength(1);
+  });
+
+  test('explicit constructor arg beats GSTACK_EVAL_DIR', async () => {
+    process.env.GSTACK_EVAL_DIR = path.join(tmpDir, 'env-dir');
+    const explicit = path.join(tmpDir, 'explicit');
+    const collector = new EvalCollector('e2e', explicit);
+    collector.addTest(makeEntry());
+    await captureStderr(async () => { await collector.finalize(); });
+    expect(fs.existsSync(path.join(tmpDir, 'env-dir'))).toBe(false);
+    expect(fs.readdirSync(explicit).length).toBeGreaterThan(0);
+  });
+
+  test('writes the shard slug when the eval dir is a shards/ subdir', async () => {
+    const shardDir = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    const collector = new EvalCollector('e2e', shardDir);
+    collector.addTest(makeEntry());
+    await captureStderr(async () => { await collector.finalize(); });
+
+    const partial = JSON.parse(fs.readFileSync(path.join(shardDir, '_partial-e2e.json'), 'utf-8'));
+    expect(partial.shard).toBe('skill-e2e-qa');
+    const final = fs.readdirSync(shardDir).find(f => !f.startsWith('_partial'))!;
+    expect(JSON.parse(fs.readFileSync(path.join(shardDir, final), 'utf-8')).shard).toBe('skill-e2e-qa');
+  });
+
+  test('writes no shard slug for a flat eval dir', async () => {
+    const collector = new EvalCollector('e2e', tmpDir);
+    collector.addTest(makeEntry());
+    await captureStderr(async () => { await collector.finalize(); });
+    const final = fs.readdirSync(tmpDir).find(f => f.endsWith('.json') && !f.startsWith('_partial'))!;
+    expect(JSON.parse(fs.readFileSync(path.join(tmpDir, final), 'utf-8')).shard).toBeUndefined();
+  });
+});
+
 // --- judgePassed tests ---
 
 describe('judgePassed', () => {
@@ -346,6 +399,57 @@ describe('findPreviousRun', () => {
 
     const result = findPreviousRun(tmpDir, 'e2e', 'main', 'current.json');
     expect(result).toBeNull(); // only llm-judge file, looking for e2e
+  });
+
+  test('a shard run prefers its own shard history over newer other-shard or flat priors', () => {
+    const mine = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    const other = path.join(tmpDir, 'shards', 'codex-e2e');
+    fs.mkdirSync(mine, { recursive: true });
+    fs.mkdirSync(other, { recursive: true });
+    // Same-shard prior — oldest of the three, must still win.
+    fs.writeFileSync(
+      path.join(mine, '0.3.4-main-e2e-20260311-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-11T10:00:00Z' })),
+    );
+    fs.writeFileSync(
+      path.join(other, '0.3.5-main-e2e-20260312-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-12T10:00:00Z' })),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.6-main-e2e-20260313-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-13T10:00:00Z' })),
+    );
+
+    const result = findPreviousRun(tmpDir, 'e2e', 'main', path.join(mine, 'current.json'));
+    expect(result).toContain(path.join('shards', 'skill-e2e-qa'));
+  });
+
+  test('a flat run prefers flat history over a newer shard prior', () => {
+    const shardDir = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    fs.mkdirSync(shardDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(shardDir, '0.3.6-main-e2e-20260314-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-14T10:00:00Z' })),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.5-main-e2e-20260312-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-12T10:00:00Z' })),
+    );
+
+    const result = findPreviousRun(tmpDir, 'e2e', 'main', path.join(tmpDir, 'current.json'));
+    expect(result).toContain('0.3.5-main-e2e');
+  });
+
+  test('falls back to a shard prior when the flat dir has no candidate', () => {
+    const shardDir = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    fs.mkdirSync(shardDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(shardDir, '0.3.6-main-e2e-20260314-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-14T10:00:00Z' })),
+    );
+
+    const result = findPreviousRun(tmpDir, 'e2e', 'main', path.join(tmpDir, 'current.json'));
+    expect(result).toContain(path.join('shards', 'skill-e2e-qa'));
   });
 });
 
