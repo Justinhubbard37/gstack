@@ -49,6 +49,7 @@ import { isProcessAlive } from './error-handling';
 import { sanitizeBody, stripLoneSurrogateEscapes } from './sanitize';
 import { startSocksBridge, testUpstream, type BridgeHandle } from './socks-bridge';
 import { parseProxyConfig, toUpstreamConfig, ProxyConfigError } from './proxy-config';
+import { writeReceipt } from '../../lib/egress-receipt';
 import { redactProxyUrl } from './proxy-redact';
 import { shouldSpawnXvfb, pickFreeDisplay, spawnXvfb, xvfbInstallHint, type XvfbHandle } from './xvfb';
 import { logTunnelDenial } from './tunnel-denial-log';
@@ -2375,6 +2376,19 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           const forwardOpts: any = { addr: tunnelPort, authtoken };
           if (domain) forwardOpts.domain = domain;
 
+          // Egress receipt BEFORE the tunnel session opens, fail-closed: a
+          // writeReceipt failure lands in this catch, which tears the tunnel
+          // listener back down and refuses the start. One receipt per session
+          // open; browse command behavior over the tunnel is unchanged.
+          writeReceipt({
+            sink: 'browse-tunnel',
+            host: domain || 'connect.ngrok-agent.com',
+            payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
+            bytes: 0,
+            sha256: null,
+            consent: 'pair_agent=on',
+          });
+
           tunnelListener = await ngrok.forward(forwardOpts);
           tunnelUrl = tunnelListener.url();
           tunnelServer = boundTunnel;
@@ -3083,6 +3097,18 @@ export async function start() {
         const domain = process.env.NGROK_DOMAIN;
         const forwardOpts: any = { addr: tunnelPort, authtoken };
         if (domain) forwardOpts.domain = domain;
+
+        // Egress receipt BEFORE the tunnel session opens, fail-closed: a
+        // writeReceipt failure lands in this catch, which cleans up the
+        // listener and skips the tunnel (same as any other startup failure).
+        writeReceipt({
+          sink: 'browse-tunnel',
+          host: domain || 'connect.ngrok-agent.com',
+          payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
+          bytes: 0,
+          sha256: null,
+          consent: 'pair_agent=on (BROWSE_TUNNEL=1)',
+        });
 
         tunnelListener = await ngrok.forward(forwardOpts);
         tunnelUrl = tunnelListener.url();

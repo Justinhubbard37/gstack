@@ -39,6 +39,7 @@ import "../lib/conductor-env-shim";
 import { detectEngineTier, withErrorContext, canonicalizeRemote } from "../lib/gstack-memory-helpers";
 import { ensureSourceRegistered, sourcePageCount, parseSourcesList, cycleCompleted, type CycleStatus } from "../lib/gbrain-sources";
 import { detectAutopilot, decideSourceRemove, decideCodeSync } from "../lib/gbrain-guards";
+import { writeReceipt } from "../lib/egress-receipt";
 import { localEngineStatus, type LocalEngineStatus } from "../lib/gbrain-local-status";
 import { buildGbrainEnv, spawnGbrain, execGbrainJson, NEEDS_SHELL_ON_WINDOWS } from "../lib/gbrain-exec";
 import { checkOwnedStagingDir } from "../lib/staging-guard";
@@ -67,7 +68,13 @@ interface CodeStageDetail {
   source_path?: string;
   page_count?: number | null;
   last_imported?: string;
-  status?: "ok" | "skipped" | "failed" | "refused-autopilot" | "refused-reclone";
+  status?:
+    | "ok"
+    | "skipped"
+    | "failed"
+    | "refused-autopilot"
+    | "refused-reclone"
+    | "refused-egress-receipt";
 }
 
 interface StageResult {
@@ -899,6 +906,27 @@ async function runCodeImport(args: CliArgs): Promise<StageResult> {
       name: "code", ran: true, ok: false, duration_ms: Date.now() - t0,
       summary: `refused: ${reclone.reason}`,
       detail: { source_id: sourceId, source_path: root, status: "refused-reclone" },
+    };
+  }
+
+  // Egress receipt BEFORE the code walk (fail-closed): the walk ships repo
+  // content to the user's gbrain DB, which may be a remote Postgres. The
+  // gbrain subprocess owns the wire bytes, so the receipt is content-free
+  // (destination + payload class only; sha256 null).
+  try {
+    writeReceipt({
+      sink: "gbrain-sync",
+      host: "gbrain-db (user-configured DATABASE_URL)",
+      payloadClass: `repo-code-index source=${sourceId} (sent by gbrain subprocess)`,
+      bytes: 0,
+      sha256: null,
+      consent: "gbrain setup consent + per-repo policy chokepoint (repoPolicyTier)",
+    });
+  } catch (err) {
+    return {
+      name: "code", ran: true, ok: false, duration_ms: Date.now() - t0,
+      summary: `EGRESS_RECEIPT_FAILED: ${(err as Error).message} — code sync refused`,
+      detail: { source_id: sourceId, source_path: root, status: "refused-egress-receipt" },
     };
   }
 

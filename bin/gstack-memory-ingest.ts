@@ -65,6 +65,7 @@ import {
   withErrorContext,
 } from "../lib/gstack-memory-helpers";
 import { execGbrainText, spawnGbrainAsync } from "../lib/gbrain-exec";
+import { writeReceipt } from "../lib/egress-receipt";
 import { checkOwnedStagingDir, STAGING_MARKER } from "../lib/staging-guard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -1690,6 +1691,36 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
     // spawn, parent termination orphans the gbrain process (observed
     // during 2026-05-10 cold-run testing — gbrain kept running 15 min
     // after the orchestrator timed out).
+    //
+    // Egress receipt BEFORE the import (fail-closed): the gbrain DB may be a
+    // remote Postgres, so the ingest is a potential off-machine send. The
+    // gbrain subprocess owns the wire bytes (content-free receipt, sha256
+    // null). The remote-http branch above stages locally only — its egress
+    // happens in gstack-brain-sync, which writes its own receipt at the push.
+    try {
+      writeReceipt({
+        sink: "memory-ingest",
+        host: "gbrain-db (user-configured DATABASE_URL)",
+        payloadClass: `transcript-pages count=${staging.written} (sent by gbrain subprocess)`,
+        bytes: 0,
+        sha256: null,
+        consent: "gbrain setup consent (/setup-gbrain)",
+      });
+    } catch (err) {
+      const msg = `EGRESS_RECEIPT_FAILED: ${(err as Error).message} — ingest refused`;
+      console.error(`[memory-ingest] ERR: ${msg}`);
+      failed += prep.prepared.length;
+      return {
+        written: 0,
+        skipped_secret: prep.skippedSecret,
+        skipped_dedup: prep.skippedDedup,
+        skipped_unattributed: prep.skippedUnattributed,
+        failed,
+        duration_ms: Date.now() - t0,
+        partial_pages: prep.partialPages,
+        system_error: msg,
+      };
+    }
     const importResult = await runGbrainImport(stagingDir, resolveImportTimeoutMs());
 
     const stdout = importResult.stdout || "";
