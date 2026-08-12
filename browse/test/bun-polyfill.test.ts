@@ -70,24 +70,47 @@ describe('bun-polyfill', () => {
     expect(lines[1]).toBe('HAS_PORT');
   });
 
-  // Regression: node defaults windowsHide to false, so a console child spawned
-  // through this shim pops a visible window on Windows — bun never does. Asserted
-  // by stubbing child_process before the polyfill destructures it, so the check is
-  // deterministic and runs on every platform.
-  test('spawn and spawnSync pass windowsHide so Windows shows no console window', () => {
+  // windowsHide is the one option where Node's default is the opposite of
+  // Bun's: Node shows the child's console window, Bun hides it. Dropping it
+  // in translation makes every spawned child pop a window on Windows, which
+  // is the platform this whole file exists for. Both shims are covered, and
+  // an explicit windowsHide:false must survive forwarding (#2523 + #2539).
+  test('Bun.spawn defaults windowsHide to true', () => {
     const result = Bun.spawnSync(['node', '-e', `
       const cp = require('child_process');
-      const seen = [];
-      cp.spawn = (c, a, o) => { seen.push(o); return { pid: 1, stdout: null, stderr: null, stdin: null, unref() {}, kill() {} }; };
-      cp.spawnSync = (c, a, o) => { seen.push(o); return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }; };
+      const orig = cp.spawn;
+      let seen;
+      cp.spawn = (c, a, o) => { seen = o; return orig(c, a, o); };
       require(${JSON.stringify(polyfillPath)});
-      Bun.spawn(['echo', 'x'], { stdio: ['pipe', 'pipe', 'pipe'] });
-      Bun.spawnSync(['echo', 'x'], { stdout: 'pipe' });
-      console.log(seen.length === 2 ? 'BOTH' : 'GOT_' + seen.length);
-      console.log(seen.every((o) => o && o.windowsHide === true) ? 'HIDDEN' : 'VISIBLE');
+      Bun.spawn(['node', '-e', ''], { stdio: ['ignore', 'ignore', 'ignore'] });
+      console.log('windowsHide:' + seen.windowsHide);
     `], { stdout: 'pipe', stderr: 'pipe' });
-    const lines = result.stdout.toString().trim().split('\n');
-    expect(lines[0]).toBe('BOTH');
-    expect(lines[1]).toBe('HIDDEN');
+    expect(result.stdout.toString().trim()).toBe('windowsHide:true');
+  });
+
+  test('Bun.spawnSync defaults windowsHide to true', () => {
+    const result = Bun.spawnSync(['node', '-e', `
+      const cp = require('child_process');
+      const orig = cp.spawnSync;
+      let seen;
+      cp.spawnSync = (c, a, o) => { seen = o; return orig(c, a, o); };
+      require(${JSON.stringify(polyfillPath)});
+      Bun.spawnSync(['node', '-e', '']);
+      console.log('windowsHide:' + seen.windowsHide);
+    `], { stdout: 'pipe', stderr: 'pipe' });
+    expect(result.stdout.toString().trim()).toBe('windowsHide:true');
+  });
+
+  test('an explicit windowsHide:false is honored', () => {
+    const result = Bun.spawnSync(['node', '-e', `
+      const cp = require('child_process');
+      const orig = cp.spawn;
+      let seen;
+      cp.spawn = (c, a, o) => { seen = o; return orig(c, a, o); };
+      require(${JSON.stringify(polyfillPath)});
+      Bun.spawn(['node', '-e', ''], { stdio: ['ignore', 'ignore', 'ignore'], windowsHide: false });
+      console.log('windowsHide:' + seen.windowsHide);
+    `], { stdout: 'pipe', stderr: 'pipe' });
+    expect(result.stdout.toString().trim()).toBe('windowsHide:false');
   });
 });
