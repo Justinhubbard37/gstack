@@ -22,7 +22,10 @@ import * as path from 'path';
 import { E2E_TOUCHFILES, E2E_TIERS, LLM_JUDGE_TOUCHFILES } from './helpers/touchfiles';
 
 const TEST_DIR = import.meta.dir;
-const SELF_GATE_RE = /EVALS_TIER\s*===\s*'(gate|periodic)'/g;
+// Both quote styles — a mechanical refactor to double quotes must not
+// silently drop a file from the invariant (fail-open is the defect class
+// this test exists to kill).
+const SELF_GATE_RE = /EVALS_TIER\s*===\s*['"](gate|periodic)['"]/g;
 
 describe('E2E tier alignment (touchfiles declaration vs test self-gate)', () => {
   const testFiles = readdirSync(TEST_DIR)
@@ -33,24 +36,40 @@ describe('E2E tier alignment (touchfiles declaration vs test self-gate)', () => 
 
   test('every self-gated test file named in a dep list matches its declared tier', () => {
     const misaligned: string[] = [];
-    const unmapped: string[] = [];
+    const reported: string[] = [];
 
     for (const file of testFiles) {
       const content = readFileSync(path.join(TEST_DIR, file), 'utf-8');
       const tiers = new Set<string>();
       for (const m of content.matchAll(SELF_GATE_RE)) tiers.add(m[1]);
-      if (tiers.size !== 1) continue; // no self-gate, or mixed-tier file — out of scope
+      const repoPath = `test/${file}`;
+      if (tiers.size === 0) {
+        // Every skill-e2e file is expected to self-gate; zero matches means
+        // either a genuinely ungated file or a gate shape the regex can't
+        // see — both worth a visible report, never a silent skip.
+        reported.push(`${repoPath}: no detectable EVALS_TIER self-gate`);
+        continue;
+      }
+      if (tiers.size > 1) {
+        reported.push(`${repoPath}: mixed-tier self-gates (${[...tiers].join(', ')}) — not tier-checked`);
+        continue;
+      }
       const selfTier = [...tiers][0];
 
-      const repoPath = `test/${file}`;
       const owningKeys = Object.keys(allDeps).filter((k) => allDeps[k].includes(repoPath));
       if (owningKeys.length === 0) {
-        unmapped.push(`${repoPath} (self-gates '${selfTier}')`);
+        reported.push(`${repoPath} (self-gates '${selfTier}'): not named in any touchfiles dep list`);
         continue;
       }
       for (const k of owningKeys) {
         const declared = E2E_TIERS[k];
-        if (declared && declared !== selfTier) {
+        if (!declared) {
+          // A dep-list key with no E2E_TIERS entry (e.g. an LLM-judge key)
+          // can't tier-check this file — report instead of silently passing.
+          reported.push(`${repoPath}: matched key '${k}' which has no E2E_TIERS entry`);
+          continue;
+        }
+        if (declared !== selfTier) {
           misaligned.push(
             `${repoPath}: self-gates on '${selfTier}' but E2E_TIERS['${k}'] declares '${declared}' — the declaration is inert`,
           );
@@ -58,13 +77,12 @@ describe('E2E tier alignment (touchfiles declaration vs test self-gate)', () => 
       }
     }
 
-    // Reported, not asserted: these files' evals can't be tier-checked until
-    // their dep lists name the test file. Add `test/<file>` to the eval's
-    // touchfiles entry to bring them under the invariant.
-    if (unmapped.length > 0) {
+    // Reported, not asserted: coverage holes the invariant can see but not
+    // arbitrate. Add the test file to its eval's dep list (or a tier entry
+    // for the key) to bring it under the invariant.
+    if (reported.length > 0) {
       console.warn(
-        `[tier-alignment] ${unmapped.length} self-gated test file(s) not named in any touchfiles dep list:\n  ` +
-          unmapped.join('\n  '),
+        `[tier-alignment] ${reported.length} file(s) outside the invariant:\n  ` + reported.join('\n  '),
       );
     }
 

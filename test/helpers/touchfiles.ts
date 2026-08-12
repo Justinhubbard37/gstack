@@ -103,8 +103,11 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'plan-design-review-plan-mode': ['plan-design-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-design-plan-mode.test.ts'],
   'plan-devex-review-plan-mode':  ['plan-devex-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts'],
   // Covers ceo (preamble misfire) + eng/design (scope-gate bypass must not
-  // fire outside plan mode) + the named-target exception case. 4 sequential
-  // PTY runs (~+10 min, ~+$2 vs the pre-bypass single run).
+  // fire outside plan mode) + the named-target exception case. 4 PTY runs;
+  // in CI these run CONCURRENT with the rest of the pty-plan-smoke suite
+  // (--max-concurrency + --retry 2), so worst-case cost is ~3x a single
+  // pass of each, sharing the API budget with sibling tests — not the
+  // sequential ~+10min a local read suggests.
   'plan-mode-no-op':              ['plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-mode-no-op.test.ts'],
 
   // v1.21+ AskUserQuestion-blocked regression tests — Conductor launches

@@ -31,7 +31,6 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
 import { runPlanSkillObservation } from './helpers/claude-pty-runner';
 
 const shouldRun = !!process.env.EVALS && process.env.EVALS_TIER === 'gate';
@@ -64,6 +63,15 @@ describeE2E('plan-mode-info no-op outside plan mode (gate regression)', () => {
         skillName,
         inPlanMode: false,
         timeoutMs: 300_000,
+        // eng/design: force the prose-fallback path. The unconditional
+        // gate-must-ask assert below pins the render shape the detector
+        // anchors on, and only the --disallowedTools prose fallback makes
+        // that shape CONTRACTUAL ("use exactly this shape" in the template);
+        // native AskUserQuestion could render terse option labels that a
+        // correct run would fail on (red-team finding).
+        ...(skillName === 'plan-ceo-review'
+          ? {}
+          : { extraArgs: ['--disallowedTools', 'AskUserQuestion'] }),
       });
 
       if (obs.outcome === 'silent_write' || obs.outcome === 'exited' || obs.outcome === 'timeout') {
@@ -85,12 +93,13 @@ describeE2E('plan-mode-info no-op outside plan mode (gate regression)', () => {
         // Scope-gate bypass must not misfire: no auto-select announcement
         // outside plan mode.
         expect(obs.scopeGateAutoSelectObserved ?? false).toBe(false);
-        // And when a question fired, it must have been the scope gate —
-        // outside plan mode with no named target, the gate is the FIRST
-        // question by contract (hard STOP before any tool call).
-        if (obs.outcome === 'asked') {
-          expect(obs.scopeGateQuestionObserved ?? false).toBe(true);
-        }
+        // UNCONDITIONAL: outside plan mode with no named target, the gate is
+        // a hard STOP before any tool call, so the gate question must have
+        // rendered no matter which terminal outcome fired. Gating this on
+        // outcome === 'asked' would let a silent-bypass run that reaches
+        // plan_ready (isPlanReadyVisible also matches common prose) sail
+        // through — the exact regression this test exists to catch.
+        expect(obs.scopeGateQuestionObserved ?? false).toBe(true);
       }
     }, 360_000);
   }
@@ -106,10 +115,16 @@ describeE2E('plan-mode-info no-op outside plan mode (gate regression)', () => {
       skillName: 'plan-eng-review',
       inPlanMode: false,
       initialPlanContent: NAMED_TARGET_SEED,
+      trackTokens: [SEED_TOKEN],
       timeoutMs: 300_000,
     });
 
-    if (obs.outcome === 'silent_write' || obs.outcome === 'exited' || obs.outcome === 'timeout') {
+    if (
+      obs.outcome === 'wrote_findings_before_asking' ||
+      obs.outcome === 'silent_write' ||
+      obs.outcome === 'exited' ||
+      obs.outcome === 'timeout'
+    ) {
       throw new Error(
         `named-target no-op FAILED: outcome=${obs.outcome}\n` +
           `summary: ${obs.summary}\n` +
@@ -125,14 +140,10 @@ describeE2E('plan-mode-info no-op outside plan mode (gate regression)', () => {
     expect(obs.scopeGateQuestionObserved ?? false).toBe(false);
     expect(obs.scopeGateAutoSelectObserved ?? false).toBe(false);
 
-    // Target consumption: the review must reference the seeded feature.
-    // evidence is the lossy 2KB tail, so also accept the token appearing in
-    // the plan file the review wrote — the token names the component, route,
-    // and test file every finding has to discuss, so absence from BOTH means
-    // the pasted target was not actually reviewed.
-    const inEvidence = obs.evidence.includes(SEED_TOKEN);
-    const inPlanFile =
-      !!obs.planFile && existsSync(obs.planFile) && readFileSync(obs.planFile, 'utf-8').includes(SEED_TOKEN);
-    expect(inEvidence || inPlanFile).toBe(true);
+    // Target consumption via high-water token tracking over the CUMULATIVE
+    // buffer — the 2KB evidence tail is lossy and the plan-file fallback is
+    // unreachable outside plan mode (extractPlanFilePath only matches
+    // plan-mode save renders).
+    expect(obs.tokensObserved?.[SEED_TOKEN] ?? false).toBe(true);
   }, 360_000);
 });

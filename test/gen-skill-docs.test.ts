@@ -3256,7 +3256,7 @@ describe('scope-gate exceptions drift-guard', () => {
   // instead of drifting. The real fix (shared {{SCOPE_GATE}} resolver) is a
   // filed TODO — this guard is the stopgap that makes the duplication safe.
   const START_MARKER = '**Exceptions — check in this order, BEFORE asking:**';
-  const END_MARKER = 'nothing changes: this gate is a hard STOP.';
+  const END_MARKER = 'in any mode — it is a hard STOP.';
 
   function extractExceptionsBlock(skill: string): string {
     const md = fs.readFileSync(path.join(ROOT, skill, 'SKILL.md'), 'utf-8');
@@ -3288,6 +3288,18 @@ describe('scope-gate exceptions drift-guard', () => {
       expect(block, `${skill}: verbatim announcement`).toContain(
         'Scope gate: plan mode — auto-selected B (reviewing <target>).',
       );
+    }
+  });
+
+  test('gate menu carries the question strings the PTY question detector pins', () => {
+    // isScopeGateQuestionVisible (claude-pty-runner.ts) anchors on the
+    // question text + option A's body. If the menu is reworded without
+    // updating the detector, the paid smokes' must-stay-false assertions go
+    // vacuous — this free pin fails first.
+    for (const skill of ['plan-eng-review', 'plan-design-review']) {
+      const md = fs.readFileSync(path.join(ROOT, skill, 'SKILL.md'), 'utf-8');
+      expect(md, `${skill}: gate question text`).toContain('What should I review?');
+      expect(md, `${skill}: option A body text`).toContain('The current branch diff');
     }
   });
 });
