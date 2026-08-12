@@ -57,7 +57,7 @@ describe('Tunnel path allowlist', () => {
     const paths = extractSetContents(SERVER_SRC, 'TUNNEL_PATHS');
     // These must never be on the tunnel surface
     const forbidden = [
-      '/health', '/welcome', '/cookie-picker',
+      '/health', '/extension-token', '/welcome', '/cookie-picker',
       '/inspector', '/inspector/pick', '/inspector/events', '/inspector/style',
       '/tunnel/start', '/tunnel/stop',
       '/pair', '/token', '/refs',

@@ -1561,8 +1561,8 @@ export class BrowserManager {
       if (extensionPath) {
         launchArgs.push(`--disable-extensions-except=${extensionPath}`);
         launchArgs.push(`--load-extension=${extensionPath}`);
-        // Auth token is served via /health endpoint now (no file write needed).
-        // Extension reads token from /health on connect.
+        // Auth token is served via POST /extension-token (pinned-origin
+        // bootstrap, no file write needed). /health is liveness-only.
         console.log(`[browse] Handoff: loading extension from ${extensionPath}`);
       } else {
         console.log('[browse] Handoff: extension not found — headed mode without side panel');

@@ -307,6 +307,17 @@ const TUNNEL_PATHS = new Set<string>([
 ]);
 
 /**
+ * The gstack sidebar extension's pinned Chrome extension ID. Derived from
+ * the "key" field in extension/manifest.json (first 16 bytes of SHA-256 of
+ * the DER public key, hex nibbles mapped 0-9a-f → a-p). Reproduce with:
+ *   bun browse/scripts/extension-id.ts
+ * POST /extension-token releases AUTH_TOKEN only to an Origin of exactly
+ * `chrome-extension://<this id>`. If the manifest keypair is ever rotated,
+ * this constant must be updated in the same commit.
+ */
+export const GSTACK_EXTENSION_ID = 'dgbkdbjebeiblbajiilljmhjdpmiglep';
+
+/**
  * Commands reachable via POST /command over the tunnel surface. A paired
  * remote agent can drive the browser (goto, click, text, etc.) but cannot
  * configure the daemon, bootstrap new sessions, import cookies, or reach
@@ -1770,7 +1781,51 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
         );
       }
 
-      // Health check — no auth required, does NOT reset idle timer
+      // ─── POST /extension-token — pinned-origin token bootstrap ──────
+      //
+      // The ONLY endpoint that hands out AUTH_TOKEN. GET /health used to
+      // carry the token (headed mode + any chrome-extension:// Origin),
+      // which meant ANY extension — or any localhost caller in headed
+      // mode — could read the root token. Now the token is released only
+      // to the one extension identity we ship: the Origin header must be
+      // exactly `chrome-extension://<GSTACK_EXTENSION_ID>`, where the ID
+      // is pinned by the "key" field in extension/manifest.json (derive
+      // it with `bun browse/scripts/extension-id.ts`). Chrome sets Origin
+      // on cross-origin POSTs from extension contexts and web pages
+      // cannot forge a chrome-extension:// Origin.
+      //
+      // Local listener only: NEVER added to TUNNEL_PATHS, so the tunnel
+      // surface 404s it by default-deny.
+      if (url.pathname === '/extension-token' && req.method === 'POST') {
+        // Defense-in-depth alongside the 127.0.0.1 bind: a DNS-rebinding
+        // page can't present a localhost Host header. Host arrives as
+        // '127.0.0.1:34567', so parse out the hostname — never compare
+        // the raw header (which carries the port) against a literal.
+        let hostname: string | null = null;
+        try {
+          hostname = new URL(`http://${req.headers.get('host') ?? ''}`).hostname;
+        } catch (err) {
+          if (!(err instanceof TypeError)) throw err;  // TypeError = malformed Host
+        }
+        const originOk =
+          req.headers.get('origin') === `chrome-extension://${GSTACK_EXTENSION_ID}`;
+        const hostOk = hostname === '127.0.0.1' || hostname === 'localhost';
+        if (!originOk || !hostOk) {
+          // No detail in the body — don't teach a probing caller which
+          // check failed.
+          return new Response(JSON.stringify({ error: 'Forbidden' }), {
+            status: 403, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ token: authToken }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Health check — no auth required, does NOT reset idle timer.
+      // NEVER carries a token in any mode: token bootstrap is
+      // POST /extension-token (pinned extension Origin) and shell auth
+      // is POST /pty-session. Liveness/status only.
       if (url.pathname === '/health') {
         const healthy = await browserManager.isHealthy();
         return new Response(JSON.stringify({
@@ -1778,14 +1833,6 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           mode: browserManager.getConnectionMode(),
           uptime: Math.floor((Date.now() - startTime) / 1000),
           tabs: browserManager.getTabCount(),
-          // Auth token for extension bootstrap. Safe: /health is localhost-only.
-          // Previously served unconditionally, but that leaks the token if the
-          // server is tunneled to the internet (ngrok, SSH tunnel).
-          // In headed mode the server is always local, so return token unconditionally
-          // (fixes Playwright Chromium extensions that don't send Origin header).
-          ...(browserManager.getConnectionMode() === 'headed' ||
-              req.headers.get('origin')?.startsWith('chrome-extension://')
-              ? { token: authToken } : {}),
           // The chat queue is gone — Terminal pane is the sole sidebar
           // surface. Keep `chatEnabled: false` so any older extension
           // build still treats the chat input as disabled.
@@ -2310,7 +2357,7 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
       // Dual-listener model: binds a SECOND Bun.serve listener on an
       // ephemeral 127.0.0.1 port dedicated to tunnel traffic, then points
       // ngrok.forward() at THAT port.  The existing local listener (which
-      // serves /health+token, /cookie-picker, /inspector/*, welcome, etc.)
+      // serves /extension-token, /cookie-picker, /inspector/*, welcome, etc.)
       // is never exposed to ngrok.
       //
       // Hard fail if the tunnel listener bind fails — NEVER fall back to
@@ -2808,11 +2855,10 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
 
       // GET /memory — diagnostic snapshot (auth required, does NOT reset idle).
       // Same auth model as /activity/stream and /inspector/events: Bearer header
-      // OR view-only SSE-session cookie. Does NOT extend /health (which already
-      // leaks AUTH_TOKEN to any localhost caller in headed mode — see TODOS.md
-      // "Audit /health token distribution"); a separate endpoint with the
-      // standard SSE auth keeps the future /health fix from cascading into the
-      // sidebar footer poll.
+      // OR view-only SSE-session cookie. Does NOT extend /health (which is
+      // unauthenticated liveness-only — token bootstrap moved to the pinned
+      // POST /extension-token); a separate endpoint with the standard SSE auth
+      // keeps /health free of anything worth stealing.
       if (url.pathname === '/memory' && req.method === 'GET') {
         const cookieToken = extractSseCookie(req);
         if (!validateAuth(req) && !validateSseSessionToken(cookieToken)) {

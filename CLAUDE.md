@@ -282,10 +282,14 @@ PTY via `window.gstackInjectToTerminal(text)`, exposed by
 `sidepanel-terminal.js`. No `/sidebar-command` POST — the live REPL is
 the only execution surface in the sidebar now.
 
-**`/health` MUST NOT surface any shell-grant token.** It already leaks
-`AUTH_TOKEN` to localhost callers in headed mode (a v1.1+ TODO). Don't
-make that worse by adding the PTY session token there. PTY auth flows
-through `POST /pty-session` only.
+**`/health` MUST NOT surface any token — and it no longer does** (v1.62+).
+The historical headed-mode leak of `AUTH_TOKEN` is fixed: `GET /health` is
+liveness/status only in every mode. Token bootstrap is `POST /extension-token`,
+which validates the caller's Origin against the pinned extension identity
+(the `key` field in `extension/manifest.json` pins the extension ID —
+`GSTACK_EXTENSION_ID` in `browse/src/server.ts`, derivation reproducible via
+`bun browse/scripts/extension-id.ts`) plus a loopback Host. PTY auth still
+flows through `POST /pty-session` only. Don't add any token to `/health`.
 
 **Transport-layer security** (v1.6.0.0+). When `pair-agent` starts an ngrok tunnel,
 the daemon binds two HTTP listeners: a local listener (127.0.0.1, full command

@@ -32,22 +32,34 @@ function getBaseUrl() {
 
 // ─── Auth Token Bootstrap ─────────────────────────────────────
 
+// Token bootstrap: POST /extension-token. The server validates our Origin
+// (chrome-extension://<pinned id> — the manifest "key" pins the ID) before
+// releasing the token. GET /health is liveness/status only and never
+// carries a token. Returns true on success, false on failure; a 403 means
+// the server doesn't trust this extension identity — treat as disconnected
+// rather than retrying forever with a stale token.
 async function loadAuthToken() {
-  if (authToken) return;
-  // Get token from browse server /health endpoint (localhost-only, safe).
-  // Previously read from .auth.json in extension dir, but that breaks
-  // read-only .app bundles and codesigning.
   const base = getBaseUrl();
-  if (!base) return;
+  if (!base) return false;
   try {
-    const resp = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
+    const resp = await fetch(`${base}/extension-token`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.status === 403) {
+      console.error('[gstack bg] /extension-token 403 — extension identity not trusted by server');
+      authToken = null;
+      setDisconnected();
+      return false;
+    }
     if (resp.ok) {
       const data = await resp.json();
-      if (data.token) authToken = data.token;
+      if (data.token) { authToken = data.token; return true; }
     }
   } catch (err) {
     console.error('[gstack bg] Failed to load auth token:', err.message);
   }
+  return false;
 }
 
 // ─── Health Polling ────────────────────────────────────────────
@@ -59,17 +71,16 @@ async function checkHealth() {
     return;
   }
 
-  // Retry loading auth token if we don't have one yet
-  if (!authToken) await loadAuthToken();
-
   try {
     const resp = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
     if (!resp.ok) { setDisconnected(); return; }
     const data = await resp.json();
     if (data.status === 'healthy') {
-      // Always refresh auth token from /health — the server generates a new
-      // token on each restart, so the old one becomes stale.
-      if (data.token) authToken = data.token;
+      // Always refresh the auth token — the server generates a new token
+      // on each restart, so the old one becomes stale. loadAuthToken()
+      // already flips to disconnected on a 403.
+      const gotToken = await loadAuthToken();
+      if (!gotToken && !authToken) return;
       // Forward chatEnabled so sidepanel can show/hide chat tab
       setConnected({ ...data, chatEnabled: !!data.chatEnabled });
     } else {
@@ -577,27 +588,49 @@ chrome.tabs.onUpdated.addListener((_id, changeInfo) => {
   }
 });
 
+// ─── v1.62 identity-pin migration notice ────────────────────────
+//
+// The manifest "key" added in v1.62 pins the extension ID, which changes
+// the ID for existing installs — chrome.storage.local is keyed by
+// extension ID, so panel-local state (saved port, snoozes) resets once.
+// Explain that in-product, one time.
+async function announceIdentityPinOnce() {
+  try {
+    const data = await chrome.storage.local.get('gstack_id_migrated_v162');
+    if (data.gstack_id_migrated_v162) return;
+    console.log('[gstack] gstack sidebar: extension identity pinned in v1.62 — panel state reset once.');
+    chrome.runtime.sendMessage({
+      type: 'gstack-migration-notice',
+      message: 'gstack sidebar: extension identity pinned in v1.62 — panel state reset once.',
+    }).catch(() => {
+      // Expected: panel not open. The console line above still lands.
+    });
+    await chrome.storage.local.set({ gstack_id_migrated_v162: true });
+  } catch (err) {
+    console.debug('[gstack] identity-pin notice failed (non-fatal):', err.message);
+  }
+}
+
 // ─── Startup ────────────────────────────────────────────────────
 
 // Fast-retry health check on startup. The server may not be listening yet
 // (Chromium launches before Bun.serve starts). Retry every 1s for the
 // first 15 seconds, then switch to 10s polling.
-loadAuthToken().then(() => {
-  loadPort().then(() => {
-    let startupAttempts = 0;
-    const startupCheck = setInterval(async () => {
-      startupAttempts++;
-      await checkHealth();
-      if (isConnected || startupAttempts >= 15) {
-        clearInterval(startupCheck);
-        // Switch to slow polling now that we're connected (or gave up)
-        if (!healthInterval) {
-          healthInterval = setInterval(checkHealth, 10000);
-        }
-        if (!isConnected) {
-          console.log('[gstack] Startup health checks failed after 15 attempts, falling back to 10s polling');
-        }
+announceIdentityPinOnce();
+loadPort().then(() => {
+  let startupAttempts = 0;
+  const startupCheck = setInterval(async () => {
+    startupAttempts++;
+    await checkHealth();
+    if (isConnected || startupAttempts >= 15) {
+      clearInterval(startupCheck);
+      // Switch to slow polling now that we're connected (or gave up)
+      if (!healthInterval) {
+        healthInterval = setInterval(checkHealth, 10000);
       }
-    }, 1000);
-  });
+      if (!isConnected) {
+        console.log('[gstack] Startup health checks failed after 15 attempts, falling back to 10s polling');
+      }
+    }
+  }, 1000);
 });

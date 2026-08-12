@@ -56,7 +56,7 @@ All command endpoints require a Bearer token:
 Authorization: Bearer gsk_sess_...
 ```
 
-`/connect` is unauthenticated (rate-limited) — it's how a remote agent exchanges a setup key for a scoped session token. `/health` is unauthenticated on the local listener (bootstrap) but does NOT exist on the tunnel listener (404).
+`/connect` is unauthenticated (rate-limited) — it's how a remote agent exchanges a setup key for a scoped session token. `/health` is unauthenticated on the local listener (liveness/status only — never a token) but does NOT exist on the tunnel listener (404). Extension token bootstrap is `POST /extension-token` on the local listener, gated by the pinned `chrome-extension://` Origin; it is not on the tunnel surface either.
 
 SSE endpoints (`/activity/stream`, `/inspector/events`) accept either a Bearer token or the HttpOnly `gstack_sse` cookie (minted via `POST /sse-session`, 30-minute TTL, stream-scope only — cannot be used against `/command`). As of v1.6.0.0 the `?token=<ROOT>` query-string auth is no longer accepted.
 
@@ -80,6 +80,9 @@ Response: (plain text result of the command)
 
 #### GET /health
 Server status. No auth required. Returns status, tabs, mode, uptime.
+Never carries a token — extension token bootstrap is `POST /extension-token`
+(local listener only, validates the pinned `chrome-extension://` Origin and a
+loopback Host; 403 otherwise). Not reachable over the tunnel (404).
 
 ### Commands
 
