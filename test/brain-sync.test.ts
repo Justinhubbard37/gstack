@@ -34,7 +34,11 @@ function run(argv: string[], opts: { env?: Record<string, string>; input?: strin
   const bin = argv[0];
   const full = bin.startsWith('/') ? bin : path.join(BIN, bin);
   const res = spawnSync(full, argv.slice(1), {
-    env: { ...process.env, GSTACK_HOME: tmpHome, ...(opts.env || {}) },
+    // HOME is overridden too: gstack-artifacts-init writes
+    // $HOME/.gstack-artifacts-remote.txt (plain $HOME, not GSTACK_HOME), so
+    // without this every free-suite run clobbers the operator's real
+    // artifacts-remote pointer. Keep it inside tmpHome, which afterEach removes.
+    env: { ...process.env, HOME: tmpHome, GSTACK_HOME: tmpHome, ...(opts.env || {}) },
     encoding: 'utf-8',
     input: opts.input,
     cwd: ROOT,
@@ -56,13 +60,18 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
   fs.rmSync(bareRemote, { recursive: true, force: true });
-  // Clean up any remote-helper file init may have written.
-  const remoteFile = path.join(os.homedir(), '.gstack-brain-remote.txt');
-  // Only remove if it points at OUR bare remote (don't clobber a real user file).
-  try {
-    const contents = fs.readFileSync(remoteFile, 'utf-8').trim();
-    if (contents === bareRemote) fs.unlinkSync(remoteFile);
-  } catch {}
+  // Clean up any remote-helper file init may have written. run() now pins
+  // HOME to tmpHome so these land inside the removed temp dir, but scrub the
+  // real home too as defense in depth — and cover BOTH the legacy brain-remote
+  // name and the current artifacts-remote name (init writes the latter).
+  for (const name of ['.gstack-brain-remote.txt', '.gstack-artifacts-remote.txt']) {
+    const remoteFile = path.join(os.homedir(), name);
+    // Only remove if it points at OUR bare remote (don't clobber a real user file).
+    try {
+      const contents = fs.readFileSync(remoteFile, 'utf-8').trim();
+      if (contents === bareRemote) fs.unlinkSync(remoteFile);
+    } catch {}
+  }
 });
 
 // ---------------------------------------------------------------

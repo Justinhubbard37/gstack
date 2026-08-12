@@ -167,7 +167,6 @@ export interface ShardCommand {
 }
 
 export interface RunShardsOptions {
-  tier?: PaidTier;
   timeoutMs?: number;
   jobs?: number;
   rootDir?: string;
@@ -284,9 +283,17 @@ export async function runPaidShard(
   const summary = classifier.end();
   if (!streamLive && buffered.length > 0) process.stdout.write(Buffer.concat(buffered));
 
+  // Pass expectedFiles so a shard whose bun child ran fewer files than planned
+  // (or zero, all self-skipped) with exit 0 is NOT recorded 'passed' — the
+  // invisible-non-execution class this runner exists to kill. bun prints
+  // "Ran N tests across M files" with M = selected files even when every test
+  // self-skips, so terminalFileCounts must include files.length. Only enforced
+  // on the real bun path: an injected commandFor (tests) isn't bun and emits no
+  // terminal summary, so there's no file count to check against.
+  const expectedFiles = options.commandFor ? undefined : files.length;
   const status: ShardStatus = timedOut
     ? 'timed-out'
-    : strictTestExitCode(exitCode ?? 1, summary) === 0 ? 'passed' : 'failed';
+    : strictTestExitCode(exitCode ?? 1, summary, expectedFiles) === 0 ? 'passed' : 'failed';
   const elapsedMs = Date.now() - startedAt;
   log(`${label} ${status.toUpperCase()} in ${Math.round(elapsedMs / 1000)}s (exit ${exitCode ?? 'signal'})`);
 
@@ -387,9 +394,21 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
   return parsed;
 }
 
+function validatedTier(value: string | undefined, source: string): PaidTier {
+  if (value === undefined || value === '') return DEFAULT_TIER;
+  // A typo'd EVALS_TIER (e.g. 'e2e', the tier string eval-store uses) would
+  // otherwise cast through unchecked, match nothing in the runtime E2E_TIERS
+  // filter, self-skip every test, and exit 0 with all shards 'passed' — the
+  // exact 0%-execution-looks-like-a-pass class this runner exists to kill.
+  if (value !== 'gate' && value !== 'periodic') {
+    throw new Error(`${source} must be gate or periodic. Received: ${value}`);
+  }
+  return value;
+}
+
 export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process.env): CliOptions {
   const options: CliOptions = {
-    tier: (env.EVALS_TIER as PaidTier) || DEFAULT_TIER,
+    tier: validatedTier(env.EVALS_TIER, 'EVALS_TIER'),
     listOnly: false,
     timeoutMs: env.EVALS_SHARD_TIMEOUT_MS
       ? parsePositiveInt(env.EVALS_SHARD_TIMEOUT_MS, 'EVALS_SHARD_TIMEOUT_MS')
@@ -439,7 +458,8 @@ async function main(): Promise<number> {
   }
 
   const summary = await runPaidShards(shards, {
-    tier: options.tier,
+    // Tier reaches the children only via EVALS_TIER below; the runtime
+    // E2E_TIERS filter inside each child is the real selection mechanism.
     timeoutMs: options.timeoutMs,
     jobs: options.jobs,
     env: { ...process.env, EVALS: '1', EVALS_TIER: options.tier },

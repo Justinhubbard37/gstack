@@ -25,7 +25,23 @@ import {
   verifyLedger,
 } from '../lib/egress-receipt';
 
-const BIN_DIR = path.dirname(new URL(import.meta.url).pathname);
+// import.meta.dir is Windows-safe; new URL(import.meta.url).pathname yields
+// '/C:/...' with percent-encoded spaces there, which would make the
+// gstack-config spawn silently fail and grants report every default. Matches
+// the sibling bin/*.ts convention.
+const BIN_DIR = import.meta.dir;
+
+/**
+ * Strip control characters (incl. ANSI escapes) from ledger-derived strings
+ * before printing. A receipt's host/payloadClass can derive from semi-trusted
+ * input (a URL argument, a git remote); JSON.parse restores \u001b escapes to
+ * live ESC bytes, so an attacker-shaped receipt could hide or spoof rows in
+ * the very output an auditor reads. The hash chain is unaffected; this only
+ * sanitizes the human render.
+ */
+function sanitizeForDisplay(value: unknown): string {
+  return String(value).replace(/[\u0000-\u001F\u007F]/g, '');
+}
 
 function usage(message: string): never {
   process.stderr.write(`gstack-egress: ${message}\n`);
@@ -76,9 +92,14 @@ function egressList(args: string[], home: string): number {
     return 0;
   }
   for (const r of receipts) {
+    // sink/host/payload_class/consent can carry semi-trusted content — strip
+    // control chars so a crafted receipt can't spoof the auditor's view. ts,
+    // bytes, and sha256 are format-constrained at write time.
     process.stdout.write(
-      `${r.ts}  ${r.sink} -> ${r.host}  ${r.payload_class}  ${r.bytes}B  ` +
-      `sha256=${r.sha256 ?? '(subprocess-owned)'}  consent=${r.consent}  status=${r.status ?? '-'}\n`,
+      `${r.ts}  ${sanitizeForDisplay(r.sink)} -> ${sanitizeForDisplay(r.host)}  ` +
+      `${sanitizeForDisplay(r.payload_class)}  ${r.bytes}B  ` +
+      `sha256=${r.sha256 ?? '(subprocess-owned)'}  consent=${sanitizeForDisplay(r.consent)}  ` +
+      `status=${r.status ? sanitizeForDisplay(r.status) : '-'}\n`,
     );
   }
   process.stdout.write(`${receipts.length} receipt(s)  ledger: ${egressLedgerPath(home)}\n`);

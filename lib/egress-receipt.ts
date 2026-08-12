@@ -121,8 +121,20 @@ function receiptError(message: string, cause?: unknown): Error & { code: string 
   return error;
 }
 
+// A serialized receipt line must stay under TAIL_READ_BYTES so the O(1)
+// tail-read always captures the FULL previous line before hashing it into the
+// chain. A caller-controlled field (sink/host/payloadClass/consent — e.g.
+// context-bill builds payloadClass dynamically) long enough to push the line
+// past the tail window would make the next append hash a truncated prior line,
+// and verifyLedger would then report a permanent false TAMPER. Cap each field
+// well under the window so the invariant holds by construction.
+const MAX_FIELD_BYTES = 512;
+
 function requireString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value) throw receiptError(`Egress receipt requires a non-empty ${name}`);
+  if (Buffer.byteLength(value) > MAX_FIELD_BYTES) {
+    throw receiptError(`Egress receipt ${name} exceeds ${MAX_FIELD_BYTES} bytes (${Buffer.byteLength(value)})`);
+  }
   return value;
 }
 
@@ -199,13 +211,17 @@ export function resetLedgerSizeWarningForTests(): void {
 }
 
 function warnLedgerSizeOnce(ledger: string): void {
+  // Short-circuit BEFORE the stat: the warning fires at most once per process,
+  // so after it has fired there is no reason to stat the ledger on every
+  // subsequent writeReceipt (this runs on the append hot path).
+  if (warnedLedgerSize) return;
   let size: number;
   try {
     size = fs.statSync(ledger).size;
   } catch {
     return; // no file yet — nothing to warn about
   }
-  if (size <= LEDGER_WARN_BYTES || warnedLedgerSize) return;
+  if (size <= LEDGER_WARN_BYTES) return;
   warnedLedgerSize = true;
   process.stderr.write(ledgerSizeWarning(ledger, size) + '\n');
 }

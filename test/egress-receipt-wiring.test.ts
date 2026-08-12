@@ -67,8 +67,10 @@ const MODULE_SINKS = [
   'bin/gstack-gbrain-sync.ts',
   'bin/gstack-memory-ingest.ts',
   'browse/src/server.ts',
-  // context-bill lands after this tripwire in the same wave; assert once present.
-  ...(exists('lib/context-bill.ts') ? ['lib/context-bill.ts'] : []),
+  // Unconditional: context-bill ships in the same tree as this tripwire. A
+  // missing file must fail loudly (a rename/move that drops its receipt wiring
+  // is exactly what this pins), not silently soften the assertion.
+  'lib/context-bill.ts',
 ];
 
 /** Shell sinks: must source the shared lib; every network op receipted. */
