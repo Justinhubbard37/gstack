@@ -44,13 +44,19 @@ function makeStubFetch(
 describe("generateVariant Retry-After handling", () => {
   let tmpDir: string;
   let outputPath: string;
+  let savedHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "variants-retry-after-"));
     outputPath = path.join(tmpDir, "variant.png");
+    // The fetch path now writes egress receipts — keep them in the temp home.
+    savedHome = process.env.GSTACK_HOME;
+    process.env.GSTACK_HOME = tmpDir;
   });
 
   afterEach(() => {
+    if (savedHome === undefined) delete process.env.GSTACK_HOME;
+    else process.env.GSTACK_HOME = savedHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
