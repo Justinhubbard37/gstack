@@ -1,5 +1,103 @@
 # Changelog
 
+## [1.63.0.0] - 2026-08-12
+
+**Everything gstack sends off your machine now leaves a receipt you can read.**
+**And the eval harness stopped grading itself a passing grade.**
+
+This release ports the parts of the GStack 2 fork that earned their way back into
+main. The headline is a hash-chained egress ledger: every place gstack itself
+sends data off your machine now writes a local, tamper-evident receipt first, and
+`gstack-egress list` / `verify` show you exactly what left and prove the chain is
+intact. Two new command-line tools ship with it: `gstack-egress` (the auditor's
+view) and `gstack-context-bill` (a token bill-of-materials for any skills tree, so
+you can see what a gstack install costs your context window before you invoke
+anything). The test harness got three real fixes, one of them a bug that had been
+quietly lying to every contributor for months.
+
+### The numbers that matter
+
+Source: the assembled branch (`git log 1.62.0.0..HEAD`), the free suite
+(`bun test`), and the discovery-surface gate (`test/catalog-budget.test.ts`).
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| gstack-owned off-machine sinks with a receipt | 0 | every enumerated sink | tripwire-enforced, zero exceptions |
+| Eval "no regressions" lines that were self-comparisons | every one | 0 | the harness compared runs against their own in-progress accumulator |
+| Paid gate runner isolation | one process, one hung file kills the tier | one process per file, group-SIGKILL on stall | + never-started accounting |
+| Discovery catalog budget | unenforced | pinned at 1,105 token-equivalents | ratchet-protocol on every skill add |
+| Browser `/health` endpoint | served the root auth token to any localhost caller in headed mode | serves no token in any mode | token bootstrap moved to a pinned-origin POST |
+
+The eval-store line is the one that matters most for anyone hacking on gstack:
+`findPreviousRun` picked the newest same-tier file as the baseline, and the
+in-progress `_partial` accumulator always won that sort, so the auto-comparison
+compared a run against itself and printed "no regressions" no matter what. That is
+fixed, with regression tests, and the fix was confirmed against the bug on the
+prior release before landing.
+
+### What this means for you
+
+If you care what gstack does with your data, you can now audit it: run
+`gstack-egress list` after any session and see every off-machine send, or
+`gstack-egress verify` to confirm nothing was rewritten. If you contribute to
+gstack, your eval comparisons mean something again, the paid gate can't be taken
+down by one wedged test, and `gstack-context-bill` tells you what your skill
+changes cost before you ship them. Nothing new phones home; the ledger is local
+and the receipts record what gstack *attempts* to send, so accidents are auditable.
+
+Ported from the GStack 2 fork by Sina Matian (time-attack/gstack); the eval-store
+bug fix and the port shortlist were selected and hardened for upstream.
+
+### Itemized changes
+
+#### Added
+- `gstack-egress` — read the hash-chained egress receipt ledger: `list` (what
+  gstack attempted to send off-machine), `verify` (recompute the chain, exit 3 on
+  tamper), `grants` (every consent grant in force and how to revoke it).
+- `gstack-context-bill` — offline token bill-of-materials for a skills tree:
+  always-on discovery cost vs per-invocation cost, `--diff` between two trees,
+  `--budget`, and `--exact` (opt-in, measures against the real tokenizer).
+- Hash-chained egress receipts (`lib/egress-receipt.ts`): fail-closed
+  receipt-before-send for sensitive sinks (brain-sync, memory-ingest, gbrain-sync,
+  telemetry, tunnels), fail-open with a warning for user-facing sinks (the design
+  binary's model calls, update-check, dashboards). A tripwire test enforces that
+  every off-machine sink in the tree is wired, with zero silent exceptions.
+- Sharded paid-gate runner (`test:gate:sharded` / `test:periodic:sharded`): one
+  process per test file, an external wall-clock timeout that group-SIGKILLs a
+  wedged file's whole process tree, and four-way per-shard status so a crash can't
+  masquerade as a pass.
+- `gstack-context-bill` and the egress tools install through the standard `./setup`
+  path like every other gstack binary.
+
+#### Changed
+- The browser `/health` endpoint no longer carries the root auth token in any
+  mode. The sidebar extension bootstraps its token through a new
+  `POST /extension-token` that requires the pinned extension origin and a loopback
+  Host; the tunnel listener never exposes it. Upgrading resets the sidebar's
+  panel-local state once, explained in-product.
+- Hermetic PTY test children can register the repo's shipped skills, so
+  slash-command gate tests actually exercise the skill under test instead of
+  silently measuring nothing.
+- Discovery-surface cost is now gated: `test/catalog-budget.test.ts` pins the
+  aggregate skill name+description budget with a self-service ratchet protocol.
+
+#### Fixed
+- The eval harness auto-comparison compared every run against its own in-progress
+  accumulator and reported "no regressions" unconditionally. Fixed with regression
+  tests; comparisons now find the latest *completed* same-tier run.
+- The browser `/health` token leak (a headed-mode carve-out that handed the root
+  token to any localhost caller).
+
+#### For contributors
+- Shared modules replace duplicated logic: one paid-test-set definition consumed by
+  both the free-suite filter and the paid runner, one skill-census helper with three
+  explicit counts (physical files, authored skills, registry entries) consumed by
+  the seeder, context-bill, and the catalog gate.
+- `CLAUDE.md`'s compiled-binaries note corrected: the `browse/dist` binaries have
+  been untracked since v0.11.16.0, so they no longer appear in `git status`.
+- New follow-ups filed in `TODOS.md`: egress ledger rotation (chain-genesis
+  records), a launch-nonce token bootstrap, and eval-watch shard-awareness.
+
 ## [1.62.0.0] - 2026-08-12
 
 ## **Plan reviews stop asking what to review when you're in plan mode.**

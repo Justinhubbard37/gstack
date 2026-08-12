@@ -2722,3 +2722,33 @@ log already streams per-shard results).
 `test/helpers/eval-store.ts` already enumerates the layout — reuse it.
 
 **Effort:** S (human ~2h, CC ~15min). **Depends on:** v1.62 port wave landed.
+
+## v1.63 port-wave review follow-ups (deferred from /ship review army — non-blocking polish)
+
+Genuine review findings deferred from the v1.63 ship because they are
+informational/polish, not correctness-blocking, and several want their own
+tests. Filed so they are tracked, not dropped.
+
+- **P2 — telemetry-sync HTTP-status outcome is dead code.** `_GSTACK_EGRESS_LAST_RECEIPT`
+  is set inside a command-substitution subshell in `bin/gstack-telemetry-sync`, so the
+  parent-shell guard that would append the HTTP status to the receipt never fires. The
+  generic `exit:N` outcome is still recorded, so the ledger is correct, just less
+  precise. Fix: have `_receipted_curl` persist the receipt id to a caller-readable temp
+  file, or restructure the call out of the subshell. (Confirmed by 3 review specialists.)
+- **P2 — context-bill "TOTAL on disk" double-counts child skills** in a root-as-container
+  tree (this repo's own layout): `buildBill` sums the root skill's whole-tree walk plus
+  each child's subtree again (~2x the TOTAL line). ALWAYS-ON / EAGER / --diff / --budget
+  are all unaffected — only the informational TOTAL is wrong. Fix: compute the tree total
+  from a single deduplicated `walkMd(root)` pass, or exclude child dirs from the root
+  skill's `totalMd`. Needs a fixture test. (`lib/context-bill.ts`.)
+- **P3 — DRY/robustness polish:** one shared `_gstack_egress_host_of` helper for the
+  ~11 hand-rolled URL-to-host extractions across the egress shell sinks; extract the
+  duplicated tunnel-open `writeReceipt` block in `browse/src/server.ts` (two sites);
+  hoist the per-iteration `SharedArrayBuffer` alloc out of the egress-receipt lock spin;
+  replace context-bill's exact-mode `errorPct === 0` sentinel with an explicit flag;
+  reuse `frontmatterName()` from `skill-census.ts` in `catalog-budget.test.ts`.
+- **P3 — test-coverage gaps the audit named:** `PAID_TEST_GLOBS` ↔ `package.json`
+  `test:gate` parity test; `GSTACK_EXTENSION_ID` ↔ `manifest.json` key derivation parity
+  test (`browse/scripts/extension-id.ts`); a runner test asserting each shard child gets
+  its own `GSTACK_EVAL_DIR` under `shards/<slug>`; receipt-refusal branch tests for
+  supabase-provision / gbrain-sync / memory-ingest.
