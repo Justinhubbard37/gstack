@@ -169,14 +169,15 @@ jobs:
             console.log("seeded", p);
           '
 
-      # PTY smokes drive the interactive `claude` TUI and send /office-hours and
-      # /plan-ceo-review. Claude Code discovers user-scoped skills from
-      # $HOME/.claude/skills/<name>/SKILL.md, but .claude/skills is gitignored, so
-      # a fresh CI checkout has NO registry — claude prints "Unknown command:
-      # /plan-ceo-review". Mirror setup's --no-prefix registry minimally: a gstack
-      # root symlink (resolves the preamble's absolute ~/.claude/skills/gstack/bin/*
-      # and ~/.claude/skills/gstack/<skill>/sections/* paths) plus a per-skill
-      # top-level dir holding SKILL.md (+ sections) symlinks for the two skills
+      # PTY smokes drive the interactive `claude` TUI and send /office-hours,
+      # /plan-ceo-review, /plan-eng-review, and /plan-design-review. Claude Code
+      # discovers user-scoped skills from $HOME/.claude/skills/<name>/SKILL.md,
+      # but .claude/skills is gitignored, so a fresh CI checkout has NO registry
+      # — claude prints "Unknown command: /plan-ceo-review". Mirror setup's
+      # --no-prefix registry minimally: a gstack root symlink (resolves the
+      # preamble's absolute ~/.claude/skills/gstack/bin/* and
+      # ~/.claude/skills/gstack/<skill>/sections/* paths) plus a per-skill
+      # top-level dir holding SKILL.md (+ sections) symlinks for the four skills
       # these tests invoke. No ./setup (it builds binaries, launches Chromium,
       # installs fonts, reads a /dev/tty prompt) and no binary build (SKILL.md +
       # bin/ + sections/ are committed). $HOME is /github/home here; the spawned
