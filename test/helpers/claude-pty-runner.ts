@@ -618,6 +618,43 @@ export function isProseAUQVisible(visible: string): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Scope-gate render detectors (plan-eng-review / plan-design-review)
+// ---------------------------------------------------------------------------
+//
+// Both anchor on the RENDER SHAPE, not bare keywords, so model narration
+// about the gate ("normally I'd ask what should I review…") stays false.
+// Matching is whitespace-squished + lowercased because stripAnsi collapses
+// TTY cursor-positioning escapes unpredictably (the same failure mode the
+// Pattern-4/5 collapsed-form handling above exists for).
+
+/**
+ * True when the scope-gate QUESTION is actually rendered: the question text
+ * plus option A's body text. Option-body anchoring (not `A)`/`B)` markers)
+ * because native AskUserQuestion renders NUMBERED options in the TTY while
+ * the --disallowedTools prose fallback renders lettered ones — the option
+ * body appears in both renders; narration rarely quotes both the question
+ * and an option body.
+ */
+export function isScopeGateQuestionVisible(visible: string): boolean {
+  const squished = visible.replace(/\s+/g, '').toLowerCase();
+  return squished.includes('whatshouldireview') && squished.includes('currentbranchdiff');
+}
+
+/**
+ * True when the plan-mode auto-select announcement is rendered:
+ * "Scope gate: plan mode — auto-selected B (reviewing <target>)."
+ * Requires BOTH the announcement prefix and the selected-B token so
+ * narration ("in plan mode I'd auto-select B") stays false.
+ */
+export function isScopeGateAutoSelectVisible(visible: string): boolean {
+  const squished = visible.replace(/\s+/g, '').toLowerCase();
+  return (
+    squished.includes('scopegate:planmode') &&
+    (squished.includes('auto-selectedb') || squished.includes('autoselectedb'))
+  );
+}
+
 /**
  * Parse a rendered numbered-option list out of the visible TTY text.
  *
@@ -1516,6 +1553,20 @@ export interface PlanSkillObservation {
    * Haiku judge fallback rather than the regex detector.
    */
   waitingEverObserved?: boolean;
+  /**
+   * High-water-mark flag: did the scope-gate QUESTION ("What should I
+   * review?" plus option-body text) ever render during the run? Same
+   * lossy-2KB-evidence rationale as proseAUQEverObserved. The plan-mode
+   * smokes assert this stays false (gate bypassed via auto-select B); the
+   * no-op regression asserts it fires outside plan mode.
+   */
+  scopeGateQuestionObserved?: boolean;
+  /**
+   * High-water-mark flag: did the plan-mode auto-select announcement
+   * ("Scope gate: plan mode — auto-selected B …") ever render? The
+   * plan-mode smokes assert true; the no-op regression asserts false.
+   */
+  scopeGateAutoSelectObserved?: boolean;
 }
 
 /**
@@ -1619,6 +1670,8 @@ export async function runPlanSkillObservation(opts: {
     // even if the current state is 'working'.
     let proseAUQEverObserved = false;
     let waitingEverObserved = false;
+    let scopeGateQuestionObserved = false;
+    let scopeGateAutoSelectObserved = false;
     const JUDGE_AFTER_MS = 60_000;
     const JUDGE_INTERVAL_MS = 30_000;
     while (Date.now() - start < budgetMs) {
@@ -1631,6 +1684,8 @@ export async function runPlanSkillObservation(opts: {
           summary: `claude exited (code=${session.exitCode()}) before reaching a terminal outcome`,
           evidence: visible.slice(-2000),
           elapsedMs: Date.now() - startedAt,
+          scopeGateQuestionObserved,
+          scopeGateAutoSelectObserved,
         };
       }
       if (visible.includes('Unknown command:')) {
@@ -1639,6 +1694,8 @@ export async function runPlanSkillObservation(opts: {
           summary: `claude rejected /${opts.skillName} as unknown command (skill not registered in this cwd)`,
           evidence: visible.slice(-2000),
           elapsedMs: Date.now() - startedAt,
+          scopeGateQuestionObserved,
+          scopeGateAutoSelectObserved,
         };
       }
 
@@ -1652,6 +1709,15 @@ export async function runPlanSkillObservation(opts: {
           tag: 'prose-auq-surfaced',
         });
       }
+      // Scope-gate render tracking (same high-water shape). Full-run
+      // detection matters because the 2KB evidence tail usually scrolls
+      // past the gate render before the outcome fires.
+      if (!scopeGateQuestionObserved && isScopeGateQuestionVisible(visible)) {
+        scopeGateQuestionObserved = true;
+      }
+      if (!scopeGateAutoSelectObserved && isScopeGateAutoSelectVisible(visible)) {
+        scopeGateAutoSelectObserved = true;
+      }
 
       const classified = classifyVisible(visible, {
         strictPlanWrites: !!opts.initialPlanContent,
@@ -1663,6 +1729,8 @@ export async function runPlanSkillObservation(opts: {
           elapsedMs: Date.now() - startedAt,
           proseAUQEverObserved,
           waitingEverObserved,
+          scopeGateQuestionObserved,
+          scopeGateAutoSelectObserved,
         };
         // Capture the plan file path on any outcome where one may have been
         // written. Gating only on 'plan_ready' missed two cases: (1) the
@@ -1693,6 +1761,8 @@ export async function runPlanSkillObservation(opts: {
             summary: `LLM judge: ${lastJudgeVerdict.reasoning} (state=waiting after ${Math.round(elapsed / 1000)}s)`,
             evidence: visible.slice(-2000),
             elapsedMs: Date.now() - startedAt,
+            scopeGateQuestionObserved,
+            scopeGateAutoSelectObserved,
           };
         }
       }
@@ -1716,6 +1786,8 @@ export async function runPlanSkillObservation(opts: {
         elapsedMs: Date.now() - startedAt,
         proseAUQEverObserved,
         waitingEverObserved,
+        scopeGateQuestionObserved,
+        scopeGateAutoSelectObserved,
       };
     }
     return {
@@ -1729,6 +1801,8 @@ export async function runPlanSkillObservation(opts: {
       elapsedMs: Date.now() - startedAt,
       proseAUQEverObserved,
       waitingEverObserved,
+      scopeGateQuestionObserved,
+      scopeGateAutoSelectObserved,
     };
   } finally {
     await session.close();
@@ -2129,10 +2203,17 @@ export async function runPlanSkillFloorCheck(opts: {
       // OR via prose-rendered options under --disallowedTools when no MCP
       // variant is callable (isProseAUQVisible). Both surface the question
       // to the user; the bug we're catching is "fired zero AUQs."
+      //
+      // Scope-gate renders do NOT count: the gate's "What should I review?"
+      // can fire inside the 3s pre-target window and would trivially satisfy
+      // the floor, but the floor measures FINDING-driven questions. The
+      // exclusion is TAIL-scoped so an early gate render that has scrolled
+      // out doesn't suppress a later, real finding AUQ.
       const tail = visible.slice(-TAIL_SCAN_BYTES);
       if (
         (isNumberedOptionListVisible(visible) || isProseAUQVisible(visible)) &&
-        !isPermissionDialogVisible(tail)
+        !isPermissionDialogVisible(tail) &&
+        !isScopeGateQuestionVisible(tail)
       ) {
         return {
           auqObserved: true,
