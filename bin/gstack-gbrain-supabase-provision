@@ -69,6 +69,12 @@ set -euo pipefail
 
 SUPABASE_API_BASE="${SUPABASE_API_BASE:-https://api.supabase.com}"
 API_VERSION="v1"
+
+# Egress receipt helpers (_receipted_curl): receipt-before-send, fail-closed.
+# The receipt hashes the request body only — the PAT (Authorization header)
+# is never receipted or logged.
+. "$(cd "$(dirname "$0")" && pwd)/gstack-egress-lib.sh"
+SUPABASE_API_HOST="${SUPABASE_API_BASE#*://}"; SUPABASE_API_HOST="${SUPABASE_API_HOST%%/*}"
 DEFAULT_WAIT_TIMEOUT=180
 POLL_INTERVAL=5
 CURL_TIMEOUT=30
@@ -135,11 +141,24 @@ api_call() {
       -H "Content-Type: application/json"
       -H "User-Agent: gstack-gbrain-supabase-provision"
     )
+    # Receipted fail-closed. The retry loop reuses $body_file across
+    # attempts, but the helper consumes its payload file — so each attempt
+    # hands it a fresh copy (hash still equals the exact wire bytes; the
+    # helper appends --data-binary @copy). Bodyless calls use --no-payload.
+    local payload_arg="--no-payload"
     if [ -n "$body_file" ]; then
-      curl_args+=(--data-binary "@$body_file")
+      payload_arg=$(mktemp)
+      cp "$body_file" "$payload_arg"
     fi
-    local status
-    if ! status=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
+    local status rc=0
+    status=$(_receipted_curl closed supabase-provision "$SUPABASE_API_HOST" "provision-api-call ($method $apipath)" "user ran gstack-gbrain-supabase-provision" "$payload_arg" \
+      curl "${curl_args[@]}" "$url") || rc=$?
+    if [ "$rc" -eq 3 ] && [ -z "$status" ]; then
+      # Egress receipt refused — the send never happened (the helper's
+      # problem/cause/fix message is already on stderr). Don't retry.
+      exit 8
+    fi
+    if [ "$rc" -ne 0 ]; then
       # curl itself failed (network, timeout, etc.). Retry.
       if [ "$attempt" -ge "$max_attempts" ]; then
         die_net "network failure calling $method $apipath after $attempt attempts"

@@ -40,6 +40,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 URL_BIN="$SCRIPT_DIR/gstack-artifacts-url"
 REMOTE_FILE="$HOME/.gstack-artifacts-remote.txt"
 
+# Egress receipt helpers (_receipted_git): fail-open for user-directed
+# git ops against the user's own artifacts remote.
+. "$SCRIPT_DIR/gstack-egress-lib.sh"
+
+# remote host for receipt records (github.com etc). Set once PUSH_URL exists.
+_artifacts_host() {
+  local h="${PUSH_URL#*://}"; h="${h#*@}"; h="${h%%[/:]*}"
+  echo "${h:-unknown}"
+}
+
 REMOTE_URL=""
 HOST_PREF=""
 URL_FORM_SUPPORTED="false"
@@ -185,7 +195,8 @@ PUSH_URL=$("$URL_BIN" --to ssh "$CANONICAL_HTTPS" 2>/dev/null || echo "$CANONICA
 
 # ---- verify push URL is reachable ----
 echo "Verifying remote connectivity: $PUSH_URL"
-if ! git ls-remote "$PUSH_URL" >/dev/null 2>&1; then
+if ! _receipted_git open artifacts-init "$(_artifacts_host)" artifacts-remote-ls-remote "user ran gstack-artifacts-init" \
+    bash -c 'git ls-remote "$1" >/dev/null 2>&1' _ "$PUSH_URL"; then
   cat >&2 <<EOF
 Remote not reachable via SSH: $PUSH_URL
 This could mean:
@@ -346,10 +357,15 @@ else
 fi
 
 # ---- initial push ----
-if ! git push -q -u origin main 2>/dev/null; then
+if ! _receipted_git open artifacts-init "$(_artifacts_host)" artifacts-initial-push "user ran gstack-artifacts-init" \
+    bash -c 'git push -q -u origin main 2>/dev/null'; then
   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  if git fetch origin 2>/dev/null && git pull --ff-only origin "$CURRENT_BRANCH" 2>/dev/null; then
-    git push -q -u origin "$CURRENT_BRANCH" || {
+  if _receipted_git open artifacts-init "$(_artifacts_host)" artifacts-fetch "user ran gstack-artifacts-init" \
+      bash -c 'git fetch origin 2>/dev/null' \
+    && _receipted_git open artifacts-init "$(_artifacts_host)" artifacts-pull "user ran gstack-artifacts-init" \
+      bash -c 'git pull --ff-only origin "$1" 2>/dev/null' _ "$CURRENT_BRANCH"; then
+    _receipted_git open artifacts-init "$(_artifacts_host)" artifacts-initial-push "user ran gstack-artifacts-init" \
+      git push -q -u origin "$CURRENT_BRANCH" || {
       echo "Push to $PUSH_URL failed. The remote may have divergent content." >&2
       echo "Try: cd ~/.gstack && git pull --rebase origin $CURRENT_BRANCH && git push origin $CURRENT_BRANCH" >&2
       exit 1

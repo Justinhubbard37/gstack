@@ -36,7 +36,12 @@
 # their own EXIT traps and a trap set by a sourced library would clobber
 # the caller's. All temp handling is immediate, per call.
 
-_gstack_egress_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Self-locate without dirname (builtins only), so the lib works even under
+# a stripped test PATH.
+case "${BASH_SOURCE[0]}" in
+  */*) _gstack_egress_lib_dir="$(cd "${BASH_SOURCE[0]%/*}" && pwd)" ;;
+  *) _gstack_egress_lib_dir="$(pwd)" ;;
+esac
 
 _gstack_egress_home() {
   if [ -n "${GSTACK_HOME:-}" ]; then

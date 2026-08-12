@@ -345,7 +345,10 @@ describe('gstack-brain-sync egress receipt gate', () => {
     const commitsBefore = git(['rev-list', '--count', 'HEAD']).stdout.trim();
 
     // Make the receipt unwritable: security dir exists but is read-only.
-    fs.mkdirSync(path.join(tmpHome, 'security'), { recursive: true, mode: 0o500 });
+    // (artifacts-init may have created it already — mkdirSync's mode is a
+    // no-op on an existing dir, so chmod explicitly.)
+    fs.mkdirSync(path.join(tmpHome, 'security'), { recursive: true });
+    fs.chmodSync(path.join(tmpHome, 'security'), 0o500);
     try {
       const refused = run(['gstack-brain-sync', '--once']);
       expect(refused.status).toBe(1);

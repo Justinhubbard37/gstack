@@ -11,6 +11,10 @@ set +e
 
 GSTACK_DIR="${GSTACK_DIR:-$HOME/.claude/skills/gstack}"
 STATE_DIR="${GSTACK_STATE_DIR:-$HOME/.gstack}"
+
+# Egress receipt helpers (_receipted_git): fail-open — an update pull must
+# never block a session over a receipt hiccup.
+. "$(cd "$(dirname "$0")" && pwd)/gstack-egress-lib.sh"
 THROTTLE_FILE="$STATE_DIR/.last-session-update"
 LOCK_DIR="$STATE_DIR/.setup-lock"
 LOG_FILE="$STATE_DIR/analytics/session-update.log"
@@ -76,7 +80,10 @@ fi
 
   # ── Pull latest ──
   OLD_HEAD=$(git -C "$GSTACK_DIR" rev-parse HEAD 2>/dev/null)
-  git -C "$GSTACK_DIR" pull --ff-only -q 2>/dev/null
+  UPDATE_URL=$(git -C "$GSTACK_DIR" remote get-url origin 2>/dev/null || echo "")
+  UPDATE_HOST="${UPDATE_URL#*://}"; UPDATE_HOST="${UPDATE_HOST#*@}"; UPDATE_HOST="${UPDATE_HOST%%[/:]*}"
+  GSTACK_HOME="$STATE_DIR" _receipted_git open session-update "${UPDATE_HOST:-unknown}" gstack-self-update-pull "auto_upgrade=true" \
+    bash -c 'git -C "$1" pull --ff-only -q 2>/dev/null' _ "$GSTACK_DIR"
   PULL_EXIT=$?
   NEW_HEAD=$(git -C "$GSTACK_DIR" rev-parse HEAD 2>/dev/null)
 
