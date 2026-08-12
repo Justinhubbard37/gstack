@@ -139,6 +139,77 @@ export interface ComparisonResult {
 // --- Shared helpers ---
 
 /**
+ * Is this eval file an in-progress accumulator rather than a finalized run?
+ *
+ * True on either signal: the `_partial` flag inside the JSON (the authoritative
+ * role marker) OR a filename starting with `_partial` (catches accumulators
+ * whose body predates the flag, and flagged files that were renamed keep being
+ * caught by the flag). Every baseline lookup must exclude these — an
+ * accumulator carries the current run's tier, branch, and freshest timestamp,
+ * so treating it as a baseline makes the run compare against itself.
+ */
+export function isPartialEval(data: unknown, filename: string): boolean {
+  if (path.basename(filename).startsWith('_partial')) return true;
+  return Boolean((data as { _partial?: unknown } | null)?._partial);
+}
+
+/**
+ * List eval JSON files in `evalDir` plus one level of `<evalDir>/shards/<slug>/`
+ * subdirectories (where the sharded paid runner points each shard's collector).
+ * Returns absolute paths. Missing dirs yield [].
+ */
+export function listEvalJsonFiles(evalDir: string): string[] {
+  const jsonIn = (dir: string): string[] => {
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
+    return names.filter(f => f.endsWith('.json')).map(f => path.join(dir, f));
+  };
+
+  const files = jsonIn(evalDir);
+  const shardsRoot = path.join(evalDir, 'shards');
+  let shardDirs: fs.Dirent[];
+  try {
+    shardDirs = fs.readdirSync(shardsRoot, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const entry of shardDirs) {
+    if (!entry.isDirectory()) continue;
+    files.push(...jsonIn(path.join(shardsRoot, entry.name)));
+  }
+  return files;
+}
+
+/**
+ * Find the most recent finalized (non-partial) eval file for a tier, scanning
+ * `evalDir` and one level of `shards/<slug>/` subdirs. Shared by the budget
+ * regression gate and any tooling that needs "the latest real run".
+ */
+export function findLatestFinalizedRun(
+  evalDir: string,
+  tier: 'e2e' | 'llm-judge',
+): { filepath: string; result: EvalResult } | null {
+  let latest: { filepath: string; result: EvalResult; timestamp: string } | null = null;
+  for (const filepath of listEvalJsonFiles(evalDir)) {
+    let data: EvalResult;
+    try {
+      data = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as EvalResult;
+    } catch { continue; }
+    if (isPartialEval(data, filepath)) continue;
+    if (data.tier !== tier) continue;
+    const timestamp = data.timestamp ?? '';
+    if (!latest || timestamp.localeCompare(latest.timestamp) > 0) {
+      latest = { filepath, result: data, timestamp };
+    }
+  }
+  return latest ? { filepath: latest.filepath, result: latest.result } : null;
+}
+
+/**
  * Determine if a planted-bug eval passed based on judge results vs ground truth thresholds.
  * Centralizes the pass/fail logic so all planted-bug tests use the same criteria.
  */
@@ -205,7 +276,7 @@ export function findPreviousRun(
       const raw = fs.readFileSync(fullPath, 'utf-8');
       // Quick parse — only grab the fields we need
       const data = JSON.parse(raw);
-      if (data._partial) continue; // in-progress run, not a baseline
+      if (isPartialEval(data, file)) continue; // in-progress run, not a baseline
       if (data.tier !== tier) continue;
       entries.push({ file: fullPath, branch: data.branch || '', timestamp: data.timestamp || '' });
     } catch { continue; }

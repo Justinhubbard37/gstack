@@ -6,6 +6,9 @@ import {
   EvalCollector,
   extractToolSummary,
   findPreviousRun,
+  findLatestFinalizedRun,
+  isPartialEval,
+  listEvalJsonFiles,
   compareEvalResults,
   formatComparison,
   generateCommentary,
@@ -343,6 +346,92 @@ describe('findPreviousRun', () => {
 
     const result = findPreviousRun(tmpDir, 'e2e', 'main', 'current.json');
     expect(result).toBeNull(); // only llm-judge file, looking for e2e
+  });
+});
+
+// --- isPartialEval tests ---
+
+describe('isPartialEval', () => {
+  test('flag set but file renamed — still partial', () => {
+    expect(isPartialEval({ _partial: true }, 'renamed-to-look-final.json')).toBe(true);
+  });
+
+  test('name matches but no flag — still partial', () => {
+    expect(isPartialEval({}, '_partial-e2e.json')).toBe(true);
+    expect(isPartialEval(null, path.join('/some/dir', '_partial-e2e.json'))).toBe(true);
+  });
+
+  test('finalized run is not partial', () => {
+    expect(isPartialEval(makeResult(), '0.3.6-main-e2e-20260314-100000.json')).toBe(false);
+  });
+});
+
+// --- listEvalJsonFiles / findLatestFinalizedRun tests ---
+
+describe('findLatestFinalizedRun', () => {
+  test('listEvalJsonFiles recurses exactly one shards/*/ level', () => {
+    fs.writeFileSync(path.join(tmpDir, 'flat.json'), '{}');
+    const shardDir = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    fs.mkdirSync(shardDir, { recursive: true });
+    fs.writeFileSync(path.join(shardDir, 'sharded.json'), '{}');
+    // Nested one level deeper than the contract — must NOT be picked up.
+    const tooDeep = path.join(shardDir, 'shards', 'nested');
+    fs.mkdirSync(tooDeep, { recursive: true });
+    fs.writeFileSync(path.join(tooDeep, 'too-deep.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'not-json.txt'), '');
+
+    const files = listEvalJsonFiles(tmpDir).map(f => path.basename(f)).sort();
+    expect(files).toEqual(['flat.json', 'sharded.json']);
+  });
+
+  test('finds the newest finalized run across flat dir and shard subdirs', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.5-main-e2e-20260312-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-12T10:00:00Z' })),
+    );
+    const shardDir = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    fs.mkdirSync(shardDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(shardDir, '0.3.6-main-e2e-20260314-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-14T10:00:00Z' })),
+    );
+
+    const latest = findLatestFinalizedRun(tmpDir, 'e2e');
+    expect(latest?.filepath).toContain('skill-e2e-qa');
+    expect(latest?.result.timestamp).toBe('2026-03-14T10:00:00Z');
+  });
+
+  test('skips partials by flag and by name, filters by tier', () => {
+    // Newest by timestamp, but partial by flag under a shard dir.
+    const shardDir = path.join(tmpDir, 'shards', 'skill-e2e-qa');
+    fs.mkdirSync(shardDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(shardDir, 'flagged.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-16T10:00:00Z', _partial: true })),
+    );
+    // Partial by name only.
+    fs.writeFileSync(
+      path.join(tmpDir, '_partial-e2e.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-15T10:00:00Z' })),
+    );
+    // Wrong tier.
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.6-main-llm-judge-20260317-100000.json'),
+      JSON.stringify(makeResult({ tier: 'llm-judge', timestamp: '2026-03-17T10:00:00Z' })),
+    );
+    // The genuine baseline.
+    fs.writeFileSync(
+      path.join(tmpDir, '0.3.5-main-e2e-20260312-100000.json'),
+      JSON.stringify(makeResult({ timestamp: '2026-03-12T10:00:00Z' })),
+    );
+
+    const latest = findLatestFinalizedRun(tmpDir, 'e2e');
+    expect(latest?.result.timestamp).toBe('2026-03-12T10:00:00Z');
+  });
+
+  test('returns null for missing dir or no finalized runs', () => {
+    expect(findLatestFinalizedRun('/nonexistent/path', 'e2e')).toBeNull();
+    expect(findLatestFinalizedRun(tmpDir, 'e2e')).toBeNull();
   });
 });
 
