@@ -2752,3 +2752,27 @@ tests. Filed so they are tracked, not dropped.
   test (`browse/scripts/extension-id.ts`); a runner test asserting each shard child gets
   its own `GSTACK_EVAL_DIR` under `shards/<slug>`; receipt-refusal branch tests for
   supabase-provision / gbrain-sync / memory-ingest.
+
+## P2: harden or re-tier skill-e2e-plan-design-with-ui PTY detection
+
+**What:** The gate-tier `test/skill-e2e-plan-design-with-ui.test.ts` began executing
+for the first time once v1.63's `seedSkills` registered skills in hermetic PTY
+children (the fork had deleted this file; it measured nothing before). It now
+reliably TIMES OUT even though the skill runs correctly: the transcript shows
+`/plan-design-review` reaching its scope-gate AskUserQuestion (5 options, the
+`<gstack-qid:plan-design-review-scope-gate>` marker present), but the test's
+`isNumberedOptionListVisible`/`parseNumberedOptions` scraping can't classify it out
+of the PTY buffer because spinner frames (`[?25l✻Sprouting… still thinking`) are
+interleaved character-by-character with the option text.
+
+**Why:** Shipped behavior is correct — this is a test-harness detection limitation,
+not a product bug. But a gate test that always times out is worse than no test.
+
+**Fix options:** (a) harden the tail-scraping (drop DEC private-mode + spinner
+residue before matching; widen/clean the window); (b) add an LLM-judge fallback
+classifier (the file's own comments note the regex detectors are "brittle to PTY
+rendering quirks"); or (c) move this test to periodic until (a)/(b) lands.
+
+**Context:** `test/skill-e2e-plan-design-with-ui.test.ts`,
+`test/helpers/claude-pty-runner.ts:308` (`isNumberedOptionListVisible`). Evidence:
+`~/.gstack-dev/eval-runs/pdwu-verify-*.log`. **Effort:** M (human ~half day / CC ~30min).
