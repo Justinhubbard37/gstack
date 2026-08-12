@@ -21,7 +21,7 @@ Source: this branch's live PTY eval runs on 2026-08-11 (logs in ~/.gstack-dev/ev
 | Finding-floor runs with the gate excluded from the count | trivially satisfiable | 2/2 pass, gate renders don't count |
 | Stochastic smokes wrongly blocking the CI gate lane | 4 | 0 |
 
-That last row is a repair: four plan-mode/finding-floor smokes were demoted to the weekly tier months ago, but the demotion never took effect — the test files still gated on the blocking lane. They now run where they were declared to run, and a new free invariant test makes that class of drift impossible to reintroduce silently.
+That last row is a repair: four plan-mode/finding-floor smokes were demoted to the weekly tier months ago, but the demotion never took effect — the test files still gated on the blocking lane. They no longer block the gate lane; they run via `bun run test:periodic` (weekly-cron wiring for PTY tests is tracked in TODOS). A new free invariant test makes the declared-vs-actual tier drift impossible to reintroduce silently.
 
 ### What this means for you
 
@@ -41,7 +41,7 @@ The plan → review → ship loop loses its most pointless click. Draft a plan, 
 - The finding-floor harness no longer counts a scope-gate render toward its question floor (positional anchoring, judge-fallback exclusion) — the floor now genuinely measures finding-driven questions.
 
 ### Fixed
-- Four stochastic plan-mode/finding-floor smokes declared `periodic` were still self-gating on the blocking `gate` tier — the demotion is now real, and the invariant test above prevents recurrence.
+- Four stochastic plan-mode/finding-floor smokes declared `periodic` were still self-gating on the blocking `gate` tier — they no longer run in (or block) the gate lane, and the invariant test above prevents declared-vs-actual tier drift from recurring. Weekly-cron wiring for PTY-driven periodic tests is tracked in TODOS.
 - CI eval containers now register `plan-eng-review` and `plan-design-review` as discoverable skills (registration loops, dangling-target checks, and frontmatter verification all extended) — previously only two skills were registered.
 - The no-op regression suite covers all three plan-review skills outside plan mode, asserts the gate question actually rendered (unconditionally), and proves a pasted named target is consumed via cumulative-buffer token tracking.
 

@@ -2260,14 +2260,27 @@ export async function runPlanSkillFloorCheck(opts: {
       // gate render has been seen, acceptance scans only the content APPENDED
       // after it (positional anchor above) — the buffer is append-only, so a
       // whole-buffer acceptance would keep matching the stale gate render
-      // forever. The tail exclusion additionally covers the window where the
-      // gate menu is still the active render.
+      // forever.
+      //
+      // The gate veto is ACTIVE-RENDER-aware, not blanket-tail: when a
+      // numbered menu is up, parseNumberedOptions anchors on the LAST cursor
+      // line, so we veto only when the pending menu IS the gate — a finding
+      // AUQ that renders within TAIL_SCAN_BYTES of the gate (model waiting,
+      // no further output) still satisfies the floor. Prose renders have no
+      // cursor anchor, so the prose path falls back to the tail check
+      // (accepted residual: prose gate + prose finding inside one tail can
+      // suppress until timeout; floors run the native-menu path in practice).
       const tail = visible.slice(-TAIL_SCAN_BYTES);
       const acceptWindow = gateSeenIdx === -1 ? visible : visible.slice(gateSeenIdx);
+      const activeMenu = parseNumberedOptions(visible);
+      const gateIsActiveRender =
+        activeMenu.length > 0
+          ? activeMenu.some((o) => /current\s*branch\s*diff/i.test(o.label))
+          : isScopeGateQuestionVisible(tail);
       if (
         (isNumberedOptionListVisible(acceptWindow) || isProseAUQVisible(acceptWindow)) &&
         !isPermissionDialogVisible(tail) &&
-        !isScopeGateQuestionVisible(tail)
+        !gateIsActiveRender
       ) {
         return {
           auqObserved: true,
@@ -2291,8 +2304,9 @@ export async function runPlanSkillFloorCheck(opts: {
         lastJudgeVerdict = judgePtyState(visible, { testName: opts.skillName });
         // The judge can't tell a scope-gate question from a finding question,
         // so a 'waiting' verdict while the gate menu is the pending render
-        // must NOT satisfy the floor — same exclusion as the regex path.
-        if (lastJudgeVerdict.state === 'waiting' && !isScopeGateQuestionVisible(tail)) {
+        // must NOT satisfy the floor — same active-render exclusion as the
+        // regex path.
+        if (lastJudgeVerdict.state === 'waiting' && !gateIsActiveRender) {
           return {
             auqObserved: true,
             outcome: 'auq_observed',

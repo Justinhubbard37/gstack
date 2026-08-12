@@ -233,6 +233,23 @@ SKILL.md untouched). `bun test` is green again.
 
 ## Scope-gate follow-ups (filed via /plan-eng-review on the plan-mode auto-select-B change)
 
+### P2: Wire the four demoted plan-mode/finding-floor PTY tests into periodic CI
+
+**What:** `evals-periodic.yml` runs an explicit 9-file matrix; the four tests
+demoted to `periodic` in v1.62.0.0 (`skill-e2e-plan-eng-plan-mode`,
+`skill-e2e-plan-design-plan-mode`, `skill-e2e-plan-eng-finding-floor`,
+`skill-e2e-plan-design-finding-floor`) are not in it, so they currently run
+only locally/manually (`bun run test:periodic` or `eval:bg:periodic`). Wiring
+them needs a PTY-capable periodic job: the container skill-registration setup
+from evals.yml's `e2e-pty-plan-smoke` job (real-file SKILL.md copies for the
+TUI's cross-mount symlink bug) with `EVALS_TIER=periodic`.
+
+**Why:** Codex re-review P2 on the v1.62.0.0 ship. This is a named instance of
+the existing periodic-orphans problem (see "P1/P2 periodic coverage" TODO in
+Test infrastructure) — solve it there or here, once.
+
+**Depends on / blocked by:** none; sibling of the periodic-orphans TODO above.
+
 ### P3: Extract the whole scope gate to a shared `{{SCOPE_GATE}}` resolver
 
 **What:** Move the duplicated scope-gate prose (heading, intro sentence, the

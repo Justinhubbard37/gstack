@@ -34,6 +34,7 @@ import {
   isPermissionDialogVisible,
   isScopeGateQuestionVisible,
   isScopeGateAutoSelectVisible,
+  parseNumberedOptions,
 } from './claude-pty-runner';
 
 // The gate's native AskUserQuestion render (numbered options + cursor) —
@@ -106,6 +107,26 @@ describe('floor-check scope-gate exclusion (acceptance-condition regression)', (
   test('a gate render inside the tail IS suppressed (no false floor pass)', () => {
     const tail = GATE_NATIVE_RENDER.slice(-TAIL_SCAN_BYTES);
     expect(isScopeGateQuestionVisible(tail)).toBe(true);
+  });
+
+  test('active-render veto: a finding AUQ close after the gate is NOT vetoed (codex P2 re-review)', () => {
+    // The finding menu renders <TAIL_SCAN_BYTES after the gate, then the
+    // model waits (no further output). A blanket tail veto would suppress
+    // this until timeout; the active-render veto anchors on the LAST cursor
+    // menu, which is the finding AUQ, so the floor is satisfiable.
+    const visible = GATE_NATIVE_RENDER + '\nAuditing the plan…\n' + FINDING_AUQ_RENDER;
+    const activeMenu = parseNumberedOptions(visible);
+    expect(activeMenu.length).toBeGreaterThan(0);
+    const gateIsActiveRender = activeMenu.some((o) => /current\s*branch\s*diff/i.test(o.label));
+    expect(gateIsActiveRender).toBe(false);
+  });
+
+  test('active-render veto: the gate as the pending menu IS vetoed', () => {
+    const visible = 'booting…\n' + GATE_NATIVE_RENDER;
+    const activeMenu = parseNumberedOptions(visible);
+    expect(activeMenu.length).toBeGreaterThan(0);
+    const gateIsActiveRender = activeMenu.some((o) => /current\s*branch\s*diff/i.test(o.label));
+    expect(gateIsActiveRender).toBe(true);
   });
 });
 
