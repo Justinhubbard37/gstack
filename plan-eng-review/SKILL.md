@@ -811,7 +811,13 @@ Review this plan thoroughly before making any code changes. For every issue or r
 
 ## Scope gate (FIRST — overrides everything below). This is a hard STOP.
 
-Before ANYTHING else in this skill — before the Design Doc Check, the office-hours prerequisite offer, Step 0, and any `git` / `Read` / `Grep` / `Glob` / `Bash` call — your VERY FIRST tool call MUST be AskUserQuestion, to confirm the review target. Do not run the Design Doc Check bash or explore the repo before the user answers.
+Before ANYTHING else in this skill — before the Design Doc Check, the office-hours prerequisite offer, Step 0, and any `git` / `Read` / `Grep` / `Glob` / `Bash` call — unless an exception below applies, your VERY FIRST tool call MUST be AskUserQuestion, to confirm the review target. Do not run the Design Doc Check bash or explore the repo before the user answers.
+
+**Exceptions — check in this order, BEFORE asking:**
+1. **Plan mode → auto-select B:** if this session is in plan mode (an active plan file appears in this conversation, or the host agent's system messages indicate plan mode), skip the question and auto-select B: review the active plan — the plan file in context, or the plan just drafted in this conversation (including a draft the user pasted). Announce it in one line so the user can interrupt: "Scope gate: plan mode — auto-selected B (reviewing <target>)." Then run the Design Doc Check and Step 0 against that plan. If the user explicitly named a DIFFERENT target (a path, or the literal words "branch diff"), their choice wins — use it instead. If plan mode is indicated but no plan exists yet, ask as normal.
+2. **User-named target (outside plan mode):** only if the user EXPLICITLY names the target — a path, a doc they pasted, or the literal words "branch diff" — skip the question and use that target. A passing mention is not naming. When in doubt, ask — the gate is the default.
+
+Outside plan mode with no explicitly-named target, nothing changes: this gate is a hard STOP.
 
 1. First tool call = AskUserQuestion (tool_use). Confirm what to review.
 2. Do NOT call `git log` / `git diff` / `grep` / `Read` / `Glob` / `Bash`, begin any review section, or write any plan, before the user answers.
@@ -978,7 +984,7 @@ If none was produced (user may have cancelled), proceed with standard review.
 
 ### Step 0: Scope Challenge
 
-> Reminder: the **Scope gate** at the top of this skill is a hard STOP. Do not run Step 0 until the user has answered it, and run it against the target they chose.
+> Reminder: the **Scope gate** at the top of this skill applies first. Do not run Step 0 until the gate has resolved a target — the user answered, the user named one, or plan mode auto-selected B — and run it against that target.
 
 Before reviewing anything, answer these questions:
 1. **What existing code already partially or fully solves each sub-problem?** Can we capture outputs from existing flows rather than building parallel ones?

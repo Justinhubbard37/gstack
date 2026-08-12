@@ -108,5 +108,15 @@ describeE2E('plan-eng-review plan-mode smoke (periodic)', () => {
 
     expect(['asked', 'plan_ready']).toContain(obs.outcome);
     assertReportAtBottomIfPlanWritten(obs);
+
+    // Plan-mode scope-gate bypass: with a seeded plan in plan mode, the gate
+    // must NOT render its "What should I review?" menu — it auto-selects B
+    // and announces it. Exception ordering in the template (plan-mode branch
+    // first) makes this deterministic even though the seed arrives as a
+    // pasted user message. Unseeded test 1 keeps its lenient contract: with
+    // no plan drafted, the "ask as normal" fallback legitimately renders the
+    // question.
+    expect(obs.scopeGateQuestionObserved ?? false).toBe(false);
+    expect(obs.scopeGateAutoSelectObserved ?? false).toBe(true);
   }, 360_000);
 });

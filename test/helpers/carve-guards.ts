@@ -164,7 +164,8 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'plan',
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
-    maxSkeletonBytes: 67_000,
+    // +~1 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
+    maxSkeletonBytes: 68_000,
     minUnionBytes: 70_000,
     mustContain: ['Architecture', 'Code Quality', 'Test', 'Performance'],
     // Cross-cutting preamble growth (v1.57.2.0 AUQ-failure prose fallback + the
@@ -172,7 +173,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // default-on Codex outside-voice (codexPreflight block + CODEX_MODE branch
     // prose, replacing the smaller opt-in question) land this at ~6.6% over the
     // v1.53.0.0 baseline. Headroom for those intentional additions.
-    maxSizeRatio: 1.08,
+    // 1.08 → 1.09: the scope-gate exceptions block put the union ~95 B over
+    // the 1.08 line (123,440 / 114,209 baseline = 1.0808).
+    maxSizeRatio: 1.09,
   },
   'plan-design-review': {
     skill: 'plan-design-review',
@@ -189,7 +192,8 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // +Conductor AUQ-default-prose rule + one-way/continuation safety in the
     // always-loaded AskUserQuestion Format section.
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
-    maxSkeletonBytes: 88_000,
+    // +~1.3 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
+    maxSkeletonBytes: 89_000,
     minUnionBytes: 70_000,
     mustContain: ['design', 'visual'],
     maxSizeRatio: 1.07,
