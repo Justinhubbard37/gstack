@@ -32,6 +32,17 @@ DISCOVER_CURSOR="$GSTACK_HOME/.brain-discover-cursor"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_BIN="$SCRIPT_DIR/gstack-config"
 
+# Egress receipt helpers (_receipted_git): receipt-before-send, fail-closed.
+. "$SCRIPT_DIR/gstack-egress-lib.sh"
+
+# origin host for receipt records (github.com etc).
+remote_host() {
+  local url host
+  url=$(git -C "$GSTACK_HOME" remote get-url origin 2>/dev/null || echo "")
+  host="${url#*://}"; host="${host#*@}"; host="${host%%[/:]*}"
+  echo "${host:-unknown}"
+}
+
 # Remote-specific hint for auth errors (branch on origin URL).
 remote_auth_hint() {
   local url
@@ -276,6 +287,21 @@ subcmd_once() {
     exit 0
   fi
 
+  # Egress receipt for the push, written BEFORE the commit consumes the
+  # queue (amendment C7 ordering): a refused receipt exits HERE, before any
+  # queue mutation or local commit, so the queue stays intact and the next
+  # run retries the whole drain. Content-free: git owns the bytes
+  # (sha256:null). Fail-closed.
+  local push_host receipt_err
+  push_host=$(remote_host)
+  if ! receipt_err=$(GSTACK_HOME="$GSTACK_HOME" "$SCRIPT_DIR/gstack-egress-receipt" write \
+      --sink brain-sync --host "$push_host" --class curated-memory-git-push \
+      --no-payload --consent "artifacts_sync_mode!=off" 2>&1 >/dev/null); then
+    write_status "push_failed" "EGRESS_RECEIPT_FAILED: receipt not writable; push refused (queue preserved)"
+    _gstack_egress_refusal "brain-sync push" "$(printf '%s' "$receipt_err" | head -c 300)"
+    exit 1
+  fi
+
   # Commit with template message.
   local n ts
   n=$(wc -l < "$paths_file" | tr -d ' ')
@@ -303,12 +329,16 @@ subcmd_once() {
       exit 0
     fi
 
-    # Try a fetch-and-merge + retry.
-    if git -C "$GSTACK_HOME" fetch origin 2>/dev/null; then
+    # Try a fetch-and-merge + retry. The fetch and the retry push are their
+    # own attempted-egress ops, each receipted fail-closed (a refusal falls
+    # through to the push_failed path below).
+    if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-fetch "artifacts_sync_mode!=off" \
+        bash -c 'git -C "$1" fetch origin 2>/dev/null' _ "$GSTACK_HOME"; then
       local branch
       branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
       if git -C "$GSTACK_HOME" merge --no-edit "origin/$branch" >/dev/null 2>&1; then
-        if git -C "$GSTACK_HOME" push origin HEAD 2>/dev/null; then
+        if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-push "artifacts_sync_mode!=off" \
+            bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
           : > "$QUEUE"
           date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
           write_status "ok" "pushed $n file(s) after rebase"

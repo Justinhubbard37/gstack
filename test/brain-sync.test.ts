@@ -331,6 +331,69 @@ describe('gstack-brain-sync secret scan', () => {
 });
 
 // ---------------------------------------------------------------
+// Egress receipt gate: receipt-before-commit, queue intact on refusal
+// ---------------------------------------------------------------
+describe('gstack-brain-sync egress receipt gate', () => {
+  test('refused receipt leaves the queue intact, makes no commit, and next run retries', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod is advisory there
+    run(['gstack-artifacts-init', '--remote', bareRemote]);
+    run(['gstack-config', 'set', 'artifacts_sync_mode', 'full']);
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'),
+      '{"skill":"x","insight":"y","ts":"2026-04-22T10:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    const commitsBefore = git(['rev-list', '--count', 'HEAD']).stdout.trim();
+
+    // Make the receipt unwritable: security dir exists but is read-only.
+    fs.mkdirSync(path.join(tmpHome, 'security'), { recursive: true, mode: 0o500 });
+    try {
+      const refused = run(['gstack-brain-sync', '--once']);
+      expect(refused.status).toBe(1);
+      // DX contract: problem + cause + fix, plain language.
+      expect(refused.stderr).toContain('NOT sent');
+      expect(refused.stderr).toContain('EGRESS_RECEIPT_FAILED');
+      expect(refused.stderr).toContain('Fix: chmod -R u+w');
+      expect(refused.stderr).toContain('ATTEMPTS to send off-machine');
+      // Queue intact (receipt is written BEFORE the commit consumes it).
+      const queue = fs.readFileSync(path.join(tmpHome, '.brain-queue.jsonl'), 'utf-8');
+      expect(queue).toContain('projects/p/learnings.jsonl');
+      // No local commit was created.
+      expect(git(['rev-list', '--count', 'HEAD']).stdout.trim()).toBe(commitsBefore);
+      // Nothing reached the remote.
+      const remoteLog = spawnSync('git', ['--git-dir=' + bareRemote, 'log', '--oneline'], { encoding: 'utf-8' });
+      expect(remoteLog.stdout).not.toMatch(/sync: 1 file/);
+      const status = JSON.parse(fs.readFileSync(path.join(tmpHome, '.brain-sync-status.json'), 'utf-8'));
+      expect(status.status).toBe('push_failed');
+      expect(status.message).toContain('EGRESS_RECEIPT_FAILED');
+    } finally {
+      fs.chmodSync(path.join(tmpHome, 'security'), 0o700);
+    }
+
+    // Next run (ledger writable again) drains the intact queue and pushes.
+    const retry = run(['gstack-brain-sync', '--once']);
+    expect(retry.status).toBe(0);
+    const log = spawnSync('git', ['--git-dir=' + bareRemote, 'log', '--oneline'], { encoding: 'utf-8' });
+    expect(log.stdout).toMatch(/sync: 1 file/);
+  });
+
+  test('successful push writes a git-class receipt before the send', () => {
+    run(['gstack-artifacts-init', '--remote', bareRemote]);
+    run(['gstack-config', 'set', 'artifacts_sync_mode', 'full']);
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'),
+      '{"skill":"x","insight":"y","ts":"2026-04-22T10:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    const ledger = fs.readFileSync(path.join(tmpHome, 'security', 'egress.jsonl'), 'utf-8');
+    const records = ledger.trim().split('\n').map((l) => JSON.parse(l));
+    const pushReceipt = records.find((rec) => rec.sink === 'brain-sync' && rec.payload_class === 'curated-memory-git-push');
+    expect(pushReceipt).toBeTruthy();
+    expect(pushReceipt.sha256).toBeNull(); // git owns the bytes
+  });
+});
+
+// ---------------------------------------------------------------
 // Uninstall preserves user data
 // ---------------------------------------------------------------
 describe('gstack-brain-uninstall', () => {
