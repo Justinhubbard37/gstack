@@ -152,6 +152,7 @@ describeE2E('/plan-ceo-review mode routing (gate)', () => {
         const session = await launchClaudePty({
           permissionMode: 'plan',
           timeoutMs: 540_000,
+          seedSkills: true,
         });
         try {
           await Bun.sleep(8000);

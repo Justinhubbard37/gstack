@@ -16,6 +16,8 @@
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { getHermeticDirs, hermeticSkillsConfigDir } from './helpers/hermetic-env';
 
 const ROOT = path.resolve(new URL(import.meta.url).pathname, '..', '..');
 
@@ -109,5 +111,24 @@ describe('hermetic wiring tripwire', () => {
       'These callsites pass the operator env into an eval child, defeating the hermetic scrub: ' +
         offenders.join(', '),
     ).toEqual([]);
+  });
+
+  test('skill seeding stays under runRoot and reads the live repo tree, never operator ~/.claude', () => {
+    // hermeticSkillsConfigDir() is a BLESSED non-hermetic edge: it registers
+    // the LIVE repo tree's skills (the skills are the subject under test).
+    // What it must never do is hand children the operator's ~/.claude — the
+    // seeded CLAUDE_CONFIG_DIR lives under the hermetic runRoot, and every
+    // registered symlink resolves into the repo checkout.
+    const configDir = hermeticSkillsConfigDir();
+    const { runRoot } = getHermeticDirs();
+    const operatorClaude = path.join(os.homedir(), '.claude') + path.sep;
+    expect(configDir.startsWith(runRoot + path.sep)).toBe(true);
+    expect(configDir.startsWith(operatorClaude)).toBe(false);
+    const skillsDir = path.join(configDir, 'skills');
+    for (const entry of fs.readdirSync(skillsDir)) {
+      const target = fs.readlinkSync(path.join(skillsDir, entry, 'SKILL.md'));
+      expect(target.startsWith(operatorClaude), `${entry}: symlink escapes to ${target}`).toBe(false);
+      expect(fs.realpathSync(target).startsWith(fs.realpathSync(ROOT) + path.sep), `${entry}: symlink outside repo: ${target}`).toBe(true);
+    }
   });
 });

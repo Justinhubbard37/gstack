@@ -183,6 +183,14 @@ jobs:
       # bin/ + sections/ are committed). $HOME is /github/home here; the spawned
       # claude inherits it (this runner adds no HOME/CLAUDE_CONFIG_DIR override,
       # no hermetic mode) and the Seed step already proved claude reads $HOME.
+      #
+      # KEEP THIS STEP even though seedSkills/hermeticSkillsConfigDir() now
+      # registers skills for hermetic PTY children: that registry is SYMLINKS
+      # into the repo checkout, and this container's cross-mount symlinks
+      # defeat the TUI skill scanner (see the note inside the step below) —
+      # the real-file copies here are what the TUI actually reads. HOME is
+      # also not hermeticized, so the absolute ~/.claude/skills/gstack/...
+      # preamble paths resolve through the gstack root symlink this step makes.
       - name: Register gstack skills for PTY smoke
         if: matrix.suite.name == 'e2e-pty-plan-smoke'
         run: |

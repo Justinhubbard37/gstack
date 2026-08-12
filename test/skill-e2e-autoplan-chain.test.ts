@@ -71,6 +71,7 @@ describeE2E('/autoplan chain ordering (periodic)', () => {
           permissionMode: 'plan',
           cwd: tempDir,
           timeoutMs: 1_080_000, // 18 min, slightly above test budget
+          seedSkills: true,
         });
 
         const hits: PhaseHit[] = [];

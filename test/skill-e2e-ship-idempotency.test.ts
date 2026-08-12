@@ -161,6 +161,7 @@ describeE2E('/ship idempotency E2E (periodic, real-PTY)', () => {
         timeoutMs: 720_000,
         // Disable network-y pieces so the agent can't reach actual github.
         env: { GH_TOKEN: 'mock-not-real', NO_COLOR: '1' },
+        seedSkills: true,
       });
 
       let outcome: 'detected' | 'plan_ready' | 'attempted_mutation' | 'timeout' | 'exited' = 'timeout';

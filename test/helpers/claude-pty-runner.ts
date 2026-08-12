@@ -24,7 +24,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { hermeticChildEnv, isHermeticEnabled } from './hermetic-env';
+import { hermeticChildEnv, hermeticSkillsConfigDir, isHermeticEnabled } from './hermetic-env';
 
 /** Strip ANSI escapes for pattern-matching against visible text. */
 export function stripAnsi(s: string): string {
@@ -61,6 +61,11 @@ export function resolveClaudeBinary(): string | null {
 }
 
 export interface ClaudePtyOptions {
+  /** Register the repo's shipped skills in the child's user scope via
+   * hermeticSkillsConfigDir(). Required by any test that types a /skill
+   * slash command; without it hermetic claude rejects the command as
+   * Unknown before any model turn. No effect when EVALS_HERMETIC=0. */
+  seedSkills?: boolean;
   /**
    * Permission mode for the session.
    *  - 'plan' (default) — launches with --permission-mode plan
@@ -1285,6 +1290,9 @@ export async function launchClaudePty(
   // Hermetic by default (test/helpers/hermetic-env.ts): operator session
   // context never reaches the child; per-test opts.env merges last.
   const childEnv = hermeticChildEnv(opts.env);
+  if (opts.seedSkills && hermetic && !opts.env?.CLAUDE_CONFIG_DIR) {
+    childEnv.CLAUDE_CONFIG_DIR = hermeticSkillsConfigDir();
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const proc = (Bun as any).spawn([claudePath, ...args], {
@@ -1670,6 +1678,7 @@ export async function runPlanSkillObservation(opts: {
     extraArgs: opts.extraArgs,
     env: opts.env,
     model: opts.model,
+    seedSkills: true,
   });
 
   try {
@@ -1966,6 +1975,7 @@ export async function runPlanSkillCounting(opts: {
     timeoutMs: timeoutMs + 60_000,
     env: opts.env,
     model: opts.model,
+    seedSkills: true,
   });
 
   const fingerprints: AskUserQuestionFingerprint[] = [];
@@ -2199,6 +2209,7 @@ export async function runPlanSkillFloorCheck(opts: {
     timeoutMs: timeoutMs + 60_000,
     env: opts.env,
     model: opts.model,
+    seedSkills: true,
   });
 
   try {

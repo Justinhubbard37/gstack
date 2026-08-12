@@ -45,6 +45,7 @@ describeE2E('/plan-design-review with UI scope (gate)', () => {
         permissionMode: 'plan',
         cwd: ROOT,
         timeoutMs: 480_000,
+        seedSkills: true,
       });
 
       let outcome: 'real_question' | 'plan_ready' | 'timeout' | 'exited' = 'timeout';
