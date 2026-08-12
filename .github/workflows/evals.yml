@@ -201,7 +201,7 @@ jobs:
           # registry recognized it, isolating the failure to the container's
           # cross-mount symlink). Copy SKILL.md + sections as real files so the TUI
           # reads them directly.
-          for s in office-hours plan-ceo-review; do
+          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
             rm -rf "${SKILLS_DIR:?}/$s"
             mkdir -p "$SKILLS_DIR/$s"
             cp "$REPO/$s/SKILL.md" "$SKILLS_DIR/$s/SKILL.md"
@@ -216,7 +216,7 @@ jobs:
           # ~/.claude/skills/gstack symlink above.
           PROJ_SKILLS="$REPO/.claude/skills"
           mkdir -p "$PROJ_SKILLS"
-          for s in office-hours plan-ceo-review; do
+          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
             rm -rf "${PROJ_SKILLS:?}/$s"
             mkdir -p "$PROJ_SKILLS/$s"
             cp "$REPO/$s/SKILL.md" "$PROJ_SKILLS/$s/SKILL.md"
@@ -229,18 +229,22 @@ jobs:
           for f in \
             "$SKILLS_DIR/office-hours/SKILL.md" \
             "$SKILLS_DIR/plan-ceo-review/SKILL.md" \
+            "$SKILLS_DIR/plan-eng-review/SKILL.md" \
+            "$SKILLS_DIR/plan-design-review/SKILL.md" \
             "$SKILLS_DIR/gstack/bin/gstack-update-check" \
             "$SKILLS_DIR/gstack/office-hours/sections/design-and-handoff.md" \
-            "$SKILLS_DIR/gstack/plan-ceo-review/sections/review-sections.md"; do
+            "$SKILLS_DIR/gstack/plan-ceo-review/sections/review-sections.md" \
+            "$SKILLS_DIR/gstack/plan-eng-review/sections/review-sections.md" \
+            "$SKILLS_DIR/gstack/plan-design-review/sections/review-sections.md"; do
             if [ ! -e "$f" ]; then
               echo "ERROR: skill-registry target missing (symlink dangles): $f" >&2
               exit 1
             fi
           done
-          grep -m1 '^name: office-hours$'    "$SKILLS_DIR/office-hours/SKILL.md"    >/dev/null \
-            || { echo "ERROR: office-hours SKILL.md missing 'name: office-hours' frontmatter" >&2; exit 1; }
-          grep -m1 '^name: plan-ceo-review$' "$SKILLS_DIR/plan-ceo-review/SKILL.md" >/dev/null \
-            || { echo "ERROR: plan-ceo-review SKILL.md missing 'name: plan-ceo-review' frontmatter" >&2; exit 1; }
+          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
+            grep -m1 "^name: $s\$" "$SKILLS_DIR/$s/SKILL.md" >/dev/null \
+              || { echo "ERROR: $s SKILL.md missing 'name: $s' frontmatter" >&2; exit 1; }
+          done
           echo "skill registry OK"
 
       - name: Run ${{ matrix.suite.name }}
