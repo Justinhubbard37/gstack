@@ -70,6 +70,10 @@ periodic tests run weekly via cron or manually. Use `EVALS_TIER=gate` or
 2. Quality benchmark, Opus model test, or non-deterministic? -> `periodic`
 3. Requires external service (Codex, Gemini)? -> `periodic`
 
+Tier declarations are enforced by `test/e2e-tier-alignment.test.ts` (free, runs
+in `bun test`): a `skill-e2e-*` file whose `EVALS_TIER` self-gate disagrees with
+its declared tier in `E2E_TIERS` fails the suite — keep both in sync.
+
 ## Testing
 
 ```bash
