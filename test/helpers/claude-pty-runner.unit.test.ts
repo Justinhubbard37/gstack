@@ -264,6 +264,33 @@ Recommendation: A when a branch diff exists, otherwise B.
       expect(isScopeGateAutoSelectVisible(sample)).toBe(false);
     });
 
+    test('stays false on a VERBATIM QUOTE of the announcement (negation narration)', () => {
+      // The exact announcement line sits quoted in the skill context, so a
+      // model explaining why it is NOT firing it can reproduce it byte-exact
+      // inside quotes — that must not trip a must-stay-false assert.
+      const sample =
+        'Not in plan mode, so I won\'t announce "Scope gate: plan mode — auto-selected B (reviewing <target>)." and will ask instead.';
+      expect(isScopeGateAutoSelectVisible(sample)).toBe(false);
+    });
+
+    test('a later real render still matches after an earlier quoted mention', () => {
+      const sample =
+        'Earlier I said I would render "Scope gate: plan mode — auto-selected B (…)" and now:\n' +
+        'Scope gate: plan mode — auto-selected B (reviewing PLAN.md).';
+      expect(isScopeGateAutoSelectVisible(sample)).toBe(true);
+    });
+
+    test('matches tense paraphrases WITH the announcement prefix (auto-selecting / auto-selects)', () => {
+      expect(
+        isScopeGateAutoSelectVisible('Scope gate: plan mode — auto-selecting B (reviewing the drafted plan).'),
+      ).toBe(true);
+      expect(isScopeGateAutoSelectVisible('Scope gate: plan mode — auto-selects B.')).toBe(true);
+    });
+
+    test('stays false on tense paraphrases WITHOUT the announcement prefix', () => {
+      expect(isScopeGateAutoSelectVisible('Auto-selecting B since we are in plan mode.')).toBe(false);
+    });
+
     test('stays false on AUTO_DECIDE preamble output', () => {
       const sample = 'Auto-decided scope question → B (your preference). Change with /plan-tune.';
       expect(isScopeGateAutoSelectVisible(sample)).toBe(false);
