@@ -233,6 +233,31 @@ SKILL.md untouched). `bun test` is green again.
 
 ## Scope-gate follow-ups (filed via /plan-eng-review on the plan-mode auto-select-B change)
 
+### P2: SDK eval budgets charge API-queue latency to the work budget — pick a structural fix
+
+**What:** `runSkillTest`'s single `setTimeout(timeout)` arms at spawn, so session
+startup AND the model's first-completion queue time are charged against the
+test's work budget. Under concurrent load (11 CI matrix jobs, or local eval
+runs sharing the org API), a first completion can queue 60-90s+, producing the
+deterministic `0 turns / $0.00 / <budget>s x3 attempts` failure shape. Observed:
+`review-dashboard-via` (PR #2472, 180s→300s), `retro-base-branch` (240s→360s),
+`plan-ceo-plan-mode` (300s→420s, 2026-08-12), `design-consultation-preview`
+(90s→300s, PR #2533 CI). Every fix so far is a per-test budget bump.
+
+**Why not just re-arm the timer on first stream event:** an audit (2026-08-12)
+found ~100 outer bun-timeout literals sized as inner+30-60s; re-arming the inner
+clock breaks every outer/inner relationship and needs a codemod of all of them.
+
+**Options:** (a) two-phase timer in session-runner (startup grace, re-arm on
+first NDJSON line) + codemod outer literals to inner+grace+slack; (b) adopt a
+300s floor for all CI SDK budgets (statically enforceable — a free test can
+assert no `timeout: <300_000` in skill-e2e files) and stop re-litigating per
+test; (c) startup-spawn semaphore in the runner (bounds the boot stampede but
+not API-side queuing — evidence says queuing dominates, so likely insufficient
+alone). Recommend (b) short-term + (a) properly sequenced with the codemod.
+
+**Depends on / blocked by:** none.
+
 ### P2: Wire the four demoted plan-mode/finding-floor PTY tests into periodic CI
 
 **What:** `evals-periodic.yml` runs an explicit 9-file matrix; the four tests
