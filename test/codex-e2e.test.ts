@@ -37,15 +37,24 @@ const CODEX_AVAILABLE = (() => {
 
 const evalsEnabled = !!process.env.EVALS;
 
-// Skip all tests if codex is not available or EVALS is not set.
+// External-service tests are periodic-tier (CLAUDE.md tiering rule 3):
+// "Requires external service (Codex, Gemini)? -> periodic". The positive
+// form below is the canonical whole-file guard shape — the sharded runner's
+// classifyPaidTestFile greps for it to exclude this file from gate.
+const tierOk = process.env.EVALS_TIER === 'periodic';
+
+// Skip all tests if codex is not available, EVALS is not set, or we're in
+// the gate tier.
 // Note: Codex uses its own auth from ~/.codex/ config — no OPENAI_API_KEY env var needed.
-const SKIP = !CODEX_AVAILABLE || !evalsEnabled;
+const SKIP = !CODEX_AVAILABLE || !evalsEnabled || !tierOk;
 
 const describeCodex = SKIP ? describe.skip : describe;
 
 // Log why we're skipping (helpful for debugging CI)
 if (!evalsEnabled) {
   // Silent — same as Claude E2E tests, EVALS=1 required
+} else if (!tierOk) {
+  process.stderr.write('\nCodex E2E: SKIPPED — external-service test, periodic tier only (EVALS_TIER === \'periodic\')\n');
 } else if (!CODEX_AVAILABLE) {
   process.stderr.write('\nCodex E2E: SKIPPED — codex binary not found (install: npm i -g @openai/codex)\n');
 }

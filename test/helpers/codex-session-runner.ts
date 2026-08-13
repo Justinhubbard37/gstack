@@ -199,8 +199,12 @@ export async function runCodexSkill(opts: {
       }
     }
 
-    // Build codex exec command
-    const args = ['exec', prompt, '--json', '-s', sandbox];
+    // Build codex exec command.
+    // --skip-git-repo-check: newer codex CLIs refuse exec in an untrusted
+    // non-git directory ("Not inside a trusted directory and
+    // --skip-git-repo-check was not specified") — our temp skill dirs are
+    // exactly that. Empirically verified against codex on this machine.
+    const args = ['exec', prompt, '--json', '-s', sandbox, '--skip-git-repo-check'];
 
     // Spawn codex with temp HOME so it discovers our installed skill.
     // Hermetic scrub (test/helpers/hermetic-env.ts) with codex's auth surface
