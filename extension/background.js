@@ -588,24 +588,25 @@ chrome.tabs.onUpdated.addListener((_id, changeInfo) => {
   }
 });
 
-// ─── v1.63 identity-pin migration notice ────────────────────────
+// ─── identity-pin migration notice (v1.62.1) ────────────────────
 //
-// The manifest "key" added in v1.63 pins the extension ID, which changes
+// The manifest "key" added in v1.62.1 pins the extension ID, which changes
 // the ID for existing installs — chrome.storage.local is keyed by
 // extension ID, so panel-local state (saved port, snoozes) resets once.
-// Explain that in-product, one time.
+// Explain that in-product, one time. The flag name is version-free so a
+// release re-slot never orphans an already-set flag.
 async function announceIdentityPinOnce() {
   try {
-    const data = await chrome.storage.local.get('gstack_id_migrated_v163');
-    if (data.gstack_id_migrated_v163) return;
-    console.log('[gstack] gstack sidebar: extension identity pinned in v1.63 — panel state reset once.');
+    const data = await chrome.storage.local.get('gstack_id_pin_migrated');
+    if (data.gstack_id_pin_migrated) return;
+    console.log('[gstack] gstack sidebar: extension identity pinned in v1.62.1 — panel state reset once.');
     chrome.runtime.sendMessage({
       type: 'gstack-migration-notice',
-      message: 'gstack sidebar: extension identity pinned in v1.63 — panel state reset once.',
+      message: 'gstack sidebar: extension identity pinned in v1.62.1 — panel state reset once.',
     }).catch(() => {
       // Expected: panel not open. The console line above still lands.
     });
-    await chrome.storage.local.set({ gstack_id_migrated_v163: true });
+    await chrome.storage.local.set({ gstack_id_pin_migrated: true });
   } catch (err) {
     console.debug('[gstack] identity-pin notice failed (non-fatal):', err.message);
   }

@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.63.0.0] - 2026-08-12
+## [1.62.1.0] - 2026-08-12
 
 **Everything gstack sends off your machine now leaves a receipt you can read.**
 **And the eval harness stopped grading itself a passing grade.**

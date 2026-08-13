@@ -2723,9 +2723,9 @@ log already streams per-shard results).
 
 **Effort:** S (human ~2h, CC ~15min). **Depends on:** v1.62 port wave landed.
 
-## v1.63 port-wave review follow-ups (deferred from /ship review army — non-blocking polish)
+## v1.62.1 port-wave review follow-ups (deferred from /ship review army — non-blocking polish)
 
-Genuine review findings deferred from the v1.63 ship because they are
+Genuine review findings deferred from the v1.62.1 ship because they are
 informational/polish, not correctness-blocking, and several want their own
 tests. Filed so they are tracked, not dropped.
 
@@ -2756,7 +2756,7 @@ tests. Filed so they are tracked, not dropped.
 ## P2: harden or re-tier skill-e2e-plan-design-with-ui PTY detection
 
 **What:** The gate-tier `test/skill-e2e-plan-design-with-ui.test.ts` began executing
-for the first time once v1.63's `seedSkills` registered skills in hermetic PTY
+for the first time once v1.62.1's `seedSkills` registered skills in hermetic PTY
 children (the fork had deleted this file; it measured nothing before). It now
 reliably TIMES OUT even though the skill runs correctly: the transcript shows
 `/plan-design-review` reaching its scope-gate AskUserQuestion (5 options, the
