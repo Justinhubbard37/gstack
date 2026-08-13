@@ -44,7 +44,7 @@ describeE2E('/plan-design-review with UI scope (gate)', () => {
       const session = await launchClaudePty({
         permissionMode: 'plan',
         cwd: ROOT,
-        timeoutMs: 480_000,
+        timeoutMs: 720_000,
         seedSkills: true,
       });
 
@@ -71,7 +71,11 @@ describeE2E('/plan-design-review with UI scope (gate)', () => {
           `Reference plan file: ${fixtureRelPath}\r`
         );
 
-        const budgetMs = 360_000;
+        // 600s, not 360s: the skill preamble (update-check, session bookkeeping,
+        // learnings) plus extended model thinking can take ~6 minutes before the
+        // scope-gate AskUserQuestion renders — a 360s budget expired seconds
+        // before the (correct) AUQ appeared in the observed failure transcript.
+        const budgetMs = 600_000;
         const start = Date.now();
         let lastPermSig = '';
         while (Date.now() - start < budgetMs) {
@@ -146,6 +150,6 @@ describeE2E('/plan-design-review with UI scope (gate)', () => {
         );
       }
     },
-    540_000,
+    780_000,
   );
 });
