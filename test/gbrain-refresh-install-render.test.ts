@@ -9,13 +9,18 @@ import * as fs from 'fs';
 const ROOT = path.resolve(import.meta.dir, '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-config'), 'utf-8');
 
-// Pull out just the gbrain-refresh `ok)` branch so assertions can't be
-// satisfied by unrelated text elsewhere in the file.
+// Pull out just the gbrain-refresh healthy-status branch so assertions can't
+// be satisfied by unrelated text elsewhere in the file. The case label grew
+// from `ok)` to `ok|timeout|thin-client)` (#1964, #2051) and may grow again,
+// so match any label that STARTS with `ok` followed by alternations.
 function okBranch(): string {
   const start = SRC.indexOf('gbrain-refresh)');
-  const ok = SRC.indexOf('ok)', start);
+  if (start < 0) throw new Error('Could not locate gbrain-refresh case');
+  const labelMatch = /^\s*ok(?:\|[\w-]+)*\)/m.exec(SRC.slice(start));
+  if (!labelMatch) throw new Error('Could not locate gbrain-refresh ok) branch');
+  const ok = start + labelMatch.index;
   const end = SRC.indexOf(';;', ok);
-  if (start < 0 || ok < 0 || end < 0) throw new Error('Could not locate gbrain-refresh ok) branch');
+  if (end < 0) throw new Error('Could not locate gbrain-refresh ok) branch terminator');
   return SRC.slice(ok, end);
 }
 
