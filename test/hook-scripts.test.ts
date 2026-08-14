@@ -161,6 +161,21 @@ describe('check-careful.sh', () => {
       expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
     });
 
+    // The old grep extractor stopped at the first escaped quote in the JSON
+    // string, so any quoted argument truncated the command BEFORE the pattern
+    // checks ran — hiding everything after it. (#2426)
+    test.each([
+      'git commit -m "wip" && rm -rf /',
+      'bash -c "rm -rf /"',
+      'echo "x"; rm -rf ~',
+      'npm run build --msg "done" && rm -rf /',
+    ])('a quoted argument cannot hide a later destructive command: %s', (command) => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput(command));
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('recursive delete');
+    });
+
     // JSON-escaped newline (literal two-char \n surviving the grep extraction
     // path) breaks the anchored whitelist shape → falls through to the warn.
     test('newline-chained rm warns (escaped-newline separator branch)', () => {
@@ -197,11 +212,62 @@ describe('check-careful.sh', () => {
     });
   });
 
+  // --- Shell obfuscation ---
+
+  describe('shell obfuscation', () => {
+    test.each([
+      'rm${IFS}-rf${IFS}/',
+      'rm$IFS-rf$IFS/',
+      'echo cm0gLXJmIC8= | base64 -d | sh',
+    ])('asks when the command hides its shape behind expansion: %s', (command) => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput(command));
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('obfuscation');
+    });
+
+    test('ordinary commands are unaffected', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('cat file.b64 | base64 -d > out.bin'));
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    });
+  });
+
+  // --- JSON payload extraction ---
+
+  describe('command extraction', () => {
+    test('fails closed when the payload is not valid JSON', () => {
+      const { exitCode, output } = runHookRaw(CAREFUL_SCRIPT, 'this is not json');
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('parse');
+    });
+
+    test('allows a well-formed payload with no command field', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, { tool_input: { file_path: '/tmp/x' } });
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    });
+
+    test('allows when command is present but not a string', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, { tool_input: { command: 42 } });
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    });
+
+    test('preserves escaped quotes in the extracted command', () => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('echo "hello world"'));
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    });
+  });
+
   // --- SQL destructive commands ---
-  // Note: SQL commands that contain embedded double quotes (e.g., psql -c "DROP TABLE")
-  // get their command value truncated by the grep-based JSON extractor because \"
-  // terminates the [^"]* match. We use commands WITHOUT embedded quotes so the grep
-  // extraction works and the SQL keywords are visible to the pattern matcher.
+  // Embedded double quotes are now safe to use here. They previously truncated the
+  // extracted command (the grep-based extractor stopped at the first \"), which hid
+  // the SQL keyword from the pattern matcher — so the older tests had to be written
+  // without quotes, in a shape no one actually types. The JSON-parser extraction
+  // fixed that, and the quoted forms below are the realistic ones.
 
   describe('SQL destructive commands', () => {
     test('psql DROP TABLE warns with DROP in message', () => {
@@ -209,6 +275,16 @@ describe('check-careful.sh', () => {
       expect(exitCode).toBe(0);
       expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
       expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('DROP');
+    });
+
+    test.each([
+      'psql -c "DROP TABLE users"',
+      'psql -c "TRUNCATE orders"',
+      'mysql -e "DROP DATABASE prod"',
+    ])('a quoted SQL statement is still inspected: %s', (command) => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput(command));
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
     });
 
     test('mysql drop database warns (case insensitive)', () => {
@@ -325,10 +401,13 @@ describe('check-careful.sh', () => {
       expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
     });
 
-    test('malformed JSON input allows gracefully (exit 0, output {})', () => {
-      const { exitCode, raw } = runHookRaw(CAREFUL_SCRIPT, 'this is not json at all{{{{');
+    test('malformed JSON input fails CLOSED (asks instead of allowing)', () => {
+      // Pre-#2426 this allowed (`{}`) — a hook that gates destructive commands
+      // must not allow-by-default on input it cannot read.
+      const { exitCode, output } = runHookRaw(CAREFUL_SCRIPT, 'this is not json at all{{{{');
       expect(exitCode).toBe(0);
-      expect(raw).toBe('{}');
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('parse');
     });
 
     test('Python fallback: grep fails on multiline JSON, Python parses it', () => {
