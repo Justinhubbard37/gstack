@@ -1832,10 +1832,6 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           mode: browserManager.getConnectionMode(),
           uptime: Math.floor((Date.now() - startTime) / 1000),
           tabs: browserManager.getTabCount(),
-          // The chat queue is gone — Terminal pane is the sole sidebar
-          // surface. Keep `chatEnabled: false` so any older extension
-          // build still treats the chat input as disabled.
-          chatEnabled: false,
           // Security module status — drives the shield icon in the sidepanel.
           // Returns {status: 'protected'|'degraded'|'inactive', layers: {...}}.
           // The chat-path classifier no longer feeds this since
