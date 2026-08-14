@@ -119,6 +119,9 @@ jobs:
 
       # Same diagnosability contract as free-tests.yml: a red lane must
       # carry the WHY (the runner's quiet console names files, not causes).
+      # (#2561 was written against the old hand-listed subset; its two new
+      # test files are pure-TS and flow into the --windows-only curation
+      # automatically, so no per-file entry is needed here.)
       - name: Upload shard logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
