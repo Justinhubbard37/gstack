@@ -103,12 +103,13 @@ made, and the queue is preserved — the next run retries the whole drain.
 `gstack-brain-sync --status` shows `EGRESS_RECEIPT_FAILED` as the failure
 detail.
 
-**Cause.** `~/.gstack/security/` is missing or unwritable, the disk is
-full, or `GSTACK_HOME` points at a read-only location.
+**Cause.** `~/.gstack/security/` is not writable (the receipt writer creates
+it when missing, so absence alone is not the cause), the disk is full, or
+`GSTACK_HOME` points at a read-only location.
 
 **Fix.**
 ```bash
-chmod -R u+w ~/.gstack/security
+mkdir -p ~/.gstack/security && chmod -R u+w ~/.gstack/security
 ```
 Then run any skill (or `gstack-brain-sync --once`) to retry. Inspect the
 ledger with `gstack-egress list`; verify its hash chain with

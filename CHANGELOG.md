@@ -53,7 +53,7 @@ bug fix and the port shortlist were selected and hardened for upstream.
 #### Added
 - `gstack-egress` — read the hash-chained egress receipt ledger: `list` (what
   gstack attempted to send off-machine), `verify` (recompute the chain, exit 3 on
-  tamper), `grants` (every consent grant in force and how to revoke it).
+  tamper), `grants` (the standing consent settings and how to revoke each).
 - `gstack-context-bill` — offline token bill-of-materials for a skills tree:
   always-on discovery cost vs per-invocation cost, `--diff` between two trees,
   `--budget`, and `--exact` (opt-in, measures against the real tokenizer).

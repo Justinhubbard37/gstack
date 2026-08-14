@@ -348,9 +348,11 @@ send off the machine MUST write a hash-chained receipt to
 polarity is per-class: fail-closed for sensitive sinks (brain-sync, memory-ingest,
 gbrain-sync, telemetry, ngrok tunnels, mcp-verify, supabase-provision), fail-open
 + stderr warning for user-facing ones (design OpenAI calls, update-check,
-dashboards, git-class ops). The zero-exception scanner in
-`test/egress-receipt-wiring.test.ts` fails CI on any unreceipted `curl` /
-`git push` / `fetch` to a non-loopback host — if you add a new off-machine sink,
+dashboards, git-class ops). The new-sink scanner in
+`test/egress-receipt-wiring.test.ts` fails CI on an unreceipted `curl` /
+`git push` / `fetch` to a non-loopback host unless the file carries a reasoned
+entry in its `SCANNER_EXEMPT` list (user-directed page fetches, reachability
+probes, instruction strings, skill prose) — if you add a new off-machine sink,
 wire it through the helpers and add it to the enumerated sink list. Inspect with
 `bin/gstack-egress` (`list` | `verify`, exit 3 on tamper | `grants`). Threat
 model: forensic observability of ATTEMPTED egress, not an exfiltration control.

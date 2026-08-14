@@ -38,18 +38,18 @@ The command:
 
 1. Turns `~/.gstack/` into a git repo.
 2. Asks for a remote URL (default: `gh repo create --private
-   gstack-brain-$USER`). Any git remote works — GitHub, GitLab, Gitea,
+   gstack-artifacts-$USER`). Any git remote works — GitHub, GitLab, Gitea,
    self-hosted.
 3. Pushes an initial commit with just the config.
 4. Writes `~/.gstack-artifacts-remote.txt` (URL-only, no secrets —
    safe to copy to another machine).
-5. Wires the gstack-brain repo into your local gbrain as a federated
-   source (via `gbrain sources add` + `git worktree`) so `gbrain search`
-   can index your synced learnings, plans, and designs. Implementation
-   lives in `bin/gstack-gbrain-source-wireup`. The old
-   `gstack-brain-reader add --ingest-url ...` HTTP path was removed in
-   v1.15.1.0 — it depended on a `/ingest-repo` endpoint gbrain never
-   shipped.
+5. Prints the `gbrain sources add` hookup command for the brain host
+   (never auto-executed — run it yourself, or on your own machine
+   `bin/gstack-gbrain-source-wireup` does the same wiring) so
+   `gbrain search` can index your synced learnings, plans, and designs.
+   The old `gstack-brain-reader add --ingest-url ...` HTTP path was
+   removed in v1.15.1.0 — it depended on a `/ingest-repo` endpoint gbrain
+   never shipped.
 
 After init, the **next skill you run** will ask you ONE question about
 privacy mode:

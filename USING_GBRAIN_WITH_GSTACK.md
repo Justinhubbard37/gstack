@@ -132,7 +132,7 @@ Storage: `~/.gstack/gbrain-repo-policy.json`, mode 0600, schema-versioned so fut
 
 The skill runs three stages — code, memory, brain-sync — independently. A failure in one doesn't block the others. State persists to `~/.gstack/.gbrain-sync-state.json` so re-running picks up cleanly.
 
-Stages that can send data off-machine (code sync into a possibly-remote gbrain DB, memory ingest, the brain-sync push) each write a tamper-evident receipt to the egress ledger (`~/.gstack/security/egress.jsonl`) before sending, fail-closed: if the receipt can't be written, the stage refuses with `EGRESS_RECEIPT_FAILED` instead of syncing unrecorded. Fix is usually `chmod -R u+w ~/.gstack/security`, then re-run. Inspect receipts with `gstack-egress list`.
+Stages that can send data off-machine (code sync into a possibly-remote gbrain DB, memory ingest, the brain-sync push) each write a tamper-evident receipt to the egress ledger (`~/.gstack/security/egress.jsonl`) before sending, fail-closed: if the receipt can't be written, the stage refuses with `EGRESS_RECEIPT_FAILED` instead of syncing unrecorded. Fix is usually `mkdir -p ~/.gstack/security && chmod -R u+w ~/.gstack/security`, then re-run. Inspect receipts with `gstack-egress list`.
 
 **What it does on a fresh worktree:**
 
