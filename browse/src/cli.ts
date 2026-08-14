@@ -372,12 +372,29 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
   throw new Error(`Server failed to start within ${MAX_START_WAIT / 1000}s`);
 }
 
+export class ServerLockError extends Error {
+  code: string;
+  constructor(code: string, lockPath: string, cause: string) {
+    super(`E_SERVER_LOCK (${code}): cannot acquire ${lockPath} — ${cause}`);
+    this.name = 'ServerLockError';
+    this.code = code;
+  }
+}
+
 /**
  * Acquire an exclusive lockfile to prevent concurrent ensureServer() races (TOCTOU).
- * Returns a cleanup function that releases the lock.
+ * Returns a cleanup function that releases the lock, or null when another
+ * LIVE process genuinely holds the lock (real contention).
+ *
+ * Error honesty (#1084): only EEXIST is contention. ENOENT (state dir
+ * missing) self-heals with one mkdir retry; every other errno (EACCES,
+ * ENOSPC, ...) throws ServerLockError with the real errno instead of
+ * reporting phantom "another process holds the lock" contention forever.
  */
-function acquireServerLock(): (() => void) | null {
-  const lockPath = `${config.stateFile}.lock`;
+export function acquireServerLock(
+  lockPath: string = `${config.stateFile}.lock`,
+  depth = 0,
+): (() => void) | null {
   try {
     // 'wx' — create exclusively, fails if file already exists (atomic check-and-create)
     // Using string flag instead of numeric constants for Bun Windows compatibility
@@ -385,8 +402,18 @@ function acquireServerLock(): (() => void) | null {
     fs.writeSync(fd, `${process.pid}\n`);
     fs.closeSync(fd);
     return () => { safeUnlink(lockPath); };
-  } catch {
-    // Lock already held — check if the holder is still alive
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      // Lock dir missing — create it and retry once.
+      if (depth >= 1) throw new ServerLockError('ENOENT', lockPath, 'lock directory could not be created');
+      mkdirSecure(path.dirname(lockPath));
+      return acquireServerLock(lockPath, depth + 1);
+    }
+    if (err?.code !== 'EEXIST') {
+      throw new ServerLockError(err?.code || 'UNKNOWN', lockPath, err?.message || String(err));
+    }
+    // EEXIST — real contention. Check if the holder is still alive.
+    // Depth cap 5 bounds the stale-lock unlink/retry livelock.
     try {
       const holderPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
       if (holderPid && isProcessAlive(holderPid)) {
@@ -394,9 +421,15 @@ function acquireServerLock(): (() => void) | null {
       }
       // Stale lock — remove and retry
       fs.unlinkSync(lockPath);
-      return acquireServerLock();
-    } catch {
-      return null;
+      if (depth >= 5) return null;
+      return acquireServerLock(lockPath, depth + 1);
+    } catch (readErr: any) {
+      if (readErr?.code === 'ENOENT') {
+        // Lock vanished between open and read (holder released) — retry.
+        if (depth >= 5) return null;
+        return acquireServerLock(lockPath, depth + 1);
+      }
+      throw new ServerLockError(readErr?.code || 'UNKNOWN', lockPath, readErr?.message || String(readErr));
     }
   }
 }
