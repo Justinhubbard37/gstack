@@ -1884,6 +1884,18 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
             : ""),
       );
     }
+    // Silent-zero pathology detector (#2144's other half): pages were staged
+    // but NOTHING imported or skipped-as-unchanged. That shape hid the dead
+    // ingest for months — it must be loud even under --quiet, because a run
+    // that indexes nothing is otherwise indistinguishable from a healthy one.
+    const importedCount = (importJson.imported ?? 0) + (importJson.skipped ?? 0);
+    if (prep.prepared.length > 0 && importedCount === 0 && (importJson.errors ?? 0) === 0) {
+      console.error(
+        `[memory-ingest] WARNING: ${prep.prepared.length} page(s) staged but gbrain collected ZERO ` +
+          `(no imports, no unchanged-skips, no errors). This is the #2144 silent-zero shape — ` +
+          `check gbrain's import.collect_files log line and your gbrain version.`,
+      );
+    }
   } finally {
     // #1802 D1: in remote-http mode `stagingDir` is the PERSISTENT transcript
     // dir (makePersistentTranscriptDir, under ~/.gstack/transcripts/) that

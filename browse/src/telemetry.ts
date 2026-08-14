@@ -50,8 +50,23 @@ function isDisabled(): boolean {
     telemetryDisabled = true;
     return true;
   }
+  // Persistent tier: gstack-config set telemetry off must hold even when the
+  // daemon is spawned outside a skill preamble (direct $B use, embedders) and
+  // the env hint was never set (fork port wave 2 polish).
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const os = require('os') as typeof import('os');
+    const home = process.env.GSTACK_HOME || path.join(os.homedir(), '.gstack');
+    const yaml = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8');
+    if (/^\s*telemetry\s*:\s*['"]?off['"]?\s*(?:#.*)?$/m.test(yaml)) {
+      telemetryDisabled = true;
+      return true;
+    }
+  } catch { /* no config — fall through to default */ }
   // Conservative default: telemetry ON unless explicitly off. Users opt out via
-  // gstack-config set telemetry off (preamble reads this; we trust the env hint).
+  // gstack-config set telemetry off (env hint from the preamble OR the
+  // persistent tier read above).
   telemetryDisabled = false;
   return false;
 }

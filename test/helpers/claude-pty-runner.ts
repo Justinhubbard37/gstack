@@ -21,6 +21,7 @@
  * tests don't need it).
  */
 
+import { resolveEvalModel } from '../../lib/eval-model';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -456,7 +457,7 @@ ${tail}
   try {
     const result = nodeSpawnSync(
       'claude',
-      ['-p', '--model', 'claude-haiku-4-5', '--max-turns', '1'],
+      ['-p', '--model', resolveEvalModel('warmup'), '--max-turns', '1'],
       {
         input: prompt,
         stdio: ['pipe', 'pipe', 'pipe'],
