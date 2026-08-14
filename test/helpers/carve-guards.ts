@@ -131,9 +131,11 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // v1.58.5.0: pre-push-guard install (#2077) stacks on the shared first-run-guidance preamble.
     // Fork port wave 2: multi-ecosystem test-detection evidence (Django/JVM
     // markers, test-file census — e3259078 port) + the #1079 gh pr edit REST
-    // fallback grew the union to 1.090x. Kept tight; the Apple release
-    // adapter raises this again deliberately with its own justification.
-    maxSizeRatio: 1.10,
+    // fallback grew the union to 1.090x; the third-party web-actions
+    // contract (consent-gated browser drive for API-key registration etc.)
+    // adds ~2.3KB inline judgment, measured 1.103x. Kept tight; the Apple
+    // release adapter raises this again deliberately.
+    maxSizeRatio: 1.12,
   },
   'plan-ceo-review': {
     skill: 'plan-ceo-review',
@@ -241,10 +243,13 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     behavioral: 'prompt',
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble,
     // plus the P1 office-hours closing handoff (AUQ that launches the next skill).
-    maxSkeletonBytes: 98_000,
+    // Fork port wave 2: the third-party web-actions contract sits inline
+    // (judgment must be visible before the workflow directs the user to a
+    // vendor site) — skeleton 99,780 / ratio 1.079 measured. Tight headroom.
+    maxSkeletonBytes: 101_000,
     minUnionBytes: 70_000,
     mustContain: ['design doc', 'problem statement'],
-    maxSizeRatio: 1.07,
+    maxSizeRatio: 1.09,
   },
   'document-release': {
     skill: 'document-release',

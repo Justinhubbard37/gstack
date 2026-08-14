@@ -36,12 +36,14 @@ import { generateMakePdfSetup } from './make-pdf';
 import { generateTasksSectionEmit, generateTasksSectionAggregate } from './tasks-section';
 import { SECTION, SECTION_INDEX } from './sections';
 import { generateRedactTaxonomyTable, generateRedactInvocationBlock } from './redact-doc';
+import { generateThirdPartyActions } from './third-party-actions';
 
 export const RESOLVERS: Record<string, ResolverValue> = {
   SLUG_EVAL: generateSlugEval,
   SLUG_SETUP: generateSlugSetup,
   REDACT_TAXONOMY_TABLE: generateRedactTaxonomyTable,
   REDACT_INVOCATION_BLOCK: generateRedactInvocationBlock,
+  THIRD_PARTY_ACTIONS: generateThirdPartyActions,
   COMMAND_REFERENCE: generateCommandReference,
   SNAPSHOT_FLAGS: generateSnapshotFlags,
   PREAMBLE: generatePreamble,
