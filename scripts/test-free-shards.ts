@@ -30,7 +30,10 @@ import { spawnSync } from 'child_process';
 import { isPaidTestFile } from '../test/helpers/paid-test-set';
 
 const ROOT = path.resolve(import.meta.dir, '..');
-const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test'] as const;
+// ios-qa/daemon/test joined in fork port wave 2 (E2): its 5 files were
+// invisible to every runner — the exact design/test-class hole TODOS tracks.
+// All are hermetic (stub state-servers on ephemeral ports, no devices).
+const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test', 'ios-qa/daemon/test'] as const;
 const TEST_FILE_REGEX = /\.test\.(?:[cm]?[jt]s|tsx|jsx)$/;
 
 // POSIX-only patterns that indicate a test will fail on windows-latest no
