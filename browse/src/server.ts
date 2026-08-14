@@ -303,7 +303,6 @@ export function resolveConfigFromEnv(): Omit<ServerConfig, 'browserManager' | 's
 const TUNNEL_PATHS = new Set<string>([
   '/connect',
   '/command',
-  '/sidebar-chat',
 ]);
 
 /**

@@ -48,9 +48,12 @@ describe('Dual-listener surface types', () => {
 });
 
 describe('Tunnel path allowlist', () => {
-  test('TUNNEL_PATHS is a closed set containing exactly /connect, /command, /sidebar-chat', () => {
+  test('TUNNEL_PATHS is a closed set containing exactly /connect, /command', () => {
+    // /sidebar-chat sat in this set long after the endpoint was deleted with
+    // the chat-queue path — a stale entry in the audited tunnel attack
+    // surface. The set is exactly the pair ceremony + command endpoint.
     const paths = extractSetContents(SERVER_SRC, 'TUNNEL_PATHS');
-    expect(paths).toEqual(new Set(['/connect', '/command', '/sidebar-chat']));
+    expect(paths).toEqual(new Set(['/connect', '/command']));
   });
 
   test('TUNNEL_PATHS does NOT contain bootstrap or admin paths', () => {
@@ -220,7 +223,10 @@ describe('/command tunnel command allowlist', () => {
       'return handleCommand(body, tokenInfo)'
     );
     expect(commandBlock).toContain("surface === 'tunnel'");
-    expect(commandBlock).toContain('canDispatchOverTunnel(body?.command)');
+    // v1.63.0.0 made the allowlist args-aware (canDispatchOverTunnel gained a
+    // second param for --out denial); this pin was stale from then until the
+    // free suite got a CI job.
+    expect(commandBlock).toContain('canDispatchOverTunnel(body?.command, body?.args)');
     expect(commandBlock).toContain('disallowed_command');
     expect(commandBlock).toContain('is not allowed over the tunnel surface');
     expect(commandBlock).toContain('status: 403');
