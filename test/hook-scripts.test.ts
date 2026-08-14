@@ -57,6 +57,27 @@ function withFreezeDir(freezePath: string, fn: (stateDir: string) => void) {
 }
 
 // ============================================================
+// Frontmatter hook wiring (#2469 / #1871)
+// ============================================================
+// Frontmatter hooks run before any runtime variable exists, so a
+// ${CLAUDE_SKILL_DIR}-relative command silently never resolves and the guard
+// never fires. Every command: line must anchor on $HOME like careful/freeze.
+describe('frontmatter hook command paths', () => {
+  test.each(['investigate/SKILL.md', 'careful/SKILL.md', 'freeze/SKILL.md', 'guard/SKILL.md'])(
+    '%s hook commands are $HOME-anchored, never CLAUDE_SKILL_DIR',
+    (rel) => {
+      const content = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      const commandLines = content.split('\n').filter((l) => l.trim().startsWith('command:'));
+      expect(commandLines.length).toBeGreaterThan(0);
+      for (const line of commandLines) {
+        expect(line).not.toContain('CLAUDE_SKILL_DIR');
+        expect(line).toContain('$HOME/.claude/skills/gstack/');
+      }
+    },
+  );
+});
+
+// ============================================================
 // check-careful.sh tests
 // ============================================================
 describe('check-careful.sh', () => {
