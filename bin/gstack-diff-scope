@@ -4,7 +4,15 @@
 # Or:    gstack-diff-scope main           → prints SCOPE_*=... lines
 set -euo pipefail
 
-BASE="${1:-main}"
+# Detect the repo's default branch when no arg is given (#703-class
+# platform-agnostic rule): origin/HEAD -> origin/main -> origin/master -> main.
+_default_base() {
+  git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' && return
+  git rev-parse --verify -q origin/main >/dev/null 2>&1 && { echo "main"; return; }
+  git rev-parse --verify -q origin/master >/dev/null 2>&1 && { echo "master"; return; }
+  echo "main"
+}
+BASE="${1:-$(_default_base)}"
 
 # Get changed file list
 FILES=$(git diff "${BASE}...HEAD" --name-only 2>/dev/null || git diff "${BASE}" --name-only 2>/dev/null || echo "")

@@ -405,7 +405,16 @@ function parseArgs(argv: string[]): { base: string; bump: Bump; current: string;
     else if (a === "-h" || a === "--help") help = true;
   }
   if (help) return { base: "", bump: "micro", current: "", excludePR: null, help: true };
-  if (!base) base = "main";
+  if (!base) {
+    // Detect the default branch instead of assuming main (local-only repos
+    // on trunk/master work like GitHub repos on main).
+    try {
+      const head = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      base = head.replace("refs/remotes/origin/", "") || "main";
+    } catch {
+      base = "main";
+    }
+  }
   if (!bump) {
     console.error("Error: --bump is required (major|minor|patch|micro)");
     process.exit(2);
