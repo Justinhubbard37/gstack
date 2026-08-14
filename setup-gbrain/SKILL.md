@@ -915,6 +915,38 @@ Step 1.5 — fall through to Step 2 (where `no-cli` triggers Step 3 install and
 
 ---
 
+## Step 1.7: Code-intelligence provider choice (Step 0 of indexing)
+
+gbrain is one of THREE code-intelligence providers gstack can use; the offer
+gate decides whether this repo is even worth indexing:
+
+```bash
+bun ~/.claude/skills/gstack/bin/gstack-code-intelligence suggest --json
+```
+
+- `"offer": false` with reason `small-repo` → grep is already fast here; say
+  so in one line and continue with this skill only if the user asked for
+  gbrain by name.
+- `"offer": false` with reason `provider-selected` or `declined` → the
+  machine-wide question was already answered; apply it silently and continue.
+- `"offer": true` → present the returned options ONCE via AskUserQuestion:
+  **GBrain** (recommended — semantic memory + code, sends repo content to
+  YOUR gbrain DB, per-repo consent), **Sourcebot** (self-hosted whole-repo
+  search, local when on localhost), **Graphify** (local tree-sitter graph,
+  nothing leaves the machine, user installs it), or **No indexing**. Record
+  the choice: `gstack-code-intelligence select <provider|none>` — `none`
+  persists the decline so NO skill ever asks again, on any repo
+  (re-enable: `gstack-code-intelligence select <provider>`). Local-compute
+  and remote-send providers are separate consents — never bundle them.
+- Per-repo send consent (GBrain/Sourcebot) is recorded with
+  `gstack-code-intelligence consent <repo> yes|no` and is ALWAYS vetoed by a
+  `deny` tier in gstack-gbrain-repo-policy — the trust store is the single
+  authority for whether code leaves a repo.
+
+If the user picked GBrain (or asked for this skill directly), continue below.
+If they picked Sourcebot/Graphify, run `gstack-code-intelligence index <repo>`
+and stop — the rest of this skill is gbrain-specific.
+
 ## Step 2: Pick a path (AskUserQuestion)
 
 Only fire this if Step 1 shows no existing working config AND no shortcut
