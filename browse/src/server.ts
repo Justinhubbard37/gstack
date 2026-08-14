@@ -37,6 +37,10 @@ import {
 } from './token-registry';
 import { validateTempPath } from './path-security';
 import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks, isPairAgentEnabled } from './config';
+import {
+  isSessionPersistEnabled, persistSessionState, restoreSessionState,
+  sessionPersistIntervalMs, SESSION_STATE_FILE,
+} from './session-persist';
 import { emitActivity, subscribe, getActivityAfter, getActivityHistory, getSubscriberCount } from './activity';
 import { createSseEndpoint } from './sse-helpers';
 import { initAuditLog, writeAuditEntry } from './audit';
@@ -1654,6 +1658,16 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
     if (agentWatchdogInterval) clearInterval(agentWatchdogInterval);
     await flushBuffers();
 
+    // Final session snapshot before the browser goes away (#778). Best
+    // effort: shutdown must never hang on a wedged page.evaluate.
+    if (isSessionPersistEnabled()) {
+      try {
+        await persistSessionState(cfgBrowserManager, path.join(config.stateDir, SESSION_STATE_FILE));
+      } catch (err: any) {
+        console.warn(`[browse] SESSION_PERSIST_FAILED at shutdown: ${err?.message ?? err}`);
+      }
+    }
+
     await cfgBrowserManager.close();
 
     cleanSingletonLocks(resolveChromiumProfile());
@@ -3077,6 +3091,36 @@ export async function start() {
       console.log(`[browse] Launched headed Chromium with extension`);
     } else {
       await browserManager.launch();
+    }
+
+    // ─── Opt-in session persistence (#778 class) ─────────────────
+    // BROWSE_PERSIST_STATE=1: restore cookies/storage/tabs from the last
+    // snapshot, then keep snapshotting on an interval. Launched mode only —
+    // the headed persistent profile owns its own state. The final snapshot
+    // at clean shutdown lives in buildFetchHandler's shutdown().
+    if (isSessionPersistEnabled() && browserManager.getConnectionMode() === 'launched') {
+      const sessionStatePath = path.join(config.stateDir, SESSION_STATE_FILE);
+      try {
+        if (await restoreSessionState(browserManager, sessionStatePath)) {
+          const st = await browserManager.saveState();
+          console.log(`[browse] Session state restored: ${st.cookies.length} cookies / ${st.pages.length} tabs (BROWSE_PERSIST_STATE=1)`);
+        } else {
+          console.log('[browse] Session persistence on; no prior state — fresh session (BROWSE_PERSIST_STATE=1)');
+        }
+      } catch (err: any) {
+        console.warn(`[browse] SESSION_RESTORE_FAILED: ${err?.message ?? err}`);
+      }
+      let persistWarned = false;
+      setInterval(() => {
+        persistSessionState(browserManager, sessionStatePath).catch((err: any) => {
+          // Warn once — a full disk must not spam the log every 30s, and a
+          // snapshot failure must never kill the daemon (R3).
+          if (!persistWarned) {
+            persistWarned = true;
+            console.warn(`[browse] SESSION_PERSIST_FAILED: ${err?.message ?? err} (further failures suppressed)`);
+          }
+        });
+      }, sessionPersistIntervalMs()).unref();
     }
   }
 
