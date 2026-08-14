@@ -2,6 +2,45 @@
 
 ## NEXT PRIORITY
 
+### P2: Persona-fleet hostile-user harness (fork port wave 2 deferral)
+
+**What:** Port the methodology behind time-attack/gstack's 87-hostile-user
+field run (418 findings): machine-written t0 in an append-only run.jsonl
+(elapsed time measured, never self-reported), every metric resolving to an
+artifact, and a mandatory-quit contract with machine-checkable caps (300s to
+first useful output, 900s total, 40K context tokens, 3 consecutive dead ends)
+so abandonment is a computable outcome. Specs: fork `evals/fleet/METRICS.md`
++ `evals/fleet/ABANDONMENT.md` (methodology only — no runner code exists to
+port; this is a build).
+
+**Why:** A periodic hostile-user round against OUR 44-skill tree would surface
+the same first-five-minutes failure class the fork closed 418 of. Fits the
+existing eval-store/e2e harness as a new runner.
+
+**Effort:** L (human ~2wk) → M with CC. **Priority:** P2.
+**Depends on:** decisions on cost ceilings + journal storage.
+
+### P3: Answer-key eval methodology (rides the persona-fleet work)
+
+**What:** Pre-registered answer keys (fork `evals/answer-keys/` —
+codex-decorrelation, health-trending) grading our /codex and /health surfaces
+against planted ground truth instead of judge vibes.
+
+**Why:** Deterministic scoring for surfaces where LLM-judge drift is the
+known failure mode. **Effort:** M → S with CC. **Priority:** P3.
+**Depends on:** persona-fleet harness (shared runner shape).
+
+### P3: Quarterly Apple-journey live re-verification
+
+**What:** Run the /ship Apple release adapter against a real (TestFlight-only)
+release once a quarter, or on first user bug report, and fix drift. Apple's
+APIs move (the fork caught fastlane price_tier breaking live); the adapter's
+claims are evidence-backed today and must stay that way per its own
+evidence-before-claimed-limitations rule.
+
+**Effort:** S per run. **Priority:** P3. **Depends on:** a paid ADP account.
+
+
 ### P1: #1882 — portable skill-install prefix (non-`gstack` install dirs break silently)
 
 **What:** Every generated SKILL.md hardcodes the literal `~/.claude/skills/gstack/...`
@@ -25,6 +64,9 @@ So #1882 is now purely the body-preamble portability work.
 invocation-time failures.
 **Cons:** Touches the most load-bearing bash in the repo (every skill's preamble);
 a silent mistake breaks all 52 skills. High blast radius — needs its own focused PR.
+**Note (fork port wave 2):** the Apple release adapter (ship/sections/
+apple-release.md) added template surface with `~/.claude/skills/gstack/bin`
+references — include it in this fix's coverage list.
 
 **Context / where to start:**
 - Rewire `ctx.paths.binDir` (and browse/design dir paths) + the ~9 resolvers that

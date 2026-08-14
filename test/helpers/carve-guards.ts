@@ -208,10 +208,12 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // always-loaded AskUserQuestion Format section.
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
     // +~1.3 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
-    maxSkeletonBytes: 89_000,
+    // Fork port wave 2 (D1): evidence directive adds ~0.45KB to every
+    // tier-2+ skeleton. Measured 89,184.
+    maxSkeletonBytes: 91_000,
     minUnionBytes: 70_000,
     mustContain: ['design', 'visual'],
-    maxSizeRatio: 1.07,
+    maxSizeRatio: 1.12, // D1 measured 1.104
   },
   'plan-devex-review': {
     skill: 'plan-devex-review',
@@ -255,12 +257,12 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // plus the P1 office-hours closing handoff (AUQ that launches the next skill).
     // Fork port wave 2: the third-party web-actions contract sits inline
     // (judgment must be visible before the workflow directs the user to a
-    // vendor site), plus the #703 dual-write + repo-doc-preference block —
-    // ratio 1.092 measured. Tight headroom.
+    // vendor site), plus the #703 dual-write + repo-doc-preference block and
+    // the #538 opt-out + D1 evidence directive — ratio 1.104 measured.
     maxSkeletonBytes: 101_000,
     minUnionBytes: 70_000,
     mustContain: ['design doc', 'problem statement'],
-    maxSizeRatio: 1.10,
+    maxSizeRatio: 1.12,
   },
   'document-release': {
     skill: 'document-release',
