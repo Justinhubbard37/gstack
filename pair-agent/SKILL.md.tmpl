@@ -155,23 +155,34 @@ Then tell the user:
 "Copy the block above and paste it into your other agent's chat. The setup key
 expires in 5 minutes."
 
-**If ngrok is installed but NOT authed:** Walk the user through authentication:
+**If ngrok is installed but NOT authed:** Walk the user through authentication.
+
+SECURITY: the ngrok authtoken must NEVER pass through this chat, a Bash tool
+call, or shell history — a token pasted here lands in the transcript (and
+anything the transcript syncs to). The user runs the auth command in their
+OWN terminal; you only verify the result.
 
 Tell the user:
-"ngrok is installed but not logged in. Let's fix that:
+"ngrok is installed but not logged in. Let's fix that — in your own terminal
+(not here; the token should never enter this chat):
 
 1. Go to https://dashboard.ngrok.com/get-started/your-authtoken
 2. Copy your auth token
-3. Come back here and I'll run the auth command for you."
+3. In YOUR terminal, run: ngrok config add-authtoken <paste your token>
+4. Tell me 'done' when finished."
 
-STOP here and wait for the user to provide their auth token.
+STOP here and wait for the user to say they've run it. Do NOT accept a pasted
+token; if the user pastes one anyway, tell them to rotate it at
+https://dashboard.ngrok.com (it's now in the transcript) and re-auth in their
+terminal with the new one.
 
-When they provide it, run:
+When they say done, verify without touching the token:
 ```bash
-ngrok config add-authtoken THEIR_TOKEN
+ngrok config check 2>/dev/null && echo "NGROK_AUTHED" || echo "NGROK_NOT_AUTHED"
 ```
 
-Then retry `$B pair-agent --client TARGET_HOST`.
+If `NGROK_AUTHED`: retry `$B pair-agent --client TARGET_HOST`.
+If still `NGROK_NOT_AUTHED`: ask them to re-run the command in their terminal.
 
 **If ngrok is NOT installed:** Walk the user through installation:
 
