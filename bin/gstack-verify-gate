@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# gstack-verify-gate — Stop hook. Blocks the turn from ending until the
+# project's declared verification command passes.
+#
+# Declare the command on one line in the project's CLAUDE.md:
+#   <!-- gstack:verify: bun test -->
+#
+# Read-or-ask: gstack never invents this command. No declaration, no gate.
+# Fails open on every absence (no CLAUDE.md, no declaration, empty value).
+#
+# Exit 0 = allow the turn to end, one-line reason on stdout.
+# Exit 2 = block, Claude Code feeds stderr back to the agent.
+#
+# Remove with: gstack-settings-hook remove-source --source verify-gate
+set -uo pipefail
+
+INPUT=""
+[ -t 0 ] || INPUT="$(cat)"
+
+# Claude Code re-runs Stop hooks after a block. Never gate the same turn twice.
+if printf '%s' "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+  echo "verify-gate: gate already ran this turn, allowing."
+  exit 0
+fi
+
+ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+while [ ! -f "$ROOT/CLAUDE.md" ] && [ "$ROOT" != "/" ]; do
+  ROOT="$(dirname "$ROOT")"
+done
+
+if [ ! -f "$ROOT/CLAUDE.md" ]; then
+  echo "verify-gate: no CLAUDE.md above $PWD, no check declared, allowing."
+  exit 0
+fi
+
+CMD="$(sed -n 's/^[[:space:]]*\(<!--[[:space:]]*\)\{0,1\}gstack:verify:[[:space:]]*\(.*\)$/\2/p' "$ROOT/CLAUDE.md" | head -1)"
+CMD="${CMD%%-->*}"
+CMD="$(printf '%s' "$CMD" | tr -d '`' | sed 's/[[:space:]]*$//')"
+
+if [ -z "$CMD" ]; then
+  echo "verify-gate: $ROOT/CLAUDE.md declares no 'gstack:verify:' command, allowing."
+  exit 0
+fi
+
+OUT="$(cd "$ROOT" && eval "$CMD" 2>&1)"
+STATUS=$?
+
+if [ "$STATUS" -eq 0 ]; then
+  echo "verify-gate: declared check passed ($CMD)."
+  exit 0
+fi
+
+echo "verify-gate: declared check FAILED with exit $STATUS: $CMD" >&2
+printf '%s\n' "$OUT" | tail -20 >&2
+echo "Fix the failure, or drop the gstack:verify line from $ROOT/CLAUDE.md." >&2
+exit 2

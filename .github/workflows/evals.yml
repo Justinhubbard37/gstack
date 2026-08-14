@@ -15,6 +15,12 @@ env:
 jobs:
   # Build Docker image with pre-baked toolchain (cached — only rebuilds on Dockerfile/lockfile change)
   build-image:
+    # Dependabot-triggered pull_request runs get a read-only GITHUB_TOKEN, so
+    # a lockfile bump = new hash = failed ghcr push = permanently red check
+    # (EV6, fork port wave 2). Skip the build for dependabot; the evals job's
+    # needs-chain tolerates it because no eval test selects on a lockfile-only
+    # diff — a maintainer's next push rebuilds the image with real perms.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubicloud-standard-8
     permissions:
       contents: read
