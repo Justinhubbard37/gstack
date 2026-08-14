@@ -509,46 +509,45 @@ export class BrowserManager {
     // Used by GStack Browser.app to point at the bundled Chromium.
     const executablePath = process.env.GSTACK_CHROMIUM_PATH || undefined;
 
-    // Rebrand Chromium → GStack Browser in macOS menu bar / Dock / Cmd+Tab.
-    // Patch the Chromium .app's Info.plist so macOS shows our name.
-    // This works for both dev mode (system Playwright cache) and .app bundle.
-    const chromePath = executablePath || chromium.executablePath();
-    try {
-      // Walk up from binary to the .app's Info.plist
-      // e.g. .../Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
-      //   → .../Google Chrome for Testing.app/Contents/Info.plist
-      const chromeContentsDir = path.resolve(path.dirname(chromePath), '..');
-      const chromePlist = path.join(chromeContentsDir, 'Info.plist');
-      if (fs.existsSync(chromePlist)) {
-        const plistContent = fs.readFileSync(chromePlist, 'utf-8');
-        if (plistContent.includes('Google Chrome for Testing')) {
-          const patched = plistContent
-            .replace(/Google Chrome for Testing/g, 'GStack Browser');
-          fs.writeFileSync(chromePlist, patched);
+    // NOTE (#2242): the in-place "rebrand" that patched the Chromium .app's
+    // Info.plist (global "Google Chrome for Testing" → "GStack Browser"
+    // replace) and overwrote its Resources/*.icns is deliberately GONE.
+    // Chrome for Testing is a code-signed bundle: the global replace renamed
+    // CFBundleExecutable to a binary that doesn't exist and the plist/icon
+    // writes broke the codesign seal — GPU process exit_code=5, headed mode
+    // dead on macOS 26 (#2242, #2138, #2139). Branding belongs in the
+    // GStack Browser.app wrapper (GSTACK_CHROMIUM_PATH), never in a mutation
+    // of the signed bundle. Do not reintroduce writes into the Chromium
+    // bundle here — browse/test/rebrand-signed-bundle.test.ts fails CI if
+    // you do.
+    //
+    // Self-heal for bundles the OLD code already poisoned: the mutation
+    // lives in the SHARED Playwright cache, so deleting the rebrand code
+    // fixes fresh installs only, and the documented deploy paths never run
+    // upgrade migrations. Detect the mutated plist and remove the bundle so
+    // the next `playwright install chromium` (or the upgrade migration)
+    // re-fetches a clean one. Scoped to the Playwright cache copy — a
+    // GSTACK_CHROMIUM_PATH bundle belongs to the wrapper/embedder and is
+    // never touched.
+    if (!executablePath) {
+      try {
+        const chromePath = chromium.executablePath();
+        const chromeContentsDir = path.resolve(path.dirname(chromePath), '..');
+        const chromePlist = path.join(chromeContentsDir, 'Info.plist');
+        if (fs.existsSync(chromePlist) && fs.readFileSync(chromePlist, 'utf-8').includes('GStack Browser')) {
+          const appDir = path.resolve(chromeContentsDir, '..');
+          fs.rmSync(appDir, { recursive: true, force: true });
+          throw new Error(
+            'Chromium bundle was mutated by a previous gstack version (broken codesign seal — ' +
+            'GPU exit_code=5 on macOS 26). The poisoned bundle has been removed. ' +
+            'Re-fetch a clean one with: bunx playwright install chromium — then retry.',
+          );
         }
-        // Replace Chromium's Dock icon with ours (Chromium's process owns the Dock icon)
-        const iconCandidates = [
-          path.join(__dirname, '..', '..', 'scripts', 'app', 'icon.icns'),       // repo dev mode
-          path.join(process.env.HOME || '', '.claude', 'skills', 'gstack', 'scripts', 'app', 'icon.icns'), // global install
-        ];
-        const iconSrc = iconCandidates.find(p => fs.existsSync(p));
-        if (iconSrc) {
-          const chromeResources = path.join(chromeContentsDir, 'Resources');
-          // Read original icon name from plist
-          const iconMatch = plistContent.match(/<key>CFBundleIconFile<\/key>\s*<string>([^<]+)<\/string>/);
-          let origIcon = iconMatch ? iconMatch[1] : 'app';
-          if (!origIcon.endsWith('.icns')) origIcon += '.icns';
-          const destIcon = path.join(chromeResources, origIcon);
-          try {
-            fs.copyFileSync(iconSrc, destIcon);
-          } catch (err: any) {
-            if (err?.code !== 'ENOENT' && err?.code !== 'EACCES') throw err;
-          }
-        }
+      } catch (err: any) {
+        if (err?.message?.includes('poisoned bundle')) throw err;
+        // Probe failures (no bundle yet, EACCES) fall through to launch,
+        // which produces its own actionable error.
       }
-    } catch (err: any) {
-      // Non-fatal: app name stays as Chrome for Testing (ENOENT/EACCES expected)
-      if (err?.code !== 'ENOENT' && err?.code !== 'EACCES') throw err;
     }
 
     // Build custom user agent: report as stock Chrome with the version
