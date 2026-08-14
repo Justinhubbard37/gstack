@@ -775,7 +775,6 @@ export const LLM_JUDGE_TOUCHFILES: Record<string, string[]> = {
   'plan-eng-review/SKILL.md sections':    ['plan-eng-review/SKILL.md', 'plan-eng-review/SKILL.md.tmpl'],
 
   // /spec authored-spec quality (paid LLM-judge — periodic-tier).
-  'spec authored quality':                ['spec/SKILL.md', 'spec/SKILL.md.tmpl', 'test/fixtures/spec/**'],
   'plan-design-review/SKILL.md passes':   ['plan-design-review/SKILL.md', 'plan-design-review/SKILL.md.tmpl'],
 
   // Design skills
