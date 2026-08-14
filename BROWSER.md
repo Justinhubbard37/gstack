@@ -705,6 +705,10 @@ Or do it manually: `chrome://extensions` → toggle Developer mode → Load
 unpacked → navigate to `~/.claude/skills/gstack/extension` → pin the
 extension → enter the port from `$B status`.
 
+v1.63 pinned the extension identity via the manifest `key` field, so existing
+unpacked installs get a new extension ID and panel-local state (saved port)
+resets once — a one-time in-product notice explains this.
+
 ---
 
 ## Pair-agent
@@ -758,6 +762,15 @@ remote agent that tries them gets a 403 plus a fresh entry in the denial log.
 + domain only (no raw IP, no full request body), rotates at 10MB with 5
 generations. Per-device salt at `~/.gstack/security/device-salt` (mode 0600).
 
+### Tunnel egress receipts (v1.63+)
+
+Every tunnel session open writes a hash-chained egress receipt (sink
+`browse-tunnel`) to `~/.gstack/security/egress.jsonl` BEFORE ngrok forwards
+anything. Fail-closed: if the receipt can't be written, the tunnel listener
+is torn down and the start is refused. Inspect the ledger with
+`bin/gstack-egress list` and verify chain integrity with
+`bin/gstack-egress verify` (exit 3 on tamper).
+
 See [`docs/REMOTE_BROWSER_ACCESS.md`](docs/REMOTE_BROWSER_ACCESS.md) for the
 full operator guide.
 
@@ -799,6 +812,19 @@ The Terminal pane uses a separate session cookie, `gstack_pty`, minted via
 `POST /pty-session`. Different scope — can spawn / drive the live `claude`
 PTY, can't dispatch arbitrary `/command` calls. `/health` endpoint MUST NOT
 surface this token.
+
+### Extension token bootstrap (v1.63+)
+
+`GET /health` is liveness/status only — it never carries a token, in any
+mode. The Side Panel extension bootstraps the root token via
+`POST /extension-token` on the local listener. The server releases the
+token only when the caller's Origin is exactly
+`chrome-extension://<GSTACK_EXTENSION_ID>` — the `key` field in
+`extension/manifest.json` pins the extension ID (`GSTACK_EXTENSION_ID` in
+`browse/src/server.ts`; derivation reproducible via
+`bun browse/scripts/extension-id.ts`) — AND the parsed Host hostname is
+loopback. Anything else gets a detail-free 403. The endpoint is never
+added to `TUNNEL_PATHS`, so the tunnel surface 404s it by default-deny.
 
 ### Token registry
 

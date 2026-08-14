@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.63.0.0] - 2026-08-12
+## [1.63.0.0] - 2026-08-13
 
 **Everything gstack sends off your machine now leaves a receipt you can read.**
 **And the eval harness stopped grading itself a passing grade.**
@@ -25,7 +25,7 @@ Source: the assembled branch (`git log 1.62.0.0..HEAD`), the free suite
 | gstack-owned off-machine sinks with a receipt | 0 | every enumerated sink | tripwire-enforced, zero exceptions |
 | Eval "no regressions" lines that were self-comparisons | every one | 0 | the harness compared runs against their own in-progress accumulator |
 | Paid gate runner isolation | one process, one hung file kills the tier | one process per file, group-SIGKILL on stall | + never-started accounting |
-| Discovery catalog budget | unenforced | pinned at 1,105 token-equivalents | ratchet-protocol on every skill add |
+| Discovery catalog budget | unenforced | 1,105 token-equivalents measured, 1,150 ceiling | ratchet-protocol on every skill add |
 | Browser `/health` endpoint | served the root auth token to any localhost caller in headed mode | serves no token in any mode | token bootstrap moved to a pinned-origin POST |
 
 The eval-store line is the one that matters most for anyone hacking on gstack:
@@ -95,6 +95,16 @@ bug fix and the port shortlist were selected and hardened for upstream.
   the seeder, context-bill, and the catalog gate.
 - `CLAUDE.md`'s compiled-binaries note corrected: the `browse/dist` binaries have
   been untracked since v0.11.16.0, so they no longer appear in `git status`.
+- External-service E2E tests (Codex, Gemini, benchmark providers) are declared
+  periodic-tier with the canonical whole-file guard, so the merge-blocking gate
+  never waits on a third-party CLI. The Codex runner passes
+  `--skip-git-repo-check` (now required in non-git working dirs) and the Gemini
+  runner classifies an unusable CLI (removed flags, retired auth paths) as a
+  skip instead of a false failure.
+- The PTY test runner parses AskUserQuestion prompts that reflow onto a single
+  logical line and strips DEC cursor-visibility residue, pinned by
+  `test/pty-askuserquestion-single-line.test.ts` — the failure class that
+  previously ate a gate test's whole time budget.
 - New follow-ups filed in `TODOS.md`: egress ledger rotation (chain-genesis
   records), a launch-nonce token bootstrap, and eval-watch shard-awareness.
 

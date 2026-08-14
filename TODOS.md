@@ -875,32 +875,6 @@ plus a TTL so abandoned PTYs eventually exit.
 
 ---
 
-### v1.1+: Audit `/health` token distribution
-
-**What:** Codex's outside-voice review on cc-pty-import flagged that
-`/health` already surfaces `AUTH_TOKEN` to any localhost caller in headed
-mode (`server.ts:1657`). That's a pre-existing soft leak — anything
-running on localhost gets the root token by hitting `/health`.
-
-**Why:** cc-pty-import sidesteps it by NOT putting the PTY token there
-(uses an HttpOnly cookie path instead). But the underlying leak is still
-shippable surface. A second extension or a localhost web app could
-currently scrape `AUTH_TOKEN` and hit any browse-server endpoint.
-
-**Pros:** Closes a real privilege-escalation path on multi-extension
-machines. **Cons:** Either we tighten the gate (Origin must be OUR
-extension id, not just any chrome-extension://) or we move bootstrap
-discovery off `/health` entirely. Either has migration cost for tests
-and the existing extension.
-
-**Context:** codex finding #2 on cc-pty-import plan-eng review. Not in
-scope of that PR; deliberately deferred to keep PTY-import small.
-
-**Priority:** P2.
-**Effort:** M.
-
----
-
 ## Testing
 
 ## P2: Per-finding AskUserQuestion count assertion for /plan-ceo-review
@@ -2655,7 +2629,7 @@ five green files at the tail of a release. Zero user-facing value; pure DRY.
 
 **Effort:** S (human ~3h, CC ~20min). **Depends on:** None.
 
-## Egress-receipt follow-ups (filed via /plan-eng-review + /codex on the v1.62 port wave)
+## Egress-receipt follow-ups (filed via /plan-eng-review + /codex on the v1.63 port wave)
 
 ### P2: egress ledger rotation with chain-genesis records
 
@@ -2664,7 +2638,7 @@ five green files at the tail of a release. Zero user-facing value; pure DRY.
 each new generation's FIRST record embeds the prior file's tail hash so
 `gstack-egress verify` can walk across generations.
 
-**Why:** v1.62 ships WARN-at-25MB (visible growth) but nothing bounds the file.
+**Why:** v1.63 ships WARN-at-25MB (visible growth) but nothing bounds the file.
 Rotation was deliberately deferred: it changes the verify contract, and a wrong
 implementation makes healthy ledgers verify as "broken".
 
@@ -2676,7 +2650,7 @@ implementation makes healthy ledgers verify as "broken".
 design sketch in its rotation TODO comment. Start from the `attempts.jsonl`
 rotation precedent.
 
-**Effort:** S (human ~4h, CC ~25min). **Depends on:** v1.62 port wave landed.
+**Effort:** S (human ~4h, CC ~25min). **Depends on:** v1.63 port wave landed.
 
 ### P3: launch-nonce token bootstrap (local-process impersonation)
 
@@ -2685,13 +2659,13 @@ mints a nonce at headed launch, seeds it into the extension (CDP
 `chrome.storage` injection or a launcher-written sidecar), and the endpoint
 requires it alongside the pinned origin.
 
-**Why:** v1.62's pinned-origin check authenticates browser contexts; any local
+**Why:** v1.63's pinned-origin check authenticates browser contexts; any local
 PROCESS can still forge an Origin header with curl. That threat is explicitly
 outside the current model (any local process can hit the port anyway) — this
 TODO documents the deliberate boundary and the designed path across it.
 
 **Pros:** Closes the local-process impersonation path (strongest of the three
-options evaluated in the v1.62 plan review).
+options evaluated in the v1.63 plan review).
 **Cons:** Largest bootstrap change; CDP seeding is fiddly across the three
 launch paths (`--load-extension`, baked-in Browser.app, real-Chrome fallback);
 low present-day value.
@@ -2708,7 +2682,7 @@ low present-day value.
 ~line 17) about the sharded layout: watch `<evalDir>/shards/*/_partial-e2e.json`
 and aggregate live progress across shard subdirs.
 
-**Why:** v1.62's sharded runner gives each shard its own eval subdir (so shards
+**Why:** v1.63's sharded runner gives each shard its own eval subdir (so shards
 baseline against their own priors); `findPreviousRun`, `eval-compare`,
 `eval-list`, and `eval-summary` were all made shard-aware, but the live watcher
 intentionally stayed flat — it shows nothing during sharded runs.
@@ -2721,7 +2695,7 @@ log already streams per-shard results).
 `scripts/test-paid-shards.ts` (slug = test filename); `listEvalJsonFiles` in
 `test/helpers/eval-store.ts` already enumerates the layout — reuse it.
 
-**Effort:** S (human ~2h, CC ~15min). **Depends on:** v1.62 port wave landed.
+**Effort:** S (human ~2h, CC ~15min). **Depends on:** v1.63 port wave landed.
 
 ## v1.63 port-wave review follow-ups (deferred from /ship review army — non-blocking polish)
 

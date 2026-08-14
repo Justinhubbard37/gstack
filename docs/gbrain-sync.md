@@ -18,7 +18,7 @@ GBrain.
 By design, these stay local even when sync is on:
 
 - Credentials: `.auth.json`, `auth-token.json`, `sidebar-sessions/`,
-  `security/device-salt`, consumer tokens in `config.yaml`
+  `security/device-salt`
 - Machine-specific state: Chromium profiles, ONNX model weights,
   caches, eval-cache, CDP-profile, one-time prompt markers
   (`.welcome-seen`, `.telemetry-prompted`, `.vendoring-warned-*`, etc.)
@@ -80,9 +80,7 @@ On machine B:
    ```
 3. Run `gstack-brain-restore`. That clones the repo, rehydrates your
    learnings/plans/retros, and re-registers the git merge drivers.
-4. Re-enter consumer tokens (they're machine-local and NOT synced —
-   `gstack-config set gbrain_token <your-token>`).
-5. Next skill: your yesterday-on-machine-A learning surfaces. That's the
+4. Next skill: your yesterday-on-machine-A learning surfaces. That's the
    magical moment.
 
 ## Status, health, and queue depth
@@ -140,6 +138,12 @@ To remediate:
 
 There's a defense-in-depth hook at `~/.gstack/.git/hooks/pre-commit` that
 runs the same scan if you manually `git commit` against the repo.
+
+Separately (v1.63.0.0+), every push writes a tamper-evident receipt to the
+egress ledger (`~/.gstack/security/egress.jsonl`) *before* anything is
+sent, fail-closed: if the receipt can't be written, the push is refused
+and the queue is preserved. Inspect the ledger with `gstack-egress list`
+and verify its hash chain with `gstack-egress verify`.
 
 ## Two-machine conflicts
 

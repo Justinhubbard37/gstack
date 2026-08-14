@@ -91,14 +91,15 @@ When a user runs `pair-agent --client`, the daemon starts an ngrok tunnel so a r
 
 The fix is **two HTTP listeners**, not one:
 
-- **Local listener** (`127.0.0.1:LOCAL_PORT`) — always bound. Serves bootstrap (`/health` with token delivery), `/cookie-picker`, `/inspector/*`, `/welcome`, `/refs`, the sidebar-agent API, and the full command surface. Never forwarded.
+- **Local listener** (`127.0.0.1:LOCAL_PORT`) — always bound. Serves token bootstrap (`POST /extension-token`, released only to the pinned extension identity), `/health` (liveness/status only — never a token), `/cookie-picker`, `/inspector/*`, `/welcome`, `/refs`, the sidebar-agent API, and the full command surface. Never forwarded.
 - **Tunnel listener** (`127.0.0.1:TUNNEL_PORT`) — bound lazily on `/tunnel/start`, torn down on `/tunnel/stop`. Serves a locked allowlist: `/connect` (pairing ceremony, unauth + rate-limited), `/command` (scoped tokens only, further restricted to a browser-driving command allowlist), and `/sidebar-chat`. Everything else 404s.
 
 ngrok forwards only the tunnel port. The security property comes from **physical port separation**: a tunnel caller cannot reach `/health` or `/cookie-picker` because those paths don't exist on that TCP socket. Header inference (check `x-forwarded-for`, check origin) is unreliable (ngrok header behavior changes; local proxies can add these headers); socket separation isn't.
 
 | Endpoint | Local listener | Tunnel listener | Notes |
 |---|---|---|---|
-| `GET /health` | public (no token unless headed/extension) | 404 | Token bootstrap for extension happens locally only |
+| `GET /health` | public (liveness/status only — never a token) | 404 | Token bootstrap moved to `POST /extension-token` (v1.63) |
+| `POST /extension-token` | pinned Origin (`chrome-extension://<GSTACK_EXTENSION_ID>`) + loopback Host | 404 | The only endpoint that hands out the root token |
 | `GET /connect` | public (`{alive:true}`) | public (`{alive:true}`) | Probe path for tunnel liveness |
 | `POST /connect` | public (rate-limited 300/min) | public (rate-limited) | Setup-key exchange for pair-agent |
 | `POST /command` | auth (Bearer root OR scoped) | auth (scoped only, allowlisted commands) | Root token on tunnel = 403 |
@@ -113,6 +114,8 @@ ngrok forwards only the tunnel port. The security property comes from **physical
 | `GET /activity/stream` | Bearer OR HttpOnly `gstack_sse` cookie | 404 | SSE. ?token= query param no longer accepted |
 | `GET /inspector/events` | Bearer OR HttpOnly `gstack_sse` cookie | 404 | SSE. Same cookie as /activity/stream |
 | `POST /sse-session` | auth (Bearer) | 404 | Mints the view-only 30-min SSE session cookie |
+
+**Extension token bootstrap (v1.63.0.0).** `GET /health` never carries a token in any mode — it is liveness/status only. The sidebar extension obtains the root token via `POST /extension-token`, which releases it only when the caller's Origin is exactly `chrome-extension://<GSTACK_EXTENSION_ID>` (pinned by the `key` field in `extension/manifest.json`; reproduce the derivation with `bun browse/scripts/extension-id.ts`) and the Host header parses to a loopback hostname — parsed with `new URL()`, never compared raw, because Host carries the port. Web pages cannot forge a `chrome-extension://` Origin, and the endpoint is never added to the tunnel allowlist, so the tunnel surface 404s it by default-deny.
 
 **Tunnel surface denial logs.** Every rejection on the tunnel listener (`path_not_on_tunnel`, `root_token_on_tunnel`, `missing_scoped_token`, `disallowed_command:*`) is recorded asynchronously to `~/.gstack/security/attempts.jsonl` with timestamp, source IP (from `x-forwarded-for`), path, and method. Rate-capped at 60 writes/min globally to prevent log-flood DoS. Shares the attempt log with the prompt-injection scanner.
 
@@ -143,6 +146,14 @@ Cookies are the most sensitive data gstack handles. The design:
 ### Shell injection prevention
 
 The browser registry (Comet, Chrome, Arc, Brave, Edge) is hardcoded. Database paths are constructed from known constants, never from user input. Keychain access uses `Bun.spawn()` with explicit argument arrays, not shell string interpolation.
+
+### Egress receipt ledger (v1.63.0.0)
+
+Every gstack-initiated off-machine send writes a hash-chained, tamper-evident receipt to `~/.gstack/security/egress.jsonl` BEFORE the send — `writeReceipt` in `lib/egress-receipt.ts` for TypeScript callers, `_receipted_curl` / `_receipted_git` from `bin/gstack-egress-lib.sh` for shell scripts. Receipts hash the request body; they never store it.
+
+Failure polarity is per-class and pinned by tests. Sensitive sinks are fail-closed: brain-sync pushes, memory-ingest, gbrain-sync, telemetry, ngrok tunnel starts, mcp-verify, and supabase-provision refuse to send if the receipt can't be written (each refusal prints problem + cause + fix). User-facing sinks fail open with a stderr warning: the design binary's OpenAI calls, update-check, the read-only dashboards, and git-class receipts. The zero-exception scanner in `test/egress-receipt-wiring.test.ts` fails CI when any new off-machine sink ships unwired.
+
+Inspect the ledger with `bin/gstack-egress`: `list` (what gstack attempted to send), `verify` (recompute the chain, exit 3 on tamper), `grants` (every consent in force). Threat model: the ledger is forensic observability of ATTEMPTED egress — it records what gstack tried to send so accidents are auditable; it is not an exfiltration control.
 
 ### Unicode sanitization at server egress (v1.38.0.0)
 
@@ -414,7 +425,7 @@ The `EvalCollector` accumulates test results and writes them in two ways:
 1. **Incremental:** `savePartial()` writes `_partial-e2e.json` after each test (atomic: write `.tmp`, `fs.renameSync`). Survives kills.
 2. **Final:** `finalize()` writes a timestamped eval file (e.g. `e2e-20260314-143022.json`). The partial file is never cleaned up — it persists alongside the final file for observability.
 
-`eval:compare` diffs two eval runs. `eval:summary` aggregates stats across all runs in `~/.gstack-dev/evals/`.
+`eval:compare` diffs two eval runs. `eval:summary` aggregates stats across all runs in `~/.gstack-dev/evals/`. Both are shard-aware (v1.63.0.0): the sharded paid runner (`scripts/test-paid-shards.ts`, run via `test:gate:sharded` / `test:periodic:sharded` — the `eval:bg:gate` / `eval:bg:periodic` scripts now point at these) gives each shard's collector its own directory at `<evalDir>/shards/<slug>/` through the `GSTACK_EVAL_DIR` env var (honored by the `EvalCollector` constructor), and `eval:list` / `eval:compare` / `eval:summary` scan one level of `shards/<slug>/` subdirectories. Baseline lookups exclude `_partial` accumulators (`isPartialEval` / `findLatestFinalizedRun` in `eval-store.ts`), so auto-comparison never uses the current run's own partial file as its baseline.
 
 ### Test tiers
 

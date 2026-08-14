@@ -160,6 +160,7 @@ Runs automatically with `bun test`. No API keys needed.
 - **Skill validation tests** (`test/skill-validation.test.ts`) — Validates that SKILL.md files reference only real commands and flags, and that command descriptions meet quality thresholds.
 - **Generator tests** (`test/gen-skill-docs.test.ts`) — Tests the template system: verifies placeholders resolve correctly, output includes value hints for flags (e.g. `-d <N>` not just `-d`), enriched descriptions for key commands (e.g. `is` lists valid states, `press` lists key examples).
 - **Tier-alignment invariant** (`test/e2e-tier-alignment.test.ts`) — For every self-gated `test/skill-e2e-*.test.ts` named in a touchfiles dep list, the file's `EVALS_TIER` self-gate must match its declared tier in `E2E_TIERS`. Kills the "inert demotion" class where a test is re-tiered in `touchfiles.ts` but the file still gates on the old tier and keeps running in the wrong lane. Unmapped or mixed-tier files are reported, never silently skipped.
+- **Catalog budget** (`test/catalog-budget.test.ts`) — Caps the aggregate discovery surface: the sum of every skill's frontmatter `name` + `description` (what every host loads at discovery, every session) must stay under 1,150 token-equivalents, with a 260-byte per-skill cap. Counting goes through the shared census in `test/helpers/skill-census.ts` (physical files vs authored skills vs registry entries — three deliberately different counts). Adding a skill? The failure message carries the re-measure + ratchet protocol.
 
 ### Tier 2: E2E via `claude -p` (~$3.85/run)
 
@@ -184,10 +185,16 @@ seeded `CLAUDE_CONFIG_DIR`, a temp `GSTACK_HOME`, and `--strict-mcp-config`. You
 operator `~/.claude` config, MCP servers (gbrain, Conductor), skills, `~/.gstack`
 decision logs, and `CONDUCTOR_*` env never leak into the child, so local eval
 signal matches CI instead of disagreeing for reasons unrelated to the code under
-test. Set `EVALS_HERMETIC=0` to debug against your real operator state (this also
+test. The hermetic `CLAUDE_CONFIG_DIR` seeds no skills by default; a PTY test
+that types a `/skill` slash command passes `seedSkills: true` to the PTY runner,
+which swaps in `hermeticSkillsConfigDir()` — a seeded skill registry that
+symlinks the LIVE working tree's SKILL.md files (by design: the skills are the
+subject under test, so a snapshot would measure stale copies). Set
+`EVALS_HERMETIC=0` to debug against your real operator state (this also
 drops `--strict-mcp-config`). The wiring is pinned by `test/hermetic-wiring.test.ts`
-(a free static tripwire) and two gate-tier isolation canaries in
-`test/skill-e2e-hermetic-canary.test.ts`.
+(a free static tripwire), two gate-tier isolation canaries in
+`test/skill-e2e-hermetic-canary.test.ts`, and the skill-seeding tripwires in
+`test/hermetic-skills-seeding.test.ts` / `test/pty-skill-seeding-wiring.test.ts`.
 
 ### E2E observability
 
@@ -227,8 +234,16 @@ bun run eval:bg:gate         # detached gate-tier suite
 bun run eval:bg:periodic     # detached periodic-tier suite
 ```
 
-Each prints its log path. Humans running `bun run test:evals` foreground in their
-own terminal don't need this — Ctrl-C is intended there.
+Each prints its log path. The gate and periodic variants run their tier through
+the sharded paid runner (`scripts/test-paid-shards.ts`, also available directly
+as `bun run test:gate:sharded` / `bun run test:periodic:sharded`): one Bun
+process per test file, an external wall-clock timeout that kills the shard's
+whole process group (stray `claude`/`codex` grandchildren included), a per-shard
+eval dir (`GSTACK_EVAL_DIR=<evalDir>/shards/<slug>/`), and an aggregate that
+distinguishes failed vs timed-out vs never-started shards. `eval:list`,
+`eval:compare`, and `eval:summary` are shard-aware. Humans running
+`bun run test:evals` foreground in their own terminal don't need this — Ctrl-C
+is intended there.
 
 **Eval comparison commentary:** `eval:compare` generates natural-language Takeaway sections interpreting what changed between runs — flagging regressions, noting improvements, calling out efficiency gains (fewer turns, faster, cheaper), and producing an overall summary. This is driven by `generateCommentary()` in `eval-store.ts`.
 

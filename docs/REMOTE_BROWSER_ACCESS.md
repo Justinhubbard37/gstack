@@ -179,6 +179,7 @@ Each agent owns the tabs it creates. Rules:
 - **Path traversal guarded** on `/welcome` — `GSTACK_SLUG` must match `^[a-z0-9_-]+$` or falls back to the built-in template.
 - **SSRF guards** on `goto`, `download`, and scrape paths — validates URL target against a localhost/private-range blocklist.
 - **Tunnel surface denial logging.** Every rejection on the tunnel listener (`path_not_on_tunnel`, `root_token_on_tunnel`, `missing_scoped_token`, `disallowed_command:*`) is appended to `~/.gstack/security/attempts.jsonl` with timestamp, source IP, path, method. Rate-capped at 60 writes/min.
+- **Egress receipt on tunnel start (v1.63+).** Every tunnel session open writes a hash-chained receipt (sink `browse-tunnel`) to `~/.gstack/security/egress.jsonl` BEFORE ngrok forwards anything. Fail-closed: if the receipt can't be written, the tunnel refuses to start. Audit with `bin/gstack-egress list` / `bin/gstack-egress verify`.
 - All agent activity is logged with attribution (clientId).
 
 **Known non-goal (tracked as #1136):** on Windows, the cookie-import-browser path launches Chrome with `--remote-debugging-port=<random>`. With App-Bound Encryption v20, a same-user local process can connect to that port and exfiltrate decrypted v20 cookies — an elevation path relative to reading the SQLite DB directly. Fix direction is `--remote-debugging-pipe` instead of TCP.

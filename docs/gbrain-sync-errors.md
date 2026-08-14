@@ -92,6 +92,29 @@ your local commit still exists — the next skill run will retry the push.
 
 ---
 
+## `gstack: brain-sync push NOT sent — the egress receipt could not be written`
+
+**Problem.** The push was refused before anything left your machine. Every
+brain-sync push writes a tamper-evident receipt to the egress ledger
+(`~/.gstack/security/egress.jsonl`) before sending, fail-closed. The
+receipt could not be written, so nothing was sent, no local commit was
+made, and the queue is preserved — the next run retries the whole drain.
+`gstack-brain-sync --status` shows `EGRESS_RECEIPT_FAILED` as the failure
+detail.
+
+**Cause.** `~/.gstack/security/` is missing or unwritable, the disk is
+full, or `GSTACK_HOME` points at a read-only location.
+
+**Fix.**
+```bash
+chmod -R u+w ~/.gstack/security
+```
+Then run any skill (or `gstack-brain-sync --once`) to retry. Inspect the
+ledger with `gstack-egress list`; verify its hash chain with
+`gstack-egress verify`.
+
+---
+
 ## `gstack-brain-init: ~/.gstack/.git is already a git repo pointing at <url>`
 
 **Problem.** You tried to init with a remote URL that doesn't match the
