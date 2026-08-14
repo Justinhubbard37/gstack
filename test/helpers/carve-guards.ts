@@ -129,7 +129,11 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     minUnionBytes: 120_000,
     mustContain: ['VERSION', 'CHANGELOG', 'review', 'merge', 'PR'],
     // v1.58.5.0: pre-push-guard install (#2077) stacks on the shared first-run-guidance preamble.
-    maxSizeRatio: 1.08,
+    // Fork port wave 2: multi-ecosystem test-detection evidence (Django/JVM
+    // markers, test-file census — e3259078 port) + the #1079 gh pr edit REST
+    // fallback grew the union to 1.090x. Kept tight; the Apple release
+    // adapter raises this again deliberately with its own justification.
+    maxSizeRatio: 1.10,
   },
   'plan-ceo-review': {
     skill: 'plan-ceo-review',

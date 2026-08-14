@@ -223,7 +223,10 @@ const MONOLITH_INVARIANTS: ParityInvariant[] = [
     mustHaveHeadings: ['## Preamble', '## When to invoke'],
     // v1.2.0 activation lift: the unified first-run-guidance section (P4 scaffold +
     // P3 loop tip) is added to every skill's shared preamble — intentional, ~1KB.
-    maxSizeRatio: 1.07,
+    // Fork port wave 2: the shared coverage-audit detection block gained the
+    // multi-ecosystem markers (Django/JVM, script/target/test-file census —
+    // e3259078 port); measured 1.111x. Tight headroom only.
+    maxSizeRatio: 1.12,
     minBytes: 50_000,
   },
   {
