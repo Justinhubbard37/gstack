@@ -247,6 +247,38 @@ export function sanitizeUntrustedHtml(html: string): string {
   // style="url(javascript:..)" — strip javascript: inside style attrs.
   s = s.replace(/url\(\s*javascript:[^)]*\)/gi, "url(#)");
 
+  // ── Offline-posture fetch vectors (no --allow-network must mean no network
+  // at print time; the image inliner covers <img src> only, and must keep
+  // seeing remote <img src> so its blocked-remote placeholder still fires) ──
+
+  // Remote url(...) in CSS → url(#). Scoped to <style> blocks and style
+  // attributes below so prose/code samples that mention URLs stay untouched.
+  const neutralizeRemoteCssUrls = (css: string): string =>
+    css.replace(/url\(\s*(?:&quot;|&#0?39;|&#x27;|["'])?\s*(?:https?:)?\/\/[^)]*\)/gi, "url(#)");
+
+  // Raw-HTML <style> blocks: drop @import outright (any @import is a fetch;
+  // relative ones can't resolve under load-html either), neutralize remote url().
+  s = s.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, open, css, close) =>
+    open + neutralizeRemoteCssUrls(css.replace(/@import\b[^;]*(;|$)/gi, "")) + close);
+
+  // Inline style="background:url(https://…)" attributes.
+  s = s.replace(/(\s+style\s*=\s*)("[^"]*"|'[^']*')/gi,
+    (_m, pre, val) => pre + neutralizeRemoteCssUrls(val));
+
+  // srcset with a remote candidate: Chromium prefers srcset over the inlined
+  // src, so a remote candidate fetches at print time. Strip the attribute;
+  // local/data: srcset values are left alone.
+  const remoteSrcsetCandidate = /(?:^|[,\s])\s*(?:https?:)?\/\//i;
+  s = s.replace(/\s+srcset\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, (m, val) =>
+    remoteSrcsetCandidate.test(String(val).replace(/^["']|["']$/g, "")) ? "" : m);
+
+  // Remote src/poster on media elements (<video poster>, <source src>, …).
+  s = s.replace(/<(?:video|audio|source|track)\b[^>]*>/gi, (tag) =>
+    tag.replace(
+      /(\s(?:src|poster)\s*=\s*)(?:"(?:https?:)?\/\/[^"]*"|'(?:https?:)?\/\/[^']*'|(?:https?:)?\/\/[^\s>]+)/gi,
+      '$1"#"',
+    ));
+
   return s;
 }
 
