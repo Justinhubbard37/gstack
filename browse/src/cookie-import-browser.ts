@@ -526,6 +526,7 @@ async function dpapiDecrypt(encryptedBytes: Buffer): Promise<Buffer> {
   ].join('; ');
 
   const proc = Bun.spawn(['powershell', '-NoProfile', '-Command', script], {
+    windowsHide: true,
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -778,7 +779,7 @@ function isBrowserRunning(browserName: string): Promise<boolean> {
   const exe = browserName.toLowerCase().includes('edge') ? 'msedge.exe' : 'chrome.exe';
   return new Promise((resolve) => {
     const proc = Bun.spawn(['tasklist', '/FI', `IMAGENAME eq ${exe}`, '/NH'], {
-      stdout: 'pipe', stderr: 'pipe',
+      stdout: 'pipe', stderr: 'pipe', windowsHide: true,
     });
     proc.exited.then(async () => {
       const out = await new Response(proc.stdout).text();

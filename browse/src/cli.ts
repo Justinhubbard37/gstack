@@ -143,7 +143,7 @@ async function killServer(pid: number): Promise<void> {
     try {
       Bun.spawnSync(
         ['taskkill', '/PID', String(pid), '/T', '/F'],
-        { stdout: 'pipe', stderr: 'pipe', timeout: 5000 }
+        { stdout: 'pipe', stderr: 'pipe', timeout: 5000, windowsHide: true }
       );
     } catch (err: any) {
       if (err?.code !== 'ENOENT') throw err;
@@ -323,9 +323,9 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
     const launcherCode =
       `const{spawn}=require('child_process');` +
       `spawn(process.execPath,[${JSON.stringify(NODE_SERVER_SCRIPT)}],` +
-      `{detached:true,stdio:['ignore','ignore','ignore'],env:Object.assign({},process.env,` +
+      `{detached:true,windowsHide:true,stdio:['ignore','ignore','ignore'],env:Object.assign({},process.env,` +
       `${extraEnvStr})}).unref()`;
-    Bun.spawnSync(['node', '-e', launcherCode], { stdio: ['ignore', 'ignore', 'ignore'] });
+    Bun.spawnSync(['node', '-e', launcherCode], { stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true });
   } else {
     // macOS/Linux: Bun.spawn().unref() only removes the child from Bun's event
     // loop — it does NOT call setsid(), so the spawned server stays in the
@@ -340,6 +340,7 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
     // the Windows path's rationale — same root cause, different OS API.
     nodeSpawn('bun', ['run', SERVER_SCRIPT], {
       detached: true,
+      windowsHide: true,
       stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...process.env, BROWSE_STATE_FILE: config.stateFile, BROWSE_PARENT_PID: parentPid, ...extraEnv },
     }).unref();

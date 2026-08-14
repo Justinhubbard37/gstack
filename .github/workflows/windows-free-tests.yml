@@ -111,6 +111,8 @@ jobs:
             browse/test/claude-bin.test.ts \
             test/test-free-shards.test.ts \
             browse/test/file-permissions.test.ts \
+            browse/test/bun-polyfill.test.ts \
+            browse/test/windows-spawn-hide.test.ts \
             browse/test/security.test.ts \
             browse/test/server-sanitize-surrogates.test.ts \
             test/setup-windows-fallback.test.ts \
