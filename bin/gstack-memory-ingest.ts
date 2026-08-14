@@ -52,6 +52,7 @@ import {
   readSync,
   closeSync,
   rmSync,
+  realpathSync,
 } from "fs";
 import { join, basename, dirname } from "path";
 import { execFileSync, spawnSync, spawn, type ChildProcess } from "child_process";
@@ -1424,13 +1425,32 @@ function runGbrainImport(
     // still reporting `written: N` from the staged count. Silent data loss
     // on every run. A working run logs `import.collect_files done ... files=N`
     // with N > 0 and takes minutes, not seconds.
-    const child = spawnGbrainAsync([
-      "import",
-      stagingDir,
-      "--no-embed",
-      "--include-gitignored",
-      "--json",
-    ]);
+    //
+    // GIT_CEILING_DIRECTORIES is the second layer of the same #2144 defense:
+    // it stops git's upward repo discovery at the staging dir's parent, so a
+    // git-enumerating collector fails cleanly out of the git fast path and
+    // falls back to its plain FS walk even on gbrain builds whose flag
+    // semantics drift. The ceiling must be the REAL path — git compares
+    // canonicalized directories during discovery, and a staging dir reached
+    // through a symlink (macOS /var -> /private/var, symlinked $GSTACK_HOME)
+    // otherwise never matches the ceiling entry. Scoped to this one child;
+    // no on-disk state, staging-guard/resume contracts untouched.
+    let ceiling: string;
+    try {
+      ceiling = realpathSync(dirname(stagingDir));
+    } catch {
+      ceiling = dirname(stagingDir); // staging parent vanished mid-run; spawn will fail loudly anyway
+    }
+    const baseEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES
+        ? `${ceiling}:${process.env.GIT_CEILING_DIRECTORIES}`
+        : ceiling,
+    };
+    const child = spawnGbrainAsync(
+      ["import", stagingDir, "--no-embed", "--include-gitignored", "--json"],
+      { baseEnv },
+    );
     _activeImportChild = child;
     let stdout = "";
     let stderr = "";
