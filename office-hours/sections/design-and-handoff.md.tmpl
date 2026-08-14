@@ -340,8 +340,31 @@ Then proceed to Founder Resources below.
 
 ### Founder Resources (all tiers)
 
+**Standing opt-out check (#538) — run FIRST:**
+
+```bash
+~/.claude/skills/gstack/bin/gstack-config get founder_resources 2>/dev/null || echo "true"
+```
+
+If the value is `false`, **skip this entire section silently** — no resources,
+no "skipped as requested" mention. The user said never; config outlives
+session context and memory instructions, so never means never. (Re-enable:
+`gstack-config set founder_resources true`.)
+
 Share 2-3 resources from the pool below. For repeat users, resources compound by matching
 to accumulated session context, not just this session's category.
+
+**After sharing, close with the standing choice** (one line, not a ceremony):
+
+> Want these? I can open any of them — or say "never show me these again" and
+> this section disappears for good.
+
+If the user opts out (any clear phrasing of never/stop showing these): run
+`~/.claude/skills/gstack/bin/gstack-config set founder_resources false`, then
+VERIFY the write (`gstack-config get founder_resources` must read back
+`false`) before promising anything — if the write failed, say so and skip for
+this session only. On success confirm in one line with the re-enable command
+and continue the handoff.
 
 **Dedup check:** Read `RESOURCES_SHOWN` from the builder profile output above.
 If `RESOURCES_SHOWN_COUNT` is 34 or more, skip this section entirely (all resources exhausted).
