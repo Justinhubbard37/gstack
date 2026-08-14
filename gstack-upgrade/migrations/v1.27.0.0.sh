@@ -130,8 +130,19 @@ EOF
         ;;
     esac
   else
-    # Non-interactive (CI, scripted upgrade): proceed automatically.
-    echo "  (non-interactive: proceeding automatically)" >&2
+    # Non-interactive (CI, Claude Code Bash tool, scripted upgrade). Step 1
+    # renames a REMOTE repo — consent-shaped, and blanket auto-proceed once
+    # left an install half-migrated when that step failed mid-run (#1383).
+    # Skip for now by default (asked again next upgrade); explicit opt-in
+    # proceeds unattended.
+    if [ "${GSTACK_MIGRATE_ASSUME_YES:-0}" = "1" ]; then
+      echo "  (non-interactive: proceeding — GSTACK_MIGRATE_ASSUME_YES=1)" >&2
+    else
+      echo "  Non-interactive session: skipping for now (will ask again next upgrade)." >&2
+      echo "  To proceed unattended: GSTACK_MIGRATE_ASSUME_YES=1 ./setup" >&2
+      echo "  To run interactively:  /setup-gbrain --rerun-migration" >&2
+      exit 0
+    fi
   fi
 fi
 
@@ -195,8 +206,8 @@ if ! journal_done "gh_repo_renamed"; then
             mark_done "gh_repo_renamed"
           else
             echo "    WARNING: gh rename failed (repo may not exist or permission denied)" >&2
-            echo "    skipping step 1; subsequent steps still run" >&2
-            mark_done "gh_repo_renamed"
+            echo "    step 1 stays PENDING and will retry on re-run; later steps still run (#1383)" >&2
+            echo "    manual: gh repo rename $NEW_REPO_NAME --repo $OLD_REPO_NAME --yes" >&2
           fi
         fi
       else
@@ -335,8 +346,20 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: finalize (touchfile + clear journal)
+# Step 6: finalize (touchfile + clear journal) — only when EVERY step is
+# journaled. A failed step must leave the migration visibly incomplete and
+# retryable, never silently recorded as done (#1383).
 # ---------------------------------------------------------------------------
+INCOMPLETE=""
+for _step in gh_repo_renamed remote_txt_renamed config_key_renamed claude_md_block_rewritten sources_swapped; do
+  journal_done "$_step" || INCOMPLETE="$INCOMPLETE $_step"
+done
+if [ -n "$INCOMPLETE" ]; then
+  echo "  [v1.27.0.0] migration INCOMPLETE — pending step(s):$INCOMPLETE" >&2
+  echo "  Completed steps are journaled and will be skipped on re-run." >&2
+  echo "  Re-run via: /setup-gbrain --rerun-migration" >&2
+  exit 1
+fi
 touch "$DONE"
 rm -f "$JOURNAL"
 
