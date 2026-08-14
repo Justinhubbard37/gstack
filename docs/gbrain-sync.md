@@ -31,7 +31,7 @@ it; you can append your own entries below the marker line.
 ## First-run setup (30–90 seconds)
 
 ```bash
-gstack-brain-init
+gstack-artifacts-init
 ```
 
 The command:
@@ -41,7 +41,7 @@ The command:
    gstack-brain-$USER`). Any git remote works — GitHub, GitLab, Gitea,
    self-hosted.
 3. Pushes an initial commit with just the config.
-4. Writes `~/.gstack-brain-remote.txt` (URL-only, no secrets —
+4. Writes `~/.gstack-artifacts-remote.txt` (URL-only, no secrets —
    safe to copy to another machine).
 5. Wires the gstack-brain repo into your local gbrain as a federated
    source (via `gbrain sources add` + `git worktree`) so `gbrain search`
@@ -65,14 +65,15 @@ Your answer is persisted. You won't be asked again.
 
 ## Cross-machine workflow
 
-On machine A: run `gstack-brain-init` once. That's it — every skill
+On machine A: run `gstack-artifacts-init` once. That's it — every skill
 invocation now drains the sync queue at its start and end boundaries
 (~200–800 ms network pause per skill).
 
 On machine B:
 
-1. Copy `~/.gstack-brain-remote.txt` from machine A to machine B
-   (password manager, dotfile repo, USB stick — your call).
+1. Copy `~/.gstack-artifacts-remote.txt` from machine A to machine B
+   (password manager, dotfile repo, USB stick — your call; the legacy
+   `~/.gstack-brain-remote.txt` name is still recognized).
 2. Run any gstack skill. The preamble sees the URL file and prints:
    ```
    BRAIN_SYNC: brain repo detected: <url>
@@ -180,7 +181,7 @@ This:
 Add `--delete-remote` to also delete the private GitHub repo (GitHub only,
 uses `gh repo delete`).
 
-Re-init anytime with `gstack-brain-init`.
+Re-init anytime with `gstack-artifacts-init`.
 
 ## Troubleshooting
 
@@ -189,8 +190,8 @@ error message gstack-brain may print, with problem / cause / fix for each.
 
 ## Under the hood
 
-For the architectural decisions behind this feature (allowlist vs
-denylist, daemon vs preamble-boundary sync, JSONL merge driver, privacy
-stop-gate), see the
-[approved plan](../system-instruction-you-are-working-jaunty-kahn.md) in
-the gstack plans directory.
+The architectural decisions behind this feature: allowlist over denylist
+(unknown files stay local by default), preamble-boundary sync over a daemon
+(no background process to babysit), a JSONL merge driver so concurrent
+machines union their queues instead of conflicting, and a privacy stop-gate
+that asks once before anything syncs.

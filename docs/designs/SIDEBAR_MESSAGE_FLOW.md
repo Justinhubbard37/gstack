@@ -71,8 +71,9 @@ T+1-3s    Extension loads, sidebar opens
 
 T+ready   tryAutoConnect calls connect()
             ├── POST /pty-session (Authorization: Bearer AUTH_TOKEN)
-            │   └── server mints session token, posts /internal/grant to agent
-            │   └── responds with {terminalPort, ptySessionToken}
+            │   └── server mints attach token, posts /internal/grant to agent
+            │   └── responds with {terminalPort, sessionId, attachToken,
+            │                      leaseExpiresAt}
             ├── GET /claude-available (preflight)
             ├── new WebSocket(`ws://127.0.0.1:<terminalPort>/ws`,
             │                 [`gstack-pty.<token>`])

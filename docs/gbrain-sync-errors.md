@@ -9,8 +9,9 @@ the command output.
 
 ## `BRAIN_SYNC: brain repo detected: <url>`
 
-**Problem.** You're on a machine that has `~/.gstack-brain-remote.txt` (copied
-from another machine) but no local git repo at `~/.gstack/.git`.
+**Problem.** You're on a machine that has `~/.gstack-artifacts-remote.txt`
+(or the legacy `~/.gstack-brain-remote.txt`, copied from another machine) but
+no local git repo at `~/.gstack/.git`.
 
 **Cause.** You've set up GBrain sync elsewhere and your gstack hasn't been
 restored on this machine yet.
@@ -115,23 +116,24 @@ ledger with `gstack-egress list`; verify its hash chain with
 
 ---
 
-## `gstack-brain-init: ~/.gstack/.git is already a git repo pointing at <url>`
+## `gstack-artifacts-init: ~/.gstack/ is already a git repo pointing at: <url>`
 
 **Problem.** You tried to init with a remote URL that doesn't match the
-existing one.
+existing one. The command refuses to overwrite.
 
-**Cause.** You already ran `gstack-brain-init` with a different remote.
+**Cause.** You already ran `gstack-artifacts-init` with a different remote.
 
 **Fix.** Either:
 
-- Use the existing remote: run `gstack-brain-init` without `--remote`, or
+- Use the existing remote: run `gstack-artifacts-init` without `--remote`, or
   with the matching URL.
-- Switch remotes: `gstack-brain-uninstall` first, then re-init with the new
-  URL. This does not delete your data.
+- Switch remotes: `git -C ~/.gstack remote set-url origin <url>` (the
+  command's own suggestion), or `gstack-brain-uninstall` first, then re-init
+  with the new URL. Neither deletes your data.
 
 ---
 
-## `Remote not reachable: <url>`
+## `Remote not reachable via SSH: <url>`
 
 **Problem.** Init couldn't reach the git remote to verify connectivity.
 
@@ -149,7 +151,7 @@ If that fails, check:
 
 ---
 
-## `gstack-brain-init: failed to create or find '<name>'`
+## `Failed to create or find '<name>'. Try --remote <url>.`
 
 **Problem.** Auto-repo-creation via `gh repo create` failed and the repo
 isn't discoverable via `gh repo view` either.
@@ -164,7 +166,7 @@ gh auth status
 If unauth'd, run `gh auth login`. If the repo name collides, pass a different
 name:
 ```bash
-gstack-brain-init --remote git@github.com:YOURUSER/custom-name.git
+gstack-artifacts-init --remote git@github.com:YOURUSER/custom-name.git
 ```
 
 ---
@@ -191,7 +193,7 @@ gstack session, or (b) a previous failed restore left partial state.
 **Fix (three options).**
 
 1. **If this machine's state should become the new truth**: run
-   `gstack-brain-init` instead of restore — this creates a brand-new brain
+   `gstack-artifacts-init` instead of restore — this creates a brand-new brain
    repo from this machine's state.
 
 2. **If you want to adopt the remote and discard this machine's state**:
@@ -212,7 +214,7 @@ and `.gitattributes`.
 **Cause.** You pointed restore at a random git repo, or someone deleted the
 canonical config files from the brain repo.
 
-**Fix.** Verify the URL. If it's correct, run `gstack-brain-init --remote
+**Fix.** Verify the URL. If it's correct, run `gstack-artifacts-init --remote
 <url>` to re-seed the canonical config.
 
 ---
