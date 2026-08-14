@@ -282,7 +282,7 @@ PTY via `window.gstackInjectToTerminal(text)`, exposed by
 `sidepanel-terminal.js`. No `/sidebar-command` POST — the live REPL is
 the only execution surface in the sidebar now.
 
-**`/health` MUST NOT surface any token — and it no longer does** (v1.62.1+).
+**`/health` MUST NOT surface any token — and it no longer does** (v1.63+).
 The historical headed-mode leak of `AUTH_TOKEN` is fixed: `GET /health` is
 liveness/status only in every mode. Token bootstrap is `POST /extension-token`,
 which validates the caller's Origin against the pinned extension identity
