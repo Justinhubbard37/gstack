@@ -99,6 +99,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
   ship: {
     skill: 'ship',
     expectedSections: [
+      'apple-release.md',
       'tests.md',
       'test-coverage.md',
       'plan-completion.md',
@@ -133,9 +134,12 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // markers, test-file census — e3259078 port) + the #1079 gh pr edit REST
     // fallback grew the union to 1.090x; the third-party web-actions
     // contract (consent-gated browser drive for API-key registration etc.)
-    // adds ~2.3KB inline judgment, measured 1.103x. Kept tight; the Apple
-    // release adapter raises this again deliberately.
-    maxSizeRatio: 1.12,
+    // adds ~2.3KB inline judgment, measured 1.103x. The Apple release
+    // adapter (14.8KB carved section, 21 live releases of judgment — the
+    // wave's headline capability) grows the union to 1.195x. Deliberate:
+    // the section is on-demand (loads only for Apple store targets), so
+    // per-invocation cost for non-iOS ships is one manifest line.
+    maxSizeRatio: 1.22,
   },
   'plan-ceo-review': {
     skill: 'plan-ceo-review',

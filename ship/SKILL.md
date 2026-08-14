@@ -901,6 +901,7 @@ sections. Read a section in full before doing its step; do not work from memory.
 
 | When | Read this section |
 |------|-------------------|
+| the ship target is an Apple platform app (.xcodeproj, .xcworkspace, or an app-product Swift package) — read BEFORE Step 1's branch gate and any preflight; store distribution never routes through the branch/PR ceremony | `sections/apple-release.md` |
 | running the test suites and (if prompt files changed) the eval suites (Steps 4-6) | `sections/tests.md` |
 | auditing test coverage of the diff (Step 7) | `sections/test-coverage.md` |
 | auditing plan completion, verification, and scope drift (Step 8) | `sections/plan-completion.md` |
@@ -911,6 +912,18 @@ sections. Read a section in full before doing its step; do not work from memory.
 | syncing docs and creating or updating the PR/MR (Steps 18-19) | `sections/pr-body.md` |
 
 ---
+
+## Step 0.9: Apple target detection
+
+Shipping to the App Store is not landing a PR. If the repository contains an
+`.xcodeproj`, `.xcworkspace`, or a Swift package with an app product AND the
+user's ask is store distribution (App Store, TestFlight, "release my app"),
+**STOP and Read `~/.claude/skills/gstack/ship/sections/apple-release.md` FIRST**
+— before the branch gate and any preflight below. Store distribution proceeds
+from whatever branch the user is on (a clean tree on the base branch is the
+solo developer's normal case, not an error) and follows the adapter end to
+end. The branch gate and repository-landing pipeline below apply ONLY to
+repository-landing asks, including on Apple repos.
 
 ## Step 1: Pre-flight
 
