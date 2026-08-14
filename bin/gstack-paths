@@ -55,6 +55,12 @@ elif [ -n "${TMP:-}" ]; then
 else
   _tmp_root=".gstack/tmp"
 fi
+# macOS exports TMPDIR with a trailing slash; mktemp templates built as
+# "$TMP_ROOT/name-XXXXXX" would then carry "//", and any consumer comparing
+# paths gets a spurious mismatch. Strip it (never strips a bare "/"). #2091
+case "$_tmp_root" in
+  */) [ "$_tmp_root" != "/" ] && _tmp_root="${_tmp_root%/}" ;;
+esac
 
 # Best-effort mkdir; if it fails (read-only fs, permission denied), the caller
 # will discover that on their own write attempt. Don't fail the eval here.
