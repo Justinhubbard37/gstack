@@ -324,3 +324,33 @@ describe("base resolution when the default branch is neither main nor master", (
     expect(stderr).toContain("aws.access_key");
   });
 });
+
+describe("diff-extraction bypasses (#2498, minimal reimplementation)", () => {
+  test("a diff.external driver cannot blank the scanned diff", () => {
+    // With diff.external set, plain `git diff` emits the driver's output —
+    // typically zero '+' lines — so an unhardened scanner reads an empty diff
+    // and allows a push full of secrets. --no-ext-diff must neutralize it.
+    const head = commit("leak.txt", "AKIA1234567890ABCDEF\n", "secret behind ext driver");
+    git(["config", "diff.external", "/usr/bin/true"]);
+    const { code, stderr } = runHook(`refs/heads/feat ${head} refs/heads/feat ${ZERO}\n`);
+    git(["config", "--unset", "diff.external"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("aws.access_key");
+  });
+
+  test("an added content line starting with ++ is still scanned", () => {
+    // Content "++AKIA…" renders in the diff as "+++AKIA…", which a blanket
+    // startsWith('+++') header skip silently dropped from the scan.
+    const head = commit("notes.txt", "++AKIA1234567890ABCDEF\n", "content line looks like a header");
+    const { code, stderr } = runHook(`refs/heads/feat ${head} refs/heads/feat ${ZERO}\n`);
+    expect(code).toBe(1);
+    expect(stderr).toContain("aws.access_key");
+  });
+
+  test("an unparseable pre-push ref line fails closed", () => {
+    commit("ok.txt", "clean\n", "clean commit");
+    const { code, stderr } = runHook(`refs/heads/feat not-a-sha\n`);
+    expect(code).toBe(1);
+    expect(stderr).toContain("could not parse");
+  });
+});
