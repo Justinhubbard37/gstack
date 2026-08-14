@@ -63,6 +63,39 @@ describe("gstack-decision-log", () => {
     const r = log("not json", true);
     expect(r.code).toBe(1);
   });
+  test("--supersede with a replacement body records the replacement, linked to the old id", () => {
+    const id = log('{"decision":"old-call","scope":"repo","source":"user"}').out;
+    const out = logFlag(
+      `--supersede ${id} '{"decision":"new-call","rationale":"better","scope":"repo","source":"user"}'`,
+    );
+    expect(out).toContain(id);
+    expect(search()).toContain("new-call"); // the replacement is NOT silently dropped
+    expect(search()).not.toContain("old-call");
+    const arr = JSON.parse(search("--json"));
+    expect(arr.find((d: any) => d.decision === "new-call")?.supersedes).toBe(id);
+  });
+  test("--supersede with an INVALID replacement persists nothing (old stays active)", () => {
+    const id = log('{"decision":"keep-me","scope":"repo","source":"user"}').out;
+    let code = 0;
+    try {
+      logFlag(`--supersede ${id} '{"decision":""}'`);
+    } catch (e: any) {
+      code = e.status || 1;
+    }
+    expect(code).toBe(1);
+    expect(search()).toContain("keep-me"); // not retired by a failed replacement
+  });
+  test("--redact refuses a replacement body instead of dropping it", () => {
+    const id = log('{"decision":"redact-target","scope":"repo","source":"user"}').out;
+    let code = 0;
+    try {
+      logFlag(`--redact ${id} '{"decision":"would-be-lost","scope":"repo","source":"user"}'`);
+    } catch (e: any) {
+      code = e.status || 1;
+    }
+    expect(code).toBe(1);
+    expect(search()).toContain("redact-target"); // nothing happened at all
+  });
 });
 
 describe("gstack-decision-search", () => {
