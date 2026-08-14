@@ -14,7 +14,7 @@ import * as path from 'path';
 import { spawn as nodeSpawn } from 'child_process';
 import { safeUnlink, safeUnlinkQuiet, safeKill, isProcessAlive } from './error-handling';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
-import { resolveConfig, ensureStateDir, readVersionHash } from './config';
+import { resolveConfig, ensureStateDir, readVersionHash, isPairAgentEnabled } from './config';
 import { parseProxyConfig, computeConfigHash, ProxyConfigError } from './proxy-config';
 import { redactProxyUrl } from './proxy-redact';
 import { spawnTerminalAgent } from './terminal-agent-control';
@@ -898,8 +898,12 @@ async function handlePairAgent(state: ServerState, args: string[]): Promise<void
   if (pairData.tunnel_url) {
     serverUrl = pairData.tunnel_url;
   } else if (!localHost) {
-    // No tunnel active. Check if ngrok is available and auto-start.
-    const ngrokAvailable = isNgrokAvailable();
+    // No tunnel active. Remote tunneling (pair-agent) is opt-in — never
+    // auto-start it unless the user explicitly enabled it, even if ngrok is
+    // installed and authed. First use goes through the /pair-agent skill's
+    // consent question, which sets the key.
+    const pairEnabled = isPairAgentEnabled();
+    const ngrokAvailable = pairEnabled && isNgrokAvailable();
     if (ngrokAvailable) {
       console.log('[browse] ngrok detected. Starting tunnel...');
       try {

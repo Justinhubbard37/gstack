@@ -166,6 +166,41 @@ export function resolveGstackHome(): string {
 }
 
 /**
+ * Is the remote pair-agent (ngrok tunnel) surface opt-in enabled?
+ *
+ * Fail-closed: the tunnel exposes the local browser to the internet, so it
+ * stays OFF unless the user explicitly ran `gstack-config set pair_agent on`
+ * (the /pair-agent skill asks once on first use and sets it). Any read/parse
+ * failure (missing config, malformed JSON) also resolves OFF. The tunnel
+ * egress receipts cite this gate as their consent — it must exist and gate
+ * every activation point (#B6, fork port wave 2).
+ *
+ * Env override `GSTACK_PAIR_AGENT=on|off` wins (used by tests and as an
+ * emergency knob), mirroring the telemetry env-hint convention.
+ */
+export function isPairAgentEnabled(): boolean {
+  const env = process.env.GSTACK_PAIR_AGENT;
+  if (env === 'on') return true;
+  if (env === 'off') return false;
+  const home = resolveGstackHome();
+  // Canonical store: ~/.gstack/config.yaml (flat `key: value` lines, written
+  // by bin/gstack-config — which is what the /pair-agent consent step runs).
+  // The fork read config.json; porting that verbatim would have made the gate
+  // silently un-enableable on main. JSON kept as a fallback shape only.
+  try {
+    const yaml = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8');
+    const m = yaml.match(/^\s*pair_agent\s*:\s*['"]?(on|off)['"]?\s*(?:#.*)?$/m);
+    if (m) return m[1] === 'on';
+  } catch { /* fall through */ }
+  try {
+    const raw = fs.readFileSync(path.join(home, 'config.json'), 'utf-8');
+    return JSON.parse(raw)?.pair_agent === 'on';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the Chromium profile directory.
  *
  * Resolution order:

@@ -36,7 +36,7 @@ import {
   isRootToken, checkConnectRateLimit, type TokenInfo,
 } from './token-registry';
 import { validateTempPath } from './path-security';
-import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks } from './config';
+import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks, isPairAgentEnabled } from './config';
 import { emitActivity, subscribe, getActivityAfter, getActivityHistory, getSubscriberCount } from './activity';
 import { createSseEndpoint } from './sse-helpers';
 import { initAuditLog, writeAuditEntry } from './audit';
@@ -2369,6 +2369,14 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             status: 403, headers: { 'Content-Type': 'application/json' },
           });
         }
+        if (!isPairAgentEnabled()) {
+          // Consent-on-first-use: the /pair-agent skill asks once and sets the
+          // key; a direct API caller gets the same hint instead of a tunnel.
+          return new Response(JSON.stringify({
+            error: 'pair-agent is off (tunnel exposes this browser beyond the machine)',
+            hint: 'enable once with: gstack-config set pair_agent on — or run /pair-agent, which asks for consent and sets it',
+          }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
         if (tunnelActive && tunnelUrl && tunnelServer) {
           // Verify tunnel is still alive before returning cached URL.
           // Probe GET /connect (the only unauth-reachable path on the tunnel
@@ -2433,7 +2441,7 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
             bytes: 0,
             sha256: null,
-            consent: 'pair_agent=on',
+            consent: 'pair_agent=on (isPairAgentEnabled gate at /tunnel/start)',
           });
 
           tunnelListener = await ngrok.forward(forwardOpts);
@@ -3125,7 +3133,9 @@ export async function start() {
   // Start ngrok tunnel if BROWSE_TUNNEL=1 is set.  Uses the dual-listener
   // pattern: bind a dedicated tunnel listener on an ephemeral port and
   // point ngrok.forward() at IT, not the local daemon port.
-  if (process.env.BROWSE_TUNNEL === '1') {
+  if (process.env.BROWSE_TUNNEL === '1' && !isPairAgentEnabled()) {
+    console.error('[browse] BROWSE_TUNNEL=1 ignored: pair-agent is off. Enable once with: gstack-config set pair_agent on');
+  } else if (process.env.BROWSE_TUNNEL === '1') {
     const authtoken = resolveNgrokAuthtoken();
     if (!authtoken) {
       console.error('[browse] BROWSE_TUNNEL=1 but no NGROK_AUTHTOKEN found. Set it via env var or ~/.gstack/ngrok.env');
@@ -3153,7 +3163,7 @@ export async function start() {
           payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
           bytes: 0,
           sha256: null,
-          consent: 'pair_agent=on (BROWSE_TUNNEL=1)',
+          consent: 'pair_agent=on (isPairAgentEnabled gate, BROWSE_TUNNEL=1)',
         });
 
         tunnelListener = await ngrok.forward(forwardOpts);
