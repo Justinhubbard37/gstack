@@ -150,7 +150,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-plan-ceo-review-section-loading.test.ts',
-    maxSkeletonBytes: 90_000,
+        // Fork port wave 2 (#703): the repo-doc-preference block in the design
+    // check grew every plan-review skeleton ~0.7KB. Measured values noted.
+    maxSkeletonBytes: 92_000, // measured 90,897
     minUnionBytes: 80_000,
     mustContain: ['SCOPE EXPANSION', 'SELECTIVE EXPANSION', 'HOLD SCOPE', 'SCOPE REDUCTION'],
     // Default-on Codex outside-voice (codexPreflight block + CODEX_MODE branch
@@ -171,7 +173,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     behavioral: 'plan',
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
     // +~1 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
-    maxSkeletonBytes: 68_000,
+        // Fork port wave 2 (#703): the repo-doc-preference block in the design
+    // check grew every plan-review skeleton ~0.7KB. Measured values noted.
+    maxSkeletonBytes: 70_000, // measured 68,780
     minUnionBytes: 70_000,
     mustContain: ['Architecture', 'Code Quality', 'Test', 'Performance'],
     // Cross-cutting preamble growth (v1.57.2.0 AUQ-failure prose fallback + the
@@ -182,7 +186,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // 1.08 → 1.10: the scope-gate exceptions block (+ its adversarial-review
     // hardening: host-anchored mode signal, precedence, passing-mention
     // guards) and the plan-mode preamble reword land the union at 1.092.
-    maxSizeRatio: 1.10,
+    maxSizeRatio: 1.12, // measured 1.103
   },
   'plan-design-review': {
     skill: 'plan-design-review',
@@ -220,7 +224,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // +Conductor AUQ-default-prose rule + one-way/destructive prose safety +
     // continuation protocol in the always-loaded AskUserQuestion Format section.
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble.
-    maxSkeletonBytes: 80_000,
+        // Fork port wave 2 (#703): the repo-doc-preference block in the design
+    // check grew every plan-review skeleton ~0.7KB. Measured values noted.
+    maxSkeletonBytes: 82_000, // measured 80,493
     minUnionBytes: 70_000,
     mustContain: ['developer experience', 'Getting Started'],
     // Default-on Codex outside-voice (codexPreflight block + CODEX_MODE branch
@@ -245,11 +251,12 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // plus the P1 office-hours closing handoff (AUQ that launches the next skill).
     // Fork port wave 2: the third-party web-actions contract sits inline
     // (judgment must be visible before the workflow directs the user to a
-    // vendor site) — skeleton 99,780 / ratio 1.079 measured. Tight headroom.
+    // vendor site), plus the #703 dual-write + repo-doc-preference block —
+    // ratio 1.092 measured. Tight headroom.
     maxSkeletonBytes: 101_000,
     minUnionBytes: 70_000,
     mustContain: ['design doc', 'problem statement'],
-    maxSizeRatio: 1.09,
+    maxSizeRatio: 1.10,
   },
   'document-release': {
     skill: 'document-release',
