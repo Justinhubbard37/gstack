@@ -103,6 +103,35 @@ export function installChildSignalForwarding(
   };
 }
 
+/**
+ * SIGKILL the shard's whole process group. Orphaned grandchildren (browsers,
+ * claude sessions) are how a stalled run once burned a core for 15.7 hours.
+ */
+export function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform === 'win32' || typeof child.pid !== 'number') {
+    child.kill(signal);
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return; // group already gone
+    if (code !== 'EPERM') throw err;
+    // Observed on macOS after a SIGKILLed group is reaped: signalling the
+    // now-empty group id returns EPERM, not ESRCH. Throwing here loses the
+    // shard's real outcome (a timeout gets recorded as a failure) and, from
+    // the timeout timer, leaves the shard promise unsettled — a hang, which
+    // is the exact failure class this runner exists to kill. Fall back to the
+    // direct pid so a genuinely-live child is still signalled.
+    try {
+      child.kill(signal);
+    } catch {
+      // Best-effort reap: nothing actionable is left if this fails too.
+    }
+  }
+}
+
 export function classifyBunTestOutputLine(rawLine: string): BunTestOutputFinding | null {
   const line = rawLine.replace(ANSI_ESCAPE, '').replace(/\r$/, '');
   if (BUN_FAIL_RESULT.test(line)) return 'failed-test';

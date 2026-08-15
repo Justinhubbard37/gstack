@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * test-free-shards — enumerate, shard, and curate the free test suite.
+ * test-free-shards — enumerate, shard, curate, and run the free test suite.
  *
- * Three jobs:
+ * Four jobs:
  *   1. Enumeration. Walk `browse/test/`, `test/`, `make-pdf/test/` and return
  *      every `*.test.{ts,tsx,js,jsx,mjs,cjs}` that isn't a paid-eval test.
  *   2. Sharding. Stable-hash assign each test to one of N shards. Used by CI
@@ -11,28 +11,70 @@
  *      patterns (`/bin/bash`, `sh -c`, raw `/tmp/`, `chmod`, `xargs`). Files
  *      that match are excluded from the Windows-safe subset — they would fail
  *      on `windows-latest` no matter how the runner shards them.
+ *   4. Execution. Spawn `bun test` children and refuse to trust their exit
+ *      code alone: every byte of output is classified through
+ *      scripts/test-strict-output.ts, so a child that exits 0 without bun's
+ *      terminal summary (a mid-suite process.exit truncation), with `(fail)`
+ *      result lines, or with fewer files run than planned is a FAILURE. An
+ *      external wall-clock timeout SIGKILLs the child's process group and
+ *      reports the shard as timed-out — distinct from failed.
+ *
+ * Execution strategy (decision ledger V3/D6 — evaluate the Bun built-in
+ * first; probed 2026-08 on Bun 1.3.13):
+ *   - Full-suite runs (`bun test` via package.json, `bun run test:free`) use
+ *     ONE child invocation with `--parallel`. Probes on real test files
+ *     showed --parallel (a) prints the standard `Ran N tests across M files`
+ *     terminal summary, (b) exits non-zero when any file fails, (c) runs each
+ *     file in its own worker process (distinct pids, no shared globals), and
+ *     (d) converts a mid-suite process.exit(0) — which silently truncates a
+ *     serial run at exit 0 — into a per-file `(crashed: exited)` failure with
+ *     a complete summary and exit 1. Strictly SAFER than the serial path and
+ *     ~2x faster on a 6-file probe (0.22s -> 0.11s wall, 280% CPU); the win
+ *     grows with suite size since the serial suite measured 454s.
+ *   - CI-matrix runs (`--shards M --shard i`) keep the hash-partitioned
+ *     one-child-per-shard path. Cross-runner partitioning must be
+ *     deterministic and per-file stable, so bun's own `--shard=M/N`
+ *     (round-robin over sorted paths — every assignment shifts when a file
+ *     lands) is not used, and there are no static per-file weight lists.
+ *     Shard indices are STABLE: assignFilesToShards never renumbers on
+ *     occupancy, and an empty shard is a fast no-op success.
  *
  * Adapted from the McGluut/gstack fork's test-free-shards.ts (190 LOC). The
  * Windows-safe filter is upstream-original — codex flagged that sharding alone
  * doesn't fix POSIX-bound tests, so we curate the subset that actually runs
  * on the windows-latest CI job.
  *
+ * Exit codes: 0 pass, 1 fail, 124 wall-clock timeout.
+ *
  * Usage:
- *   bun run scripts/test-free-shards.ts --list                    # show all
- *   bun run scripts/test-free-shards.ts --windows-only --list     # show curated
- *   bun run scripts/test-free-shards.ts --windows-only            # run curated
- *   bun run scripts/test-free-shards.ts --shards 4 --shard 1      # one shard
+ *   bun run scripts/test-free-shards.ts                            # full suite, one --parallel child
+ *   bun run scripts/test-free-shards.ts --list                     # show all
+ *   bun run scripts/test-free-shards.ts --windows-only --list      # show curated
+ *   bun run scripts/test-free-shards.ts --windows-only             # run curated
+ *   bun run scripts/test-free-shards.ts --shards 4 --shard 1       # one shard (CI matrix)
+ *   bun run scripts/test-free-shards.ts --wall-timeout 600         # override the kill deadline
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { isPaidTestFile } from '../test/helpers/paid-test-set';
+import {
+  BunTestOutputClassifier,
+  exactTestFileSelectors,
+  forwardAndClassify,
+  installChildSignalForwarding,
+  killProcessGroup,
+  strictTestExitCode,
+} from './test-strict-output';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 // design/test was silently absent from BOTH the package.json test script and
 // this list — design tests (including a teardown bomb) never ran in any CI
-// or local free run. Keep the two lists in sync.
+// or local free run. Keep the two lists in sync. This list is the single
+// source of truth for free-suite roots: package.json's `test` script routes
+// through this runner rather than passing its own directory globs.
 const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test', 'design/test'] as const;
 const TEST_FILE_REGEX = /\.test\.(?:[cm]?[jt]s|tsx|jsx)$/;
 
@@ -128,7 +170,15 @@ const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
 ];
 
 export const DEFAULT_SHARD_COUNT = 20;
-export const FREE_TEST_TIMEOUT_MS = 10_000;
+// Per-test timeout passed to `bun test --timeout`. 30s matches what
+// package.json's `test` script used before it was repointed at this runner —
+// the runner is now the single owner of that semantic.
+export const FREE_TEST_TIMEOUT_MS = 30_000;
+// External wall-clock deadline per spawned child (whole shard or the single
+// full-suite --parallel invocation). A wedged child — a spinning main thread
+// no in-process --timeout timer can interrupt — is SIGKILLed at the group
+// level and reported 'timed-out', distinct from 'failed'.
+export const DEFAULT_WALL_TIMEOUT_MS = 15 * 60_000;
 
 export function normalizeRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
@@ -227,6 +277,15 @@ export function stableHash(input: string): number {
   return hash >>> 0;
 }
 
+/**
+ * Hash-partition files across EXACTLY shardCount shards. Empty shards are
+ * preserved: a file's shard index is a pure function of its own path and the
+ * shard count, never of which other files happen to exist. A CI matrix keys
+ * runners off the index, so filtering empty shards (the old behavior) would
+ * renumber every later shard whenever occupancy shifted — runner 3 silently
+ * running shard 4's files. An empty shard is instead a fast no-op success at
+ * run time.
+ */
 export function assignFilesToShards(files: string[], shardCount: number): string[][] {
   if (!Number.isInteger(shardCount) || shardCount <= 0) {
     throw new Error(`Shard count must be a positive integer. Received: ${shardCount}`);
@@ -238,13 +297,24 @@ export function assignFilesToShards(files: string[], shardCount: number): string
     shards[shardIndex].push(file);
   }
 
-  return shards
-    .map(filesInShard => filesInShard.sort())
-    .filter(filesInShard => filesInShard.length > 0);
+  return shards.map(filesInShard => filesInShard.sort());
 }
 
-export function buildShardArgs(files: string[]): string[] {
-  return ['test', ...files, '--max-concurrency=1', `--timeout=${FREE_TEST_TIMEOUT_MS}`];
+export interface BuildShardArgsOptions {
+  /** Run test files in parallel worker processes (bun 1.3.13+, implies --isolate). */
+  parallel?: boolean;
+  rootDir?: string;
+}
+
+export function buildShardArgs(files: string[], options: BuildShardArgsOptions = {}): string[] {
+  // Exact absolute selectors: bun treats positional test paths as substring
+  // filters, so a relative `test/x.test.ts` would ALSO select
+  // `browse/test/x.test.ts` — shard bleed that double-runs files.
+  const selectors = exactTestFileSelectors(files, options.rootDir ?? ROOT);
+  const args = ['test', ...selectors, `--timeout=${FREE_TEST_TIMEOUT_MS}`];
+  if (options.parallel) args.push('--parallel');
+  else args.push('--max-concurrency=1');
+  return args;
 }
 
 type CliOptions = {
@@ -253,6 +323,7 @@ type CliOptions = {
   windowsOnly: boolean;
   shardCount: number;
   shardIndex: number | null;
+  wallTimeoutMs: number;
 };
 
 function parseCliOptions(argv: string[]): CliOptions {
@@ -261,6 +332,7 @@ function parseCliOptions(argv: string[]): CliOptions {
   let windowsOnly = false;
   let shardCount = DEFAULT_SHARD_COUNT;
   let shardIndex: number | null = null;
+  let wallTimeoutMs = DEFAULT_WALL_TIMEOUT_MS;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -281,10 +353,17 @@ function parseCliOptions(argv: string[]): CliOptions {
       index += 1;
       continue;
     }
+    if (arg === '--wall-timeout') {
+      const value = Number.parseInt(argv[index + 1] ?? '', 10);
+      if (!Number.isInteger(value) || value <= 0) throw new Error('--wall-timeout needs a positive integer (seconds)');
+      wallTimeoutMs = value * 1000;
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { dryRun, listOnly, windowsOnly, shardCount, shardIndex };
+  return { dryRun, listOnly, windowsOnly, shardCount, shardIndex, wallTimeoutMs };
 }
 
 function formatShardSummary(shards: string[][]): string[] {
@@ -301,40 +380,200 @@ function formatShardSummary(shards: string[][]): string[] {
  * summary AND hands back whatever code the caller passed — historically 0,
  * which made a truncated shard indistinguishable from a green one. Exit code
  * alone is therefore not evidence of completion; the summary line is.
- * (Fault-injection coverage: test/exit-propagation.test.ts.)
+ *
+ * The runner itself now enforces this (and more) through
+ * scripts/test-strict-output.ts inside runFreeShard; this predicate remains
+ * the minimal documented primitive that test/exit-propagation.test.ts drives
+ * with genuine truncated and genuine complete bun runs.
  */
 export function shardRunLooksTruncated(status: number | null, output: string): boolean {
   if (status !== 0) return false; // already failing — not the silent case
   return !/Ran \d+ tests? across \d+ files?/.test(output);
 }
 
-function runShard(files: string[], shardNumber: number, totalShards: number): number {
-  const header = `[test:free] shard ${shardNumber}/${totalShards} (${files.length} files)`;
-  console.log(header);
-  const result = spawnSync(process.execPath, buildShardArgs(files), {
-    cwd: ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    env: process.env,
-  });
-  // Preserve the inherit-style UX: replay the shard's output.
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-  const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-  if (shardRunLooksTruncated(result.status, combined)) {
-    console.error(
-      `${header} exited 0 WITHOUT bun's final summary — the run was truncated ` +
-        '(a process.exit fired mid-suite). Treating as FAILED.',
-    );
-    return 1;
-  }
-  if (result.status !== 0) {
-    console.error(`${header} failed with exit code ${result.status ?? 1}`);
-  }
-  return result.status ?? 1;
+export type FreeShardStatus = 'passed' | 'failed' | 'timed-out';
+
+export interface FreeShardOutcome {
+  shard: number;
+  files: string[];
+  status: FreeShardStatus;
+  exitCode: number | null;
+  elapsedMs: number;
+  groupPid: number | null;
 }
 
-function main(): number {
+export interface ShardCommand {
+  command: string;
+  args: string[];
+}
+
+export interface RunFreeShardOptions {
+  /** External wall-clock deadline; on expiry the child's process GROUP is SIGKILLed. */
+  wallTimeoutMs?: number;
+  rootDir?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Full-suite mode: single bun invocation with --parallel (per-file worker isolation). */
+  parallel?: boolean;
+  /** Override the spawned command. Tests inject fake pass/fail/slow commands. */
+  commandFor?: (files: string[]) => ShardCommand;
+  /** Suppress forwarding child output to parent stdio (tests). Classification still sees every byte. */
+  quiet?: boolean;
+  log?: (line: string) => void;
+}
+
+const EPILOGUE_WORD: Record<FreeShardStatus, string> = {
+  passed: 'pass',
+  failed: 'fail',
+  'timed-out': 'timed-out',
+};
+
+/** One line per shard, printed after the run: `[test:free] shard i/N: M files, XXs, pass|fail|timed-out`. */
+function shardEpilogue(outcome: FreeShardOutcome, totalShards: number): string {
+  return `[test:free] shard ${outcome.shard}/${totalShards}: ${outcome.files.length} files, `
+    + `${Math.round(outcome.elapsedMs / 1000)}s, ${EPILOGUE_WORD[outcome.status]}`;
+}
+
+/**
+ * Run one shard (or the whole suite, in --parallel full-suite mode) in its own
+ * bun process and classify the result strictly.
+ *
+ * Verdict integrity: the child's exit code is never trusted alone. Output is
+ * fed through BunTestOutputClassifier, and strictTestExitCode requires bun's
+ * terminal summary to report EXACTLY the planned file count — a shard that
+ * exits 0 without the summary (mid-suite process.exit truncation), with
+ * `(fail)` result lines, or having run fewer files than planned is a FAILURE.
+ * This is enforced for injected fake commands too (unlike the paid runner),
+ * so tests can pin the summary-missing => failure backstop; fake passing
+ * commands must print a synthetic `Ran N tests across M files. [Xms]` line.
+ *
+ * Per-shard state isolation: each spawned child gets its own throwaway
+ * GSTACK_HOME and TMPDIR (TEMP/TMP on Windows) so shards — and the bun
+ * --parallel workers inside the full-suite invocation — can't contend on the
+ * operator's real ~/.gstack or trip over each other's temp files. Tests that
+ * mkdtemp their own state dirs are unaffected: this only moves the DEFAULT
+ * location. The throwaway dirs are removed when the shard finishes.
+ */
+export async function runFreeShard(
+  files: string[],
+  shardNumber: number,
+  totalShards: number,
+  options: RunFreeShardOptions = {},
+): Promise<FreeShardOutcome> {
+  const log = options.log ?? ((line: string) => console.log(line));
+  const label = `[test:free] shard ${shardNumber}/${totalShards}`;
+
+  // Empty shard = fast no-op SUCCESS. Indices are stable for the CI matrix,
+  // so an unoccupied index must not fail or shift work to a different runner.
+  if (files.length === 0) {
+    const outcome: FreeShardOutcome = {
+      shard: shardNumber, files: [], status: 'passed', exitCode: 0, elapsedMs: 0, groupPid: null,
+    };
+    log(shardEpilogue(outcome, totalShards));
+    return outcome;
+  }
+
+  const rootDir = options.rootDir ?? ROOT;
+  const wallTimeoutMs = options.wallTimeoutMs ?? DEFAULT_WALL_TIMEOUT_MS;
+  log(`${label} (${files.length} files${options.parallel ? ', bun --parallel' : ''})`);
+
+  const { command, args } = options.commandFor
+    ? options.commandFor(files)
+    : { command: process.execPath, args: buildShardArgs(files, { parallel: options.parallel, rootDir }) };
+
+  const env = { ...(options.env ?? process.env) };
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-free-shard-'));
+  const gstackHome = path.join(stateDir, 'gstack-home');
+  const childTmp = path.join(stateDir, 'tmp');
+  fs.mkdirSync(gstackHome);
+  fs.mkdirSync(childTmp);
+  env.GSTACK_HOME = gstackHome;
+  env.TMPDIR = childTmp;
+  env.TEMP = childTmp;
+  env.TMP = childTmp;
+
+  const startedAt = Date.now();
+  const child = spawn(command, args, {
+    cwd: rootDir,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+    windowsHide: true,
+  });
+  const groupPid = child.pid ?? null;
+  // Group-kill on parent SIGINT/SIGTERM too, not just on timeout.
+  const forwarding = installChildSignalForwarding({
+    kill: (signal?: NodeJS.Signals | number) => {
+      killProcessGroup(child, (signal as NodeJS.Signals) ?? 'SIGTERM');
+      return true;
+    },
+  });
+
+  const classifier = new BunTestOutputClassifier();
+  const devNull = { write: () => true } as unknown as NodeJS.WriteStream;
+
+  let timedOut = false;
+  const killTimer = setTimeout(() => {
+    timedOut = true;
+    killProcessGroup(child, 'SIGKILL');
+  }, wallTimeoutMs);
+
+  let exitCode: number | null = null;
+  try {
+    const streams: Array<Promise<void>> = [];
+    if (child.stdout) streams.push(forwardAndClassify(child.stdout, options.quiet ? devNull : process.stdout, classifier));
+    if (child.stderr) streams.push(forwardAndClassify(child.stderr, options.quiet ? devNull : process.stderr, classifier));
+    exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => resolve(code));
+    });
+    await Promise.all(streams);
+  } finally {
+    clearTimeout(killTimer);
+    forwarding.dispose();
+    // Reap survivors of this shard even on the clean path.
+    killProcessGroup(child, 'SIGKILL');
+    try {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup of a throwaway temp dir — a locked file on
+      // Windows must not turn a real verdict into an exception.
+    }
+  }
+
+  const summary = classifier.end();
+  const status: FreeShardStatus = timedOut
+    ? 'timed-out'
+    : strictTestExitCode(exitCode ?? 1, summary, files.length) === 0 ? 'passed' : 'failed';
+
+  if (status === 'timed-out') {
+    console.error(
+      `${label} exceeded the ${Math.round(wallTimeoutMs / 1000)}s wall-clock deadline — `
+      + 'killed the process group. Reporting as TIMED-OUT (distinct from failed).',
+    );
+  } else if (status === 'failed' && (exitCode ?? 1) === 0) {
+    const reason = summary.failedTests > 0 || summary.unhandledBetweenTests > 0
+      ? `printed ${summary.failedTests} failing result(s) and ${summary.unhandledBetweenTests} unhandled error(s) between tests`
+      : summary.terminalFileCounts.length === 0
+        ? "never printed bun's terminal summary — the run was truncated (a process.exit fired mid-suite)"
+        : `bun's summary reported ${summary.terminalFileCounts.join(', ')} file(s), expected ${files.length}`;
+    console.error(`${label} exited 0 but ${reason}. Treating as FAILED.`);
+  } else if (status === 'failed') {
+    console.error(`${label} failed with exit code ${exitCode ?? 'signal'}`);
+  }
+
+  const outcome: FreeShardOutcome = {
+    shard: shardNumber, files, status, exitCode, elapsedMs: Date.now() - startedAt, groupPid,
+  };
+  log(shardEpilogue(outcome, totalShards));
+  return outcome;
+}
+
+function exitCodeFor(status: FreeShardStatus): number {
+  if (status === 'passed') return 0;
+  return status === 'timed-out' ? 124 : 1;
+}
+
+async function main(): Promise<number> {
   const options = parseCliOptions(process.argv.slice(2));
   const allFiles = collectFreeTestFiles();
   if (allFiles.length === 0) {
@@ -361,28 +600,46 @@ function main(): number {
     return 0;
   }
 
-  const shards = assignFilesToShards(files, options.shardCount);
   if (options.dryRun) {
-    console.log(`\nWould run ${files.length} files across ${shards.length} shards.`);
+    const shards = assignFilesToShards(files, options.shardCount);
+    const occupied = shards.filter((s) => s.length > 0).length;
+    console.log(
+      `\nWould run ${files.length} files across ${shards.length} shards (${occupied} occupied). `
+      + 'Without --shard, the full suite runs as ONE bun --parallel invocation instead.',
+    );
     for (const line of formatShardSummary(shards)) console.log(line);
     return 0;
   }
 
   if (options.shardIndex !== null) {
-    if (!Number.isInteger(options.shardIndex) || options.shardIndex < 1 || options.shardIndex > shards.length) {
-      throw new Error(`--shard must be between 1 and ${shards.length}. Received: ${options.shardIndex}`);
+    // Bounds-check against the REQUESTED shard count, not post-assignment
+    // occupancy — indices must be stable for a CI matrix, and an empty shard
+    // is a valid fast no-op.
+    if (!Number.isInteger(options.shardIndex) || options.shardIndex < 1 || options.shardIndex > options.shardCount) {
+      throw new Error(`--shard must be between 1 and ${options.shardCount}. Received: ${options.shardIndex}`);
     }
-    return runShard(shards[options.shardIndex - 1], options.shardIndex, shards.length);
+    const shards = assignFilesToShards(files, options.shardCount);
+    const outcome = await runFreeShard(shards[options.shardIndex - 1], options.shardIndex, options.shardCount, {
+      wallTimeoutMs: options.wallTimeoutMs,
+    });
+    return exitCodeFor(outcome.status);
   }
 
-  for (let index = 0; index < shards.length; index += 1) {
-    const exitCode = runShard(shards[index], index + 1, shards.length);
-    if (exitCode !== 0) return exitCode;
-  }
-
-  return 0;
+  // Full-suite mode: one bun invocation, files parallelized across per-file
+  // worker processes. See the header for the probe results that picked this
+  // over N spawned shard processes.
+  const outcome = await runFreeShard(files, 1, 1, {
+    parallel: true,
+    wallTimeoutMs: options.wallTimeoutMs,
+  });
+  return exitCodeFor(outcome.status);
 }
 
 if (import.meta.main) {
-  process.exitCode = main();
+  try {
+    process.exitCode = await main();
+  } catch (error) {
+    console.error(`[test:free] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
 }
