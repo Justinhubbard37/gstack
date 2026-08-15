@@ -253,15 +253,18 @@ describe('test-free-shards: strict shard execution', () => {
     expect(lines.some((l) => /^\[test:free\] shard 7\/20: 0 files, 0s, pass$/.test(l))).toBe(true);
   });
 
-  test('each spawned shard gets its own throwaway GSTACK_HOME and TMPDIR, removed after the run', async () => {
+  test('spawned shard gets throwaway TMPDIR but NEVER an injected GSTACK_HOME', async () => {
+    // GSTACK_HOME injection was tried and reverted: one shared scratch home
+    // per invocation made 6,900 tests share MUTABLE state — config tests
+    // wrote keys that relink/update-check tests then read (12 measured
+    // cross-contamination failures). This pin keeps the regression out.
     const captureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-shard-env-'));
     const dump = path.join(captureDir, 'env.json');
     try {
       const script =
         `const fs = require("fs");`
         + `fs.writeFileSync(${JSON.stringify(dump)}, JSON.stringify({`
-        + `  home: process.env.GSTACK_HOME, tmp: process.env.TMPDIR,`
-        + `  homeExists: fs.existsSync(process.env.GSTACK_HOME || ""),`
+        + `  home: process.env.GSTACK_HOME ?? null, tmp: process.env.TMPDIR,`
         + `  tmpExists: fs.existsSync(process.env.TMPDIR || "") }));`
         + `console.log(${JSON.stringify(SUMMARY_1)});`;
       const outcome = await runFreeShard(['env-dump'], 1, 1, {
@@ -271,13 +274,13 @@ describe('test-free-shards: strict shard execution', () => {
       });
       expect(outcome.status).toBe('passed');
       const seen = JSON.parse(fs.readFileSync(dump, 'utf8'));
-      expect(seen.home).toContain('gstack-free-shard-');
-      expect(seen.homeExists).toBe(true);
+      // GSTACK_HOME passes through untouched (whatever the parent had, incl. unset).
+      expect(seen.home).toBe(process.env.GSTACK_HOME ?? null);
+      // TMPDIR is a per-shard throwaway, cleaned up once the shard finishes.
+      expect(seen.tmp).toContain('gstack-free-shard-');
       expect(seen.tmpExists).toBe(true);
-      expect(seen.home).not.toBe(process.env.GSTACK_HOME ?? '');
       expect(seen.tmp).not.toBe(process.env.TMPDIR ?? '');
-      // The throwaway state dir is cleaned up once the shard finishes.
-      expect(fs.existsSync(seen.home)).toBe(false);
+      expect(fs.existsSync(seen.tmp)).toBe(false);
     } finally {
       fs.rmSync(captureDir, { recursive: true, force: true });
     }

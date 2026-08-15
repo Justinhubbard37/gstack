@@ -446,12 +446,14 @@ function shardEpilogue(outcome: FreeShardOutcome, totalShards: number): string {
  * so tests can pin the summary-missing => failure backstop; fake passing
  * commands must print a synthetic `Ran N tests across M files. [Xms]` line.
  *
- * Per-shard state isolation: each spawned child gets its own throwaway
- * GSTACK_HOME and TMPDIR (TEMP/TMP on Windows) so shards — and the bun
- * --parallel workers inside the full-suite invocation — can't contend on the
- * operator's real ~/.gstack or trip over each other's temp files. Tests that
- * mkdtemp their own state dirs are unaffected: this only moves the DEFAULT
- * location. The throwaway dirs are removed when the shard finishes.
+ * Per-shard temp isolation: each spawned child gets its own throwaway TMPDIR
+ * (TEMP/TMP on Windows) so shards can't trip over each other's temp files.
+ * Deliberately NOT GSTACK_HOME: injecting one shared scratch home for a whole
+ * invocation made 6,900 tests share a MUTABLE state dir — config tests wrote
+ * keys into it and relink/update-check tests then read them (measured: 12
+ * cross-contamination failures on the first full run). Tests that need
+ * GSTACK_HOME isolation mkdtemp their own per test — the repo convention —
+ * and the hermetic-env machinery covers E2E children.
  */
 export async function runFreeShard(
   files: string[],
@@ -482,11 +484,8 @@ export async function runFreeShard(
 
   const env = { ...(options.env ?? process.env) };
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-free-shard-'));
-  const gstackHome = path.join(stateDir, 'gstack-home');
   const childTmp = path.join(stateDir, 'tmp');
-  fs.mkdirSync(gstackHome);
   fs.mkdirSync(childTmp);
-  env.GSTACK_HOME = gstackHome;
   env.TMPDIR = childTmp;
   env.TEMP = childTmp;
   env.TMP = childTmp;
