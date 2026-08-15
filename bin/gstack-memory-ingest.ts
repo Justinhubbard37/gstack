@@ -1407,9 +1407,43 @@ export function resolveImportTimeoutMs(
   return n;
 }
 
-function runGbrainImport(
+/**
+ * True when the import failed because the installed gbrain predates
+ * --include-gitignored. gbrain's subcommand --help is generic (no flag list),
+ * so the only reliable probe is the attempt itself.
+ */
+function failedOnUnknownIncludeGitignored(status: number | null, stderr: string): boolean {
+  if (status === 0 || status === null) return false;
+  return /(unknown|unexpected|unrecognized|invalid)[^\n]*--include-gitignored|--include-gitignored[^\n]*(unknown|unexpected|unrecognized|invalid)/i.test(
+    stderr,
+  );
+}
+
+async function runGbrainImport(
   stagingDir: string,
   timeoutMs: number,
+): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+  const first = await runGbrainImportOnce(stagingDir, timeoutMs, true);
+  if (failedOnUnknownIncludeGitignored(first.status, first.stderr)) {
+    // Older gbrain: retry without the flag. If .gitignore then hides the
+    // staged pages, the imported<staged reconciliation guard below refuses
+    // to advance state and names the remedy — loud failure, never silent
+    // loss, and never a hard-block for gbrain versions that don't need the
+    // flag's semantics.
+    console.error(
+      "[memory-ingest] installed gbrain does not support --include-gitignored — " +
+        "retrying without it. If the import then collects 0 files, upgrade gbrain " +
+        "(gstack-gbrain-install) so staged pages inside gitignored dirs are visible.",
+    );
+    return runGbrainImportOnce(stagingDir, timeoutMs, false);
+  }
+  return first;
+}
+
+function runGbrainImportOnce(
+  stagingDir: string,
+  timeoutMs: number,
+  includeGitignored: boolean,
 ): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   installSignalForwarder();
   return new Promise((resolve) => {
@@ -1417,7 +1451,20 @@ function runGbrainImport(
     // inside Next.js / Prisma / Rails projects with their own
     // .env.local (codex review #7 — defense in depth on top of the
     // parent gstack-gbrain-sync seeding the bun grandchild's env).
-    const child = spawnGbrainAsync(["import", stagingDir, "--no-embed", "--json"]);
+    // --include-gitignored is load-bearing, not a convenience. Pages are
+    // staged into ~/.gstack/.staging-ingest-<pid>-<ts>/, and ~/.gstack is a
+    // git repo whose .gitignore is `*`. `gbrain import` honours .gitignore,
+    // so without this flag it collects files=0 and imports NOTHING, while
+    // still reporting `written: N` from the staged count. Silent data loss
+    // on every run. A working run logs `import.collect_files done ... files=N`
+    // with N > 0 and takes minutes, not seconds.
+    const child = spawnGbrainAsync([
+      "import",
+      stagingDir,
+      "--no-embed",
+      ...(includeGitignored ? ["--include-gitignored"] : []),
+      "--json",
+    ]);
     _activeImportChild = child;
     let stdout = "";
     let stderr = "";
@@ -1812,6 +1859,49 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
       staging.stagedPathToSource,
     );
     failed += failedSources.size;
+
+    // Reconcile gbrain's own accounting against what we staged. Without this,
+    // a batch that gbrain never SAW is indistinguishable from a batch that
+    // succeeded: readNewFailures() only reports PER-FILE failures, so when
+    // `gbrain import` collects zero files it writes nothing to
+    // sync-failures.jsonl, failedSources is empty, and every prepared file
+    // gets state-recorded as ingested. The pass then reports "N written"
+    // while the brain gained nothing — and because state now says "done",
+    // no future run retries. Silent, permanent data loss.
+    //
+    // Observed cause: `gbrain import` honours .gitignore, and
+    // `gstack-artifacts-init` writes `.gitignore = "*"` into $GSTACK_HOME.
+    // makeStagingDir() stages under $GSTACK_HOME, so on any machine that has
+    // run artifacts-init, collect_files returns 0 for every batch.
+    //
+    // `skipped` counts content_hash no-ops, which ARE successful landings.
+    const expectedLandings = prep.prepared.length - failedSources.size;
+    const accountedLandings =
+      (importJson.imported ?? 0) + (importJson.skipped ?? 0);
+    if (accountedLandings < expectedLandings) {
+      const collected =
+        importJson.total_files !== undefined
+          ? ` gbrain collected ${importJson.total_files} file(s) from the staging dir.`
+          : "";
+      const msg =
+        `gbrain import accounted for ${accountedLandings} of ${expectedLandings} staged page(s) ` +
+        `(imported=${importJson.imported ?? 0}, unchanged=${importJson.skipped ?? 0}).${collected} ` +
+        `Refusing to advance state — the unaccounted pages would be marked ingested without ` +
+        `landing in the brain. If the count is 0, check whether ${stagingDir} is inside a git ` +
+        `repo that ignores it (gbrain import honours .gitignore).`;
+      console.error(`[memory-ingest] ERR: ${msg}`);
+      failed += prep.prepared.length;
+      return {
+        written: 0,
+        skipped_secret: prep.skippedSecret,
+        skipped_dedup: prep.skippedDedup,
+        skipped_unattributed: prep.skippedUnattributed,
+        failed,
+        duration_ms: Date.now() - t0,
+        partial_pages: prep.partialPages,
+        system_error: msg,
+      };
+    }
 
     // Phase 3: state recording. Only files that landed in gbrain get
     // their mtime+sha256 stamped. Failed source paths are deliberately
