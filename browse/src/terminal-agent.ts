@@ -26,6 +26,7 @@ import * as crypto from 'crypto';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
 import { safeUnlink } from './error-handling';
 import { writeAgentRecord, clearAgentRecord } from './terminal-agent-control';
+import { extractPtyCookie } from './pty-session-cookie';
 
 const STATE_FILE = process.env.BROWSE_STATE_FILE || path.join(process.env.HOME || '/tmp', '.gstack', 'browse.json');
 const PORT_FILE = path.join(path.dirname(STATE_FILE), 'terminal-port');
@@ -609,17 +610,13 @@ function buildServer() {
         }
 
         // Fallback: Cookie gstack_pty (legacy / non-browser callers).
+        // Parsing is shared with the server via extractPtyCookie; VALIDATION
+        // deliberately stays against the agent's own validTokens map — the
+        // server's registry lives in a different process.
         if (!token) {
-          const cookieHeader = req.headers.get('cookie') || '';
-          for (const part of cookieHeader.split(';')) {
-            const [name, ...rest] = part.trim().split('=');
-            if (name === 'gstack_pty') {
-              const candidate = rest.join('=') || null;
-              if (candidate && validTokens.has(candidate)) {
-                token = candidate;
-              }
-              break;
-            }
+          const candidate = extractPtyCookie(req);
+          if (candidate && validTokens.has(candidate)) {
+            token = candidate;
           }
         }
 

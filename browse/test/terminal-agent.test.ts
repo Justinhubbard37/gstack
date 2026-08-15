@@ -121,9 +121,11 @@ describe('Source-level guard: terminal-agent', () => {
   test('validates the session token against an in-memory token set', () => {
     const wsHandler = AGENT_SRC.slice(AGENT_SRC.indexOf("if (url.pathname === '/ws')"));
     // Two transports: Sec-WebSocket-Protocol (preferred for browsers) and
-    // Cookie gstack_pty (fallback). Both verify against validTokens.
+    // the gstack_pty cookie fallback — parsing shared via extractPtyCookie
+    // (the hand-rolled parse here had drifted from the server's), validation
+    // still against the agent's own validTokens map.
     expect(wsHandler).toContain('sec-websocket-protocol');
-    expect(wsHandler).toContain('gstack_pty');
+    expect(wsHandler).toContain('extractPtyCookie');
     expect(wsHandler).toContain('validTokens.has');
   });
 
