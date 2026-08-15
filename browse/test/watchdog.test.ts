@@ -25,8 +25,9 @@ import * as os from 'os';
 // /pair-agent users (server lingers after disconnect).
 //
 // Each test spawns the real server.ts. Tests 1 and 2 verify behavior via
-// stdout log line (fast). Test 3 waits for the watchdog poll cycle to confirm
-// the server REMAINS alive after parent death (slow — ~20s observation window).
+// stdout log line (fast). Test 3 shrinks the watchdog tick to 250ms via
+// BROWSE_WATCHDOG_INTERVAL_MS and waits for the stay-alive log line, then
+// confirms the server survived parent death (~1-2s instead of a 20s sleep).
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const SERVER_SCRIPT = path.join(ROOT, 'src', 'server.ts');
@@ -137,21 +138,26 @@ describe('parent-process watchdog (v0.18.1.0)', () => {
     const parentPid = parentProc.pid!;
 
     // Default headless: no BROWSE_HEADED, real parent PID — watchdog active.
-    serverProc = spawnServer({ BROWSE_PARENT_PID: String(parentPid) }, 34903);
+    // 250ms tick (test-only knob) so this test doesn't wait out the
+    // production 15s interval; the old version blind-slept 22s.
+    serverProc = spawnServer(
+      { BROWSE_PARENT_PID: String(parentPid), BROWSE_WATCHDOG_INTERVAL_MS: '250' },
+      34903,
+    );
     const serverPid = serverProc.pid!;
 
-    // Give the server a moment to start and register the watchdog interval.
-    await Bun.sleep(2000);
+    // Give the server a beat to register the watchdog interval.
+    await Bun.sleep(500);
     expect(isProcessAlive(serverPid)).toBe(true);
 
-    // Kill the parent. The watchdog polls every 15s, so first tick after
-    // parent death lands within ~15s. Pre-#994 the server would shutdown
-    // here. Post-#994 the server logs the parent exit and stays alive.
+    // Kill the parent. Pre-#994 the server would shut down on the next tick.
+    // Post-#994 it logs the parent exit and stays alive — wait for that log
+    // line instead of sleeping past a fixed interval.
     parentProc.kill('SIGKILL');
-
-    // Wait long enough for at least one watchdog tick (15s) plus margin.
-    // Server should still be alive — that's the whole point of #994.
-    await Bun.sleep(20_000);
+    const out = await readStdoutUntil(serverProc, 'server stays alive', 10_000);
+    expect(out).toContain(
+      `Parent process ${parentPid} exited (server stays alive, idle timeout will clean up)`,
+    );
     expect(isProcessAlive(serverPid)).toBe(true);
-  }, 45_000);
+  }, 30_000);
 });

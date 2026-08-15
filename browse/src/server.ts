@@ -696,6 +696,13 @@ const BROWSE_PARENT_PID = parseInt(process.env.BROWSE_PARENT_PID || '0', 10);
 // the closure every 15s. The CLI's connect path sets BROWSE_HEADED=1 + PID=0,
 // so this branch is the normal path for /open-gstack-browser.
 const IS_HEADED_WATCHDOG = process.env.BROWSE_HEADED === '1';
+// Poll interval is env-tunable so the watchdog E2E test can use a ~250ms tick
+// instead of waiting out the production 15s interval (was a 20s blind sleep).
+// Floor of 50ms guards against a typo'd 0 busy-looping the server.
+const WATCHDOG_INTERVAL_MS = (() => {
+  const raw = parseInt(process.env.BROWSE_WATCHDOG_INTERVAL_MS || '', 10);
+  return Number.isFinite(raw) && raw >= 50 ? raw : 15_000;
+})();
 if (BROWSE_PARENT_PID > 0 && !IS_HEADED_WATCHDOG) {
   let parentGone = false;
   setInterval(() => {
@@ -723,7 +730,7 @@ if (BROWSE_PARENT_PID > 0 && !IS_HEADED_WATCHDOG) {
         console.log(`[browse] Parent process ${BROWSE_PARENT_PID} exited (server stays alive, idle timeout will clean up)`);
       }
     }
-  }, 15_000);
+  }, WATCHDOG_INTERVAL_MS);
 } else if (IS_HEADED_WATCHDOG) {
   console.log('[browse] Parent-process watchdog disabled (headed mode)');
 } else if (BROWSE_PARENT_PID === 0) {
