@@ -721,7 +721,7 @@ link_codex_skill_dirs() {
 
   if [ ! -d "$agents_dir" ]; then
     echo "  Generating .agents/ skill docs..."
-    ( cd "$gstack_dir" && bun run gen:skill-docs --host codex )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host codex )
   fi
 
   if [ ! -d "$agents_dir" ]; then
@@ -958,7 +958,7 @@ link_factory_skill_dirs() {
 
   if [ ! -d "$factory_dir" ]; then
     echo "  Generating .factory/ skill docs..."
-    ( cd "$gstack_dir" && bun run gen:skill-docs --host factory )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host factory )
   fi
 
   if [ ! -d "$factory_dir" ]; then
@@ -990,7 +990,7 @@ link_opencode_skill_dirs() {
 
   if [ ! -d "$opencode_dir" ]; then
     echo "  Generating .opencode/ skill docs..."
-    ( cd "$gstack_dir" && bun run gen:skill-docs --host opencode )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host opencode )
   fi
 
   if [ ! -d "$opencode_dir" ]; then
@@ -1372,7 +1372,13 @@ if [ -x "$DETECT_BIN" ]; then
         log "gbrain detected — regenerating Claude SKILL.md with brain-aware blocks (~250 token overhead per planning skill)..."
         (
           cd "$SOURCE_GSTACK_DIR"
-          bun_cmd run gen:skill-docs:user --host claude 2>&1 | tail -3
+          # No pipe before the || guard: `cmd | tail -3` reports TAIL's exit
+          # status, so a generator crash read as success (same masking the
+          # main gen:skill-docs site had). Capture, show the tail, propagate.
+          _GEN_USER_OUT=$(bun_cmd run gen:skill-docs:user --host claude 2>&1)
+          _GEN_USER_RC=$?
+          printf '%s\n' "$_GEN_USER_OUT" | tail -3
+          exit "$_GEN_USER_RC"
         ) || log "  warning: gen:skill-docs:user failed — run 'bun run gen:skill-docs:user' manually if you want brain-aware blocks"
       fi
     else
