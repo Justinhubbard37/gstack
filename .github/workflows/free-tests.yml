@@ -83,6 +83,17 @@ jobs:
             echo "TMPDIR=/home/runner/.cache"
           } >> "$GITHUB_ENV"
 
+      # Several test files exercise real git operations (gstack-artifacts-init,
+      # session-update-autostash, team-mode, brain-sync) and bins that read the
+      # current branch (gstack-decision-search). The container checkout is owned
+      # by a different uid than `runner`, so git needs safe.directory, and
+      # commit-making tests need an identity.
+      - name: Git identity for git-exercising tests
+        run: |
+          git config --global user.email "ci@gstack.invalid"
+          git config --global user.name "gstack CI"
+          git config --global --add safe.directory '*'
+
       # Same restore rationale as evals.yml: recursive copy beats symlink
       # (realpath escapes workspace) and hardlink (cross-device overlay-fs).
       - name: Restore deps
@@ -132,6 +143,7 @@ jobs:
             [browse/test/terminal-agent-integration.test.ts]="real PTY round-trip; container TTY semantics differ"
             [browse/test/xvfb.test.ts]="tests xvfb management; container has no X server to manage"
             [browse/test/security-audit-r2.test.ts]="one behavioral tmpdir-allowlist test breaks under this job's TMPDIR override (bun temp-dir workaround above)"
+            [design/test/variants-retry-after.test.ts]="known timing flake, tracked in TODOS.md (HTTP-date Retry-After rounding)"
           )
           FILES=$(bun run scripts/test-free-shards.ts --list | grep -E '^  (browse/|test/|make-pdf/|design/)' | sed 's/^  //')
           TOTAL=$(echo "$FILES" | wc -l | tr -d ' ')
@@ -153,6 +165,17 @@ jobs:
             fi
           done
           echo "Skipped $SKIPPED container-incompatible files (reasons above)."
+          # Tree-mutation tripwire: a test that rewrites tracked files poisons
+          # every later file in the loop with confusing failures (observed:
+          # gstack-config's skill_prefix auto-relink patched 52 SKILL.md names,
+          # failing five unrelated suites downstream). Name the real culprit.
+          MUTATED=$(git status --porcelain --untracked-files=no)
+          if [ -n "$MUTATED" ]; then
+            echo ""
+            echo "A test mutated tracked files in the working tree — later failures may be collateral:"
+            echo "$MUTATED"
+            FAILED="$FAILED [tree-mutation]"
+          fi
           if [ -n "$FAILED" ]; then
             echo ""
             echo "Failed files:$FAILED"
