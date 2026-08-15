@@ -117,7 +117,6 @@ gstack/
 │   ├── gen-skill-docs.ts  # Template → SKILL.md generator (config-driven)
 │   ├── host-config.ts     # HostConfig interface + validator
 │   ├── host-config-export.ts  # Shell bridge for setup script
-│   ├── host-adapters/     # Host-specific adapters (OpenClaw tool mapping)
 │   ├── resolvers/   # Template resolver modules (preamble, design, review, gbrain, etc.)
 │   ├── skill-check.ts     # Health dashboard
 │   ├── test-paid-shards.ts  # Sharded paid-tier runner (one Bun process per shard)

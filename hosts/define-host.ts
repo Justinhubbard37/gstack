@@ -9,11 +9,9 @@
  * paths, the shared runtimeRoot asset list, and symlink-generated install.
  *
  * Defaults are constructed fresh per call, so no two host configs ever share
- * a mutable array/object. Fields that are absent today (staticFiles, adapter,
- * sidecar, toolRewrites, coAuthorTrailer, boundaryInstruction) stay absent
- * unless a host explicitly sets them — the factory never default-populates
- * optional fields (test/host-config.test.ts pins e.g. openclaw.adapter as
- * undefined).
+ * a mutable array/object. Optional fields that are absent today (toolRewrites,
+ * coAuthorTrailer, boundaryInstruction) stay absent unless a host explicitly
+ * sets them — the factory never default-populates optional fields.
  */
 
 import type { HostConfig } from '../scripts/host-config';
@@ -27,11 +25,11 @@ type PathRewrite = { from: string; to: string };
  * non-Claude agent runtimes (OpenClaw, Hermes, GBrain).
  */
 export const CROSS_MODEL_RESOLVERS: string[] = [
-  'DESIGN_OUTSIDE_VOICES',  // design.ts:485 — invokes Codex for outside voices
-  'ADVERSARIAL_STEP',       // review.ts:408 — invokes Codex adversarially
-  'CODEX_SECOND_OPINION',   // review.ts:257 — invokes Codex
-  'CODEX_PLAN_REVIEW',      // review.ts:541 — invokes Codex
-  'REVIEW_ARMY',            // review-army.ts:180 — multi-model orchestration
+  'DESIGN_OUTSIDE_VOICES',  // design.ts — invokes Codex for outside voices
+  'ADVERSARIAL_STEP',       // review.ts — invokes Codex adversarially
+  'CODEX_SECOND_OPINION',   // review.ts — invokes Codex
+  'CODEX_PLAN_REVIEW',      // review.ts — invokes Codex
+  'REVIEW_ARMY',            // review-army.ts — multi-model orchestration
 ];
 
 /**
@@ -111,16 +109,12 @@ export function defineHost<const N extends string>(overrides: HostOverrides<N>):
         'review': ['checklist.md', 'TODOS-format.md'],
       },
     },
-    sidecar,
     install = {
-      prefixable: false,
       linkingStrategy: 'symlink-generated',
     },
     coAuthorTrailer,
     learningsMode = 'basic',
     boundaryInstruction,
-    staticFiles,
-    adapter,
   } = overrides;
 
   if (pathRewrites && extraPathRewrites) {
@@ -156,12 +150,9 @@ export function defineHost<const N extends string>(overrides: HostOverrides<N>):
     ...(toolRewrites !== undefined ? { toolRewrites } : {}),
     suppressedResolvers,
     runtimeRoot,
-    ...(sidecar !== undefined ? { sidecar } : {}),
     install,
     ...(coAuthorTrailer !== undefined ? { coAuthorTrailer } : {}),
     learningsMode,
     ...(boundaryInstruction !== undefined ? { boundaryInstruction } : {}),
-    ...(staticFiles !== undefined ? { staticFiles } : {}),
-    ...(adapter !== undefined ? { adapter } : {}),
   };
 }

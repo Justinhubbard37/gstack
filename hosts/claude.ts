@@ -14,14 +14,13 @@ const claude = defineHost({
 
   generation: {
     generateMetadata: false,
-    skipSkills: ['claude'],  // Claude outside-voice skill is for non-Claude hosts
+    skipSkills: [],  // overrides the default ['codex'] — the /codex skill IS a Claude skill (wrapper around codex exec)
   },
 
   pathRewrites: [],  // Claude is the primary host — no rewrites needed
   toolRewrites: {},
 
   install: {
-    prefixable: true,
     linkingStrategy: 'real-dir-symlink',
   },
 

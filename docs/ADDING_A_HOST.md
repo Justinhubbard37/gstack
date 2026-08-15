@@ -63,14 +63,14 @@ That expands to the full `HostConfig` with these defaults:
 - `globalRoot` / `localSkillRoot`: `.myhost/skills/gstack`, `hostSubdir`: `.myhost`
 - `usesEnvVars: true` (false only for Claude, which uses literal `~` paths)
 - `frontmatter`: allowlist keeping `name` + `description`, no description limit
-- `generation`: no metadata sidecar, `skipSkills: ['codex']` (codex skill is Claude-only)
+- `generation`: no metadata file, `skipSkills: ['codex']` (codex skill is Claude-only)
 - `pathRewrites`: the standard trio derived from the resolved paths
   (`~/.claude/skills/gstack` → `~/{globalRoot}`, `.claude/skills/gstack` →
   `{localSkillRoot}`, `.claude/skills` → `{hostSubdir}/skills`)
 - `suppressedResolvers`: the GBrain pair (`GBRAIN_CONTEXT_LOAD`, `GBRAIN_SAVE_RESULTS`)
 - `runtimeRoot`: the shared asset list (`bin`, `browse/dist`, `browse/bin`,
   `gstack-upgrade`, `ETHOS.md` + review checklist files)
-- `install`: `{ prefixable: false, linkingStrategy: 'symlink-generated' }`
+- `install`: `{ linkingStrategy: 'symlink-generated' }`
 - `learningsMode: 'basic'`
 
 Override any field by passing it to `defineHost()`. Two path-rewrite options:
@@ -167,17 +167,6 @@ Key fields:
 | `suppressedResolvers` | Resolver functions that return empty for this host |
 | `coAuthorTrailer` | Git co-author string for commits |
 | `boundaryInstruction` | Anti-prompt-injection warning for cross-model invocations |
-| `adapter` | Path to adapter module for complex transformations |
-
-## Adapter pattern (for hosts with different tool models)
-
-If string-replace tool rewrites aren't enough (the host has fundamentally
-different tool semantics), use the adapter pattern: set the `adapter` field
-to the adapter module path. See `scripts/host-adapters/openclaw-adapter.ts`
-for the reference implementation (no shipped host currently sets `adapter`).
-
-The adapter runs as a post-processing step after all generic rewrites. It
-exports `transform(content: string, config: HostConfig): string`.
 
 ## Validation
 

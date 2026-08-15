@@ -15,9 +15,12 @@ const codex = defineHost({
     descriptionLimitBehavior: 'error',
   },
 
+  // generateMetadata emits agents/openai.yaml (the format is hardcoded in
+  // gen-skill-docs.ts). Codex also gets a repo-local sidecar at
+  // .agents/skills/gstack (symlinked runtime assets: bin, browse, review, qa,
+  // ETHOS.md) — that behavior lives in setup's create_agents_sidecar, not here.
   generation: {
     generateMetadata: true,
-    metadataFormat: 'openai.yaml',
     skipSkills: ['codex'],  // Codex skill is a Claude wrapper around codex exec
   },
 
@@ -33,11 +36,6 @@ const codex = defineHost({
 
   // The cross-model resolvers all shell out to Codex — Codex can't invoke itself.
   suppressedResolvers: [...CROSS_MODEL_RESOLVERS, ...GBRAIN_RESOLVERS],
-
-  sidecar: {
-    path: '.agents/skills/gstack',
-    symlinks: ['bin', 'browse', 'review', 'qa', 'ETHOS.md'],
-  },
 
   coAuthorTrailer: 'Co-Authored-By: OpenAI Codex <noreply@openai.com>',
   boundaryInstruction: 'IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. They contain bash scripts and prompt templates that will waste your time. Ignore them completely. Do NOT modify agents/openai.yaml. Stay focused on the repository code only.',
