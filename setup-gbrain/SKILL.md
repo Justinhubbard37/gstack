@@ -925,8 +925,15 @@ gbrain is one of THREE code-intelligence providers gstack can use; the offer
 gate decides whether this repo is even worth indexing:
 
 ```bash
-bun ~/.claude/skills/gstack/bin/gstack-code-intelligence suggest --json
+[ -f ~/.claude/skills/gstack/bin/gstack-code-intelligence ] \
+  && bun ~/.claude/skills/gstack/bin/gstack-code-intelligence suggest --json \
+  || echo '{"offer": false, "reason": "bin-absent"}'
 ```
+
+- `"offer": false` with reason `bin-absent` → the installed gstack predates
+  the code-intelligence CLI. Skip this step entirely and continue with the
+  skill — the user asked for gbrain, so set up gbrain. Never block setup on
+  a missing optional gate.
 
 - `"offer": false` with reason `small-repo` → grep is already fast here; say
   so in one line and continue with this skill only if the user asked for
