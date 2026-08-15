@@ -34,7 +34,7 @@ function extractFunction(name: string): string {
 // a complete statement list.
 function extractKiroBlock(): string {
   const startAnchor = 'KIRO_GSTACK="$KIRO_SKILLS/gstack"';
-  const endAnchor = '_link_or_copy "$SOURCE_GSTACK_DIR/browse/bin" "$KIRO_GSTACK/browse/bin"';
+  const endAnchor = '_link_or_copy "$SOURCE_GSTACK_DIR/supabase/config.sh" "$KIRO_GSTACK/supabase/config.sh"\n  fi';
   const start = SETUP_SRC.indexOf(startAnchor);
   const end = SETUP_SRC.indexOf(endAnchor, start);
   if (start < 0 || end < 0) throw new Error('Could not locate the Kiro install block in setup');
@@ -48,6 +48,7 @@ interface CommandResult {
   runStderr: string;
   learningsWritten: boolean;
   libIsSymlink: boolean | null;
+  supabaseConfigPresent: boolean;
 }
 
 // Build one host runtime root inside a sandbox using the real setup shell code
@@ -93,6 +94,11 @@ function buildRootAndRunCommand(
       runStderr: run.stderr,
       learningsWritten,
       libIsSymlink: libLst ? libLst.isSymbolicLink() : null,
+      // Distinct defect (#2215): telemetry-class bin scripts source
+      // $GSTACK_DIR/supabase/config.sh to resolve GSTACK_SUPABASE_URL. The
+      // [ -f ... ] guard means a missing file degrades SILENTLY, so only a
+      // presence check on the installed root catches it.
+      supabaseConfigPresent: fs.existsSync(path.join(rootDir, 'supabase', 'config.sh')),
     };
   } finally {
     fs.rmSync(sandbox, { recursive: true, force: true });
@@ -158,6 +164,7 @@ describe.skipIf(process.platform === 'win32')('setup: bin commands resolve sibli
       expect(r.runStderr).not.toContain('lib/jsonl-store.ts');
       expect(r.runStatus).toBe(0);
       expect(r.learningsWritten).toBe(true);
+      expect(r.supabaseConfigPresent).toBe(true);
     });
 
     test(`${host} root (Windows copy install): gstack-learnings-log imports ../lib and writes the learning`, () => {
@@ -168,6 +175,7 @@ describe.skipIf(process.platform === 'win32')('setup: bin commands resolve sibli
       expect(r.runStderr).not.toContain('lib/jsonl-store.ts');
       expect(r.runStatus).toBe(0);
       expect(r.learningsWritten).toBe(true);
+      expect(r.supabaseConfigPresent).toBe(true);
     });
   }
 
