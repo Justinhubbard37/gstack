@@ -5,18 +5,27 @@
  * Safe to import from the compiled `browse/dist/browse` binary because it
  * does not load onnxruntime-node or other native modules.
  *
- * ML classifier code lives in `security-classifier.ts`, which is only
- * imported from `sidebar-agent.ts` (runs as non-compiled bun script).
+ * Live architecture (see CEO plan 2026-04-19-prompt-injection-guard.md):
+ *   L1-L3: content-security.ts (datamarking, hidden-element strip, ARIA
+ *          regex, URL blocklist, envelope wrapping) — live in server.ts and
+ *          the page-content read path.
+ *   L4:    TestSavantAI content classifier (security-classifier.ts), hosted
+ *          in the security sidecar subprocess (security-sidecar-entry.ts,
+ *          spawned by security-sidecar-client.ts) — live via server.ts's
+ *          /pty-inject-scan path.
+ *   Canary utilities (generateCanary / injectCanary / checkCanaryInStructure)
+ *          — pure functions; currently no production injector (the chat
+ *          stream that injected the canary went away with sidebar-agent.ts).
+ *   combineVerdict + THRESHOLDS — verdict combiner. Retains vote handling
+ *          for transcript_classifier / deberta_content LayerSignal inputs
+ *          even though no live layer produces them anymore (the Haiku
+ *          transcript and DeBERTa ensemble layers were removed with their
+ *          host process): the combiner is pure and tested, and server.ts's
+ *          inline L4 path is the consumer of record.
  *
- * Layering (see CEO plan 2026-04-19-prompt-injection-guard.md):
- *   L1-L3: content-security.ts (existing, datamarking / DOM strip / URL blocklist)
- *   L4:    ML content classifier (TestSavantAI via security-classifier.ts)
- *   L4b:   ML transcript classifier (Haiku via security-classifier.ts)
- *   L5:    Canary (this module — inject + check)
- *   L6:    Threshold aggregation (this module — combineVerdict)
- *
- * Cross-process state lives at ~/.gstack/security/session-state.json
- * (per eng review finding 1.2 — server.ts and sidebar-agent.ts are different processes).
+ * Cross-process state lives at ~/.gstack/security/session-state.json.
+ * classifierStatus in that state has no live writer since the chat-path rip
+ * (the sidecar reports status over its own NDJSON protocol instead).
  */
 
 import { randomBytes, createHash } from 'crypto';
@@ -55,8 +64,8 @@ export type Verdict = 'safe' | 'log_only' | 'warn' | 'block' | 'user_overrode';
 
 export type LayerName =
   | 'testsavant_content'
-  | 'deberta_content'        // opt-in ensemble layer (GSTACK_SECURITY_ENSEMBLE=deberta)
-  | 'transcript_classifier'
+  | 'deberta_content'        // historical ensemble layer — no live producer, retained for combiner compat
+  | 'transcript_classifier'  // historical Haiku layer — no live producer, retained for combiner compat
   | 'aria_regex'
   | 'canary';
 
@@ -79,7 +88,6 @@ export interface StatusDetail {
   status: SecurityStatus;
   layers: {
     testsavant: 'ok' | 'degraded' | 'off';
-    transcript: 'ok' | 'degraded' | 'off';
     canary: 'ok' | 'off';
   };
   lastUpdated: string;
@@ -321,20 +329,25 @@ const SECURITY_DIR = path.join(os.homedir(), '.gstack', 'security');
 
 const STATE_FILE = path.join(SECURITY_DIR, 'session-state.json');
 
+/**
+ * SessionState is a DISK FORMAT (~/.gstack/security/session-state.json).
+ * Old files may carry a `transcript` field inside classifierStatus from the
+ * removed Haiku layer — readSessionState tolerates it (JSON.parse keeps the
+ * extra key; getStatus ignores it), but we never write it.
+ */
 export interface SessionState {
   sessionId: string;
   canary: string;
   warnedDomains: string[]; // per-session rate limit for special telemetry
   classifierStatus: {
     testsavant: 'ok' | 'degraded' | 'off';
-    transcript: 'ok' | 'degraded' | 'off';
   };
   lastUpdated: string;
 }
 
 /**
  * Atomic write of session state (temp + rename pattern). Writes are safe
- * across the server.ts / sidebar-agent.ts process boundary.
+ * across process boundaries.
  */
 export function writeSessionState(state: SessionState): void {
   try {
@@ -360,16 +373,16 @@ export function readSessionState(): SessionState | null {
 
 export function getStatus(): StatusDetail {
   const state = readSessionState();
-  const layers = state?.classifierStatus ?? {
-    testsavant: 'off',
-    transcript: 'off',
-  };
+  // Read the field explicitly (never spread classifierStatus): old on-disk
+  // state may carry a stale `transcript` key from the removed Haiku layer,
+  // and spreading would leak it into the /health payload.
+  const testsavant = state?.classifierStatus?.testsavant ?? 'off';
   const canary = state?.canary ? 'ok' : 'off';
 
   let status: SecurityStatus;
-  if (layers.testsavant === 'ok' && layers.transcript === 'ok' && canary === 'ok') {
+  if (testsavant === 'ok' && canary === 'ok') {
     status = 'protected';
-  } else if (layers.testsavant === 'off' && canary === 'off') {
+  } else if (testsavant === 'off' && canary === 'off') {
     status = 'inactive';
   } else {
     status = 'degraded';
@@ -377,7 +390,7 @@ export function getStatus(): StatusDetail {
 
   return {
     status,
-    layers: { ...layers, canary: canary as 'ok' | 'off' },
+    layers: { testsavant, canary: canary as 'ok' | 'off' },
     lastUpdated: state?.lastUpdated ?? new Date().toISOString(),
   };
 }

@@ -837,50 +837,46 @@ startup.
 
 ## Security stack
 
-Layered defense against prompt injection. Every layer runs synchronously on
-every user message and every tool output that could carry untrusted content
-(Read, Glob, Grep, WebFetch, page text from `$B`).
+Layered defense against prompt injection on untrusted page content.
 
 | Layer | Module | Lives in |
 |-------|--------|----------|
-| **L1** Datamarking | `content-security.ts` | both server + sidebar agent |
-| **L2** Hidden-element strip | `content-security.ts` | both |
-| **L3** ARIA + URL blocklist + envelope wrapping | `content-security.ts` | both |
-| **L4** TestSavantAI ML classifier (22MB ONNX) | `security-classifier.ts` | sidebar-agent only* |
-| **L4b** Claude Haiku transcript check | `security-classifier.ts` | sidebar-agent only |
-| **L5** Canary token (session-exfil detection) | `security.ts` | both — inject in compiled, check in agent |
-| **L6** `combineVerdict` ensemble | `security.ts` | both |
+| **L1** Datamarking | `content-security.ts` | server + page-content read path |
+| **L2** Hidden-element strip | `content-security.ts` | server + page-content read path |
+| **L3** ARIA + URL blocklist + envelope wrapping | `content-security.ts` | server + page-content read path |
+| **L4** TestSavantAI ML classifier (112MB ONNX) | `security-classifier.ts` | security sidecar subprocess* |
+| Canary token utilities | `security.ts` | pure functions — no live injector today |
+| `combineVerdict` ensemble | `security.ts` | server (inline L4 verdict path) |
 
 \* `security-classifier.ts` cannot be imported from the compiled browse
 binary — `@huggingface/transformers` v4 requires `onnxruntime-node` which
 fails to `dlopen` from Bun compile's temp extract dir. The compiled binary
-runs L1–L3, L5, L6 only.
+runs L1–L3 plus the pure parts of `security.ts`; L4 runs in a plain-Node
+sidecar (`security-sidecar-entry.ts`, spawned lazily by
+`security-sidecar-client.ts` on the first `/pty-inject-scan`).
 
 ### Thresholds
 
 - `BLOCK: 0.85` — single-layer score that would cause BLOCK if cross-confirmed
-- `WARN: 0.75` — cross-confirm threshold. When L4 AND L4b both >= 0.75 → BLOCK
-- `LOG_ONLY: 0.40` — gates transcript classifier (skip Haiku when all layers < 0.40)
+- `WARN: 0.75` — cross-confirm threshold in `combineVerdict`
+- `LOG_ONLY: 0.40` — log-only floor
 - `SOLO_CONTENT_BLOCK: 0.92` — single-layer threshold for label-less content classifiers
 
 ### Ensemble rule
 
-BLOCK only when the ML content classifier AND the transcript classifier both
-report >= WARN. Single-layer high confidence degrades to WARN — this is the
-Stack Overflow instruction-writing FP mitigation. **Canary leak always
-BLOCKs (deterministic).**
+`combineVerdict` retains multi-layer ensemble semantics (2-of-N block votes;
+single-layer high confidence degrades to WARN — the Stack Overflow
+instruction-writing FP mitigation), but only L4 (testsavant) is live today:
+the Haiku transcript and DeBERTa ensemble layers were removed along with the
+sidebar chat pipeline that hosted them. **Canary leak always BLOCKs
+(deterministic).**
 
 ### Env knobs
 
 - `GSTACK_SECURITY_OFF=1` — emergency kill switch. Classifier stays off
-  even if warmed. Canary is still injected; just the ML scan is skipped.
-- `GSTACK_SECURITY_ENSEMBLE=deberta` — opt-in DeBERTa-v3 ensemble. Adds
-  ProtectAI DeBERTa-v3-base-injection-onnx as L4c classifier. 721MB
-  first-run download. With ensemble enabled, BLOCK requires 2-of-3 ML
-  classifiers agreeing at >= WARN.
+  even if warmed. Just the ML scan is skipped.
 - Classifier model cache: `~/.gstack/models/testsavant-small/` (112MB, first
-  run only) plus `~/.gstack/models/deberta-v3-injection/` (721MB, only when
-  ensemble enabled).
+  run only).
 - Attack log: `~/.gstack/security/attempts.jsonl` (salted SHA-256 + domain
   only, rotates at 10MB, 5 generations).
 - Per-device salt: `~/.gstack/security/device-salt` (0600).
@@ -1224,7 +1220,6 @@ the global `~/.gstack/browser-skills/foo/` only inside project-a.
 | `BROWSE_TUNNEL_LOCAL_ONLY` | 0 | Test-only — bind both listeners locally without ngrok |
 | `GSTACK_BROWSE_MAX_HTML_BYTES` | 52428800 (50MB) | `load-html` size cap |
 | `GSTACK_SECURITY_OFF` | unset | Emergency kill switch — disable ML classifier |
-| `GSTACK_SECURITY_ENSEMBLE` | unset | Set to `deberta` for 3-classifier ensemble (721MB download) |
 | `GSTACK_STEALTH` | unset | Set to `extended` (also accepts `1`/`true`) to layer six aggressive patches (WebGL spoof, faked plugins, mediaDevices) on top of Layer C. Actively lies; can break sites. |
 | `GSTACK_CDP_STEALTH` | unset | Set to `on`/`1`/`true` to emit `--gstack-suppress-prepare-stack-trace` (gbrowser Pack 2 / B11 C++ patch only; no-op on stock Chromium) |
 | `GSTACK_GPU_VENDOR`, `GSTACK_GPU_RENDERER`, `GSTACK_GPU_CHIPSET` | unset | Per-install GPU spoof fed to the Pack 1 WebGL/UA-CH C++ patches. Set by gbd from the host profile; emitted as `--gstack-gpu-vendor` / `--gstack-gpu-renderer` / `--gstack-ua-model` cmdline switches only when present. |
@@ -1272,7 +1267,7 @@ browse/
 │   ├── url-validation.ts        # URL safety checks for goto
 │   ├── content-security.ts      # L1-L3: datamarking, hidden strip, ARIA, URL blocklist, envelopes
 │   ├── security.ts              # L5 canary + L6 verdict combiner + thresholds
-│   ├── security-classifier.ts   # L4 ML classifier (TestSavant + optional DeBERTa ensemble)
+│   ├── security-classifier.ts   # L4 ML classifier (TestSavantAI, runs in the security sidecar)
 │   ├── terminal-agent.ts        # Side Panel Claude PTY manager (auth + lifecycle)
 │   ├── sidebar-utils.ts         # Sidebar URL sanitization + helpers
 │   ├── cookie-import-browser.ts # Decrypt + import cookies from real Chromium browsers
@@ -1419,9 +1414,7 @@ foundation.
 
 The prompt-injection L4 layer uses
 [TestSavantAI/distilbert-v1.1-32](https://huggingface.co/TestSavantAI/distilbert-v1.1-32)
-(112MB ONNX), and the optional ensemble layer uses
-[ProtectAI/deberta-v3-base-prompt-injection-v2](https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2)
-(721MB ONNX) — both run locally via `@huggingface/transformers`.
+(112MB ONNX), run locally via `@huggingface/transformers`.
 
 The CDP escape hatch is gated by an allowlist directly inspired by Codex's
 T2 outside-voice review during the v1.4 design pass: deny-default with an

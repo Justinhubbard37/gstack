@@ -1872,10 +1872,9 @@ describe('no compiled binaries in git', () => {
     // repository size without blocking those fixtures from living in git.
     // Known-good fixtures are exempted from the warning to keep CI logs clean.
     const MAX_BYTES = 2 * 1024 * 1024;
-    const knownLargeFixtures = new Set([
-      // Deterministic replay fixture for BrowseSafe-Bench. The live bench is
-      // expensive; this file is intentionally committed so the gate is free.
-      'browse/test/fixtures/security-bench-haiku-responses.json',
+    const knownLargeFixtures = new Set<string>([
+      // Currently empty — add repo-relative paths of intentionally-committed
+      // large fixtures here with a reason.
     ]);
     const oversized = trackedFiles.flatMap((f: string) => {
       if (knownLargeFixtures.has(f)) return [];
@@ -1902,11 +1901,6 @@ describe('no compiled binaries in git', () => {
   });
 });
 
-// `sidebar agent (#584)` describe block was here. sidebar-agent.ts and
-// the entire chat-queue path were ripped in favor of the interactive
-// claude PTY (terminal-agent.ts); these assertions had no target file.
-// Terminal-pane invariants are covered by browse/test/sidebar-tabs.test.ts
-// and browse/test/terminal-agent.test.ts.
 
 // ─── Browser-skills validation ──────────────────────────────────
 //

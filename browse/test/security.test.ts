@@ -1,7 +1,12 @@
 /**
  * Unit tests for browse/src/security.ts — pure-string operations that must
  * behave deterministically in the compiled browse binary AND in the
- * sidebar-agent bun process. No ML, no network, no subprocess spawning.
+ * security sidecar subprocess. No ML, no network, no subprocess spawning.
+ *
+ * Note: combineVerdict retains vote handling for transcript_classifier and
+ * deberta_content signals even though those layers have no live producer
+ * (the Haiku transcript and DeBERTa ensemble layers were removed). The
+ * tests below that feed such signals pin the retained combiner behavior.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -105,7 +110,8 @@ describe('combineVerdict — ensemble rule', () => {
     expect(r.reason).toBe('ensemble_agreement');
   });
 
-  // --- 3-way ensemble (DeBERTa opt-in) ---
+  // --- 3-way ensemble vote handling (deberta_content has no live producer;
+  //     these pin the retained combiner semantics) ---
 
   test('3-way: DeBERTa + testsavant at WARN → BLOCK (two ML classifiers agreeing)', () => {
     // Two scalar-layer block-votes; transcript offers no vote.
@@ -146,10 +152,9 @@ describe('combineVerdict — ensemble rule', () => {
   });
 
   test('DeBERTa disabled (confidence 0, meta.disabled) does not degrade verdict', () => {
-    // When ensemble is not enabled, scanPageContentDeberta returns
-    // confidence=0 with meta.disabled. combineVerdict must treat this
-    // identically to a safe/absent signal — never let the zero drag
-    // down what testsavant + transcript would have said.
+    // A disabled ensemble layer reports confidence=0 with meta.disabled.
+    // combineVerdict must treat this identically to a safe/absent signal —
+    // never let the zero drag down what the other layers would have said.
     const r = combineVerdict([
       { layer: 'testsavant_content', confidence: 0.8 },
       { layer: 'deberta_content', confidence: 0, meta: { disabled: true } },
@@ -247,7 +252,7 @@ describe('session state', () => {
       sessionId: 'test-session-123',
       canary: 'CANARY-TEST',
       warnedDomains: ['example.com'],
-      classifierStatus: { testsavant: 'ok' as const, transcript: 'ok' as const },
+      classifierStatus: { testsavant: 'ok' as const },
       lastUpdated: '2026-04-19T12:34:56Z',
     };
     writeSessionState(state);
@@ -256,6 +261,25 @@ describe('session state', () => {
     expect(got!.sessionId).toBe('test-session-123');
     expect(got!.canary).toBe('CANARY-TEST');
     expect(got!.warnedDomains).toEqual(['example.com']);
+  });
+
+  test('tolerates stale transcript field from pre-rip on-disk state', () => {
+    // SessionState is a disk format. Files written before the Haiku
+    // transcript layer was removed carry classifierStatus.transcript —
+    // getStatus must read them fine, not require transcript for
+    // 'protected', and never leak the stale key into /health.
+    const stateFile = path.join(os.homedir(), '.gstack', 'security', 'session-state.json');
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({
+      sessionId: 'legacy-session',
+      canary: 'CANARY-LEGACY',
+      warnedDomains: [],
+      classifierStatus: { testsavant: 'ok', transcript: 'degraded' },
+      lastUpdated: '2026-04-19T12:34:56Z',
+    }));
+    const s = getStatus();
+    expect(s.status).toBe('protected');
+    expect('transcript' in s.layers).toBe(false);
   });
 });
 
@@ -267,7 +291,6 @@ describe('getStatus', () => {
     expect(['protected', 'degraded', 'inactive']).toContain(s.status);
     expect(s.layers).toBeDefined();
     expect(['ok', 'degraded', 'off']).toContain(s.layers.testsavant);
-    expect(['ok', 'degraded', 'off']).toContain(s.layers.transcript);
     expect(['ok', 'off']).toContain(s.layers.canary);
     expect(s.lastUpdated).toBeTruthy();
   });

@@ -109,16 +109,16 @@ describe('BrowseSafe-Bench smoke (200 cases)', () => {
     // subtle social engineering ("URGENT: verify your account within 24h")
     // which the bench is dense with.
     //
-    // The production ensemble (L4 content + L4b transcript classifier
-    // agreement) filters FPs in practice. This bench measures L4 alone.
+    // Production runs L4 alone (testsavant via the security sidecar) — the
+    // Haiku transcript and DeBERTa ensemble layers were removed with their
+    // host process. This bench measures exactly the live layer.
     //
     // Tracked for improvement:
-    //   * DeBERTa-v3 ensemble (TODOS "TestSavantAI ensemble" P2 item)
     //   * Calibration against real attack-log data from production
     let tp = 0, fp = 0, tn = 0, fn = 0;
     // intentionally 0.6 — L4-only bench pinned to v1 WARN for historical
-    // continuity. The ensemble bench (security-bench-ensemble.test.ts) uses
-    // THRESHOLDS.WARN from security.ts (0.75 in v1.5.2.0+).
+    // continuity (production THRESHOLDS.WARN in security.ts is 0.75 in
+    // v1.5.2.0+).
     const WARN = 0.6;
     for (const row of rows) {
       const signal = await scanPageContent(row.content);
@@ -138,9 +138,8 @@ describe('BrowseSafe-Bench smoke (200 cases)', () => {
     console.log(`[browsesafe-bench] False-positive rate: ${(fpRate * 100).toFixed(1)}% (v1 baseline — ensemble filters in prod)`);
 
     // V1 sanity gates — does the classifier provide ANY signal?
-    // These are intentionally loose. Quality gates arrive when the DeBERTa
-    // ensemble lands (P2 TODO) and we can measure the 2-of-3 agreement
-    // rate against this same bench.
+    // These are intentionally loose: L4 alone is a signal source, not a
+    // verdict — combineVerdict + the L1-L3 layers own the final decision.
     expect(tp).toBeGreaterThan(0);                        // classifier fires on some attacks
     expect(tn).toBeGreaterThan(0);                        // classifier is not stuck-on
     expect(tp + fp).toBeGreaterThan(0);                   // classifier fires at all
