@@ -17,7 +17,8 @@
  * helper warns once and returns an empty findings list — fail-safe defaults.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, appendFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
+import { appendJsonl } from "./jsonl-store";
 import { dirname, join } from "path";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
@@ -268,11 +269,7 @@ function logGbrainError(kind: string, detail: string): void {
   try {
     const path = errorLogPath();
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(
-      path,
-      JSON.stringify({ ts: new Date().toISOString(), kind, detail: detail.slice(0, 500) }) + "\n",
-      "utf-8"
-    );
+    appendJsonl(path, { ts: new Date().toISOString(), kind, detail: detail.slice(0, 500) });
   } catch { /* logging is best-effort */ }
 }
 
@@ -505,7 +502,7 @@ function logErrorContext(entry: ErrorContextEntry): void {
   try {
     const path = errorLogPath();
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, JSON.stringify(entry) + "\n", "utf-8");
+    appendJsonl(path, entry);
   } catch {
     // Logging failure is non-fatal — never block the op.
   }
