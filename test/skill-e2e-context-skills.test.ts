@@ -447,12 +447,18 @@ Do NOT use AskUserQuestion.`,
     // Broad surface: the list output may only appear in bash tool_result
     // entries (find output, file reads) rather than the agent's final text.
     const out = fullOutputSurface(result);
-    // Must show the main-branch save. Hide the other branches' saves.
-    // Match by filename timestamp (stable, unambiguous) plus a looser
-    // prose check.
+    // Must show the main-branch save. Match by filename timestamp (stable,
+    // unambiguous) plus a looser prose check.
     const showsMain = /20260101-120000|main-work/.test(out);
-    const hidesAlpha = !/20260202-120000/.test(out);
-    const hidesBeta = !/20260303-120000/.test(out);
+    // The hide-assertions scan the FINAL TEXT only. This test went 0-for-26
+    // ($5.28 burned, zero passes) because they used the broad surface: any
+    // agent that ran `ls` on the checkpoints dir — the natural first step of
+    // a list flow — surfaced all three filenames in a tool_result and failed,
+    // even when its user-facing listing filtered correctly. What must hide
+    // the other branches is the LISTING the user sees, not the agent's eyes.
+    const finalText = result.output ?? '';
+    const hidesAlpha = !/20260202-120000|LISTCURR_ALPHA_TOKEN/.test(finalText);
+    const hidesBeta = !/20260303-120000|LISTCURR_BETA_TOKEN/.test(finalText);
     const routed = skillCalls(result).includes('context-save');
     const exitOk = ['success', 'error_max_turns'].includes(result.exitReason);
 
