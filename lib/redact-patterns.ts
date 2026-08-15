@@ -189,6 +189,7 @@ const PLACEHOLDER_STRUCTURAL = [
 // keys like AKIAIOSFODNN7EXAMPLE are bare tokens, so the guard still catches them.
 const PLACEHOLDER_SUBSTRING = [
   /example/i, // AKIAIOSFODNN7EXAMPLE etc — AWS docs convention
+  /^pass(word)?$/i, // literal PASSWORD/pass in URL-format doc comments
   /^changeme$/i,
   /^redacted/i,
   /^placeholder/i,
@@ -440,7 +441,10 @@ export const PATTERNS: RedactPattern[] = [
     validate: (span) => {
       const m = span.match(/:\/\/[^:]+:([^@]+)@/);
       const pw = m?.[1] ?? "";
-      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Z_]+\}?$/.test(pw);
+      // Any $VAR / ${identifier} interpolation is code, not a credential —
+      // covers bash ${DB_PASS} and JS template `${dbPass}` alike (the
+      // uppercase-only form flagged ported TS templates as pushed secrets).
+      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(pw);
     },
   },
   {
@@ -452,7 +456,10 @@ export const PATTERNS: RedactPattern[] = [
     validate: (span) => {
       const m = span.match(/:\/\/[^:]+:([^@]+)@/);
       const pw = m?.[1] ?? "";
-      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Z_]+\}?$/.test(pw);
+      // Any $VAR / ${identifier} interpolation is code, not a credential —
+      // covers bash ${DB_PASS} and JS template `${dbPass}` alike (the
+      // uppercase-only form flagged ported TS templates as pushed secrets).
+      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(pw);
     },
   },
 

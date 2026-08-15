@@ -532,7 +532,7 @@ async function cmdListOrphans(ctx: Ctx, args: string[]): Promise<void> {
   if (!Array.isArray(all)) die(ctx, 'list-orphans: expected an array from GET projects');
 
   // Extract the active brain's ref from ~/.gbrain/config.json if present.
-  // Pooler URL format: postgresql://postgres.<ref>:<pw>@...
+  // Pooler URL format: postgresql://postgres.<ref>:<PASSWORD>@...
   let activeRef: string | null = null;
   const home = ctx.env.HOME || os.homedir();
   const gbrainCfg = path.join(home, '.gbrain', 'config.json');
@@ -545,7 +545,7 @@ async function cmdListOrphans(ctx: Ctx, args: string[]): Promise<void> {
       // unreadable/unparseable config — same as jq failing: no active ref
     }
     if (dbUrl) {
-      // Extract user portion before the colon: postgresql://USER:pw@...
+      // Extract user portion before the colon: postgresql://USER:PASSWORD@...
       const match = dbUrl.match(/^[a-z]+:\/\/([^:]+):.*$/);
       const user = match ? match[1] : dbUrl;
       // User format: postgres.<ref> — pull ref suffix
