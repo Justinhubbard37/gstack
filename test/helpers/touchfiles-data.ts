@@ -52,10 +52,10 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'qa-bootstrap':   ['qa/**', 'ship/**'],
 
   // Review
-  'review-sql-injection':     ['review/**', 'test/fixtures/review-eval-vuln.rb'],
-  'review-enum-completeness': ['review/**', 'test/fixtures/review-eval-enum*.rb'],
+  'review-sql-injection':     ['review/**', 'test/fixtures/review-eval-vuln.rb', 'test/skill-e2e-review.test.ts'],
+  'review-enum-completeness': ['review/**', 'test/fixtures/review-eval-enum*.rb', 'test/skill-e2e-review.test.ts'],
   'review-base-branch':       ['review/**'],
-  'review-design-lite':       ['review/**', 'test/fixtures/review-eval-design-slop.*'],
+  'review-design-lite':       ['review/**', 'test/fixtures/review-eval-design-slop.*', 'test/skill-e2e-review.test.ts'],
 
   // Review Army (specialist dispatch)
   'review-army-migration-safety': ['review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope'],
@@ -94,7 +94,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Covers ceo (preamble misfire) + eng/design (scope-gate bypass must not
   // fire outside plan mode) + the named-target exception case. 4 PTY runs;
   // in CI these run CONCURRENT with the rest of the pty-plan-smoke suite
-  // (--max-concurrency + --retry 2), so worst-case cost is ~3x a single
+  // (--max-concurrency + --retry 1), so worst-case cost is ~2x a single
   // pass of each, sharing the API budget with sibling tests — not the
   // sequential ~+10min a local read suggests.
   'plan-mode-no-op':              ['plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-mode-no-op.test.ts'],
@@ -223,13 +223,11 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Ship
   'ship-base-branch': ['ship/**', 'bin/gstack-repo-mode'],
   'ship-local-workflow': ['ship/**', 'scripts/gen-skill-docs.ts'],
-  'review-dashboard-via': ['ship/**', 'scripts/resolvers/review.ts', 'codex/**', 'autoplan/**', 'land-and-deploy/**'],
-  'ship-plan-completion': ['ship/**', 'scripts/gen-skill-docs.ts'],
-  'ship-plan-verification': ['ship/**', 'scripts/gen-skill-docs.ts'],
+  'review-dashboard-via': ['ship/**', 'scripts/resolvers/review.ts', 'codex/**', 'autoplan/**', 'land-and-deploy/**', 'test/skill-e2e-review-attribution.test.ts'],
 
   // Retro
-  'retro':             ['retro/**'],
-  'retro-base-branch': ['retro/**'],
+  'retro':             ['retro/**', 'test/skill-e2e-retro.test.ts'],
+  'retro-base-branch': ['retro/**', 'test/skill-e2e-retro.test.ts'],
 
   // Global discover
   'global-discover':   ['bin/gstack-global-discover.ts', 'test/global-discover.test.ts'],
@@ -277,9 +275,9 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
 
   // Coverage audit (shared fixture) + triage + gates
   'ship-coverage-audit': ['ship/**', 'test/fixtures/coverage-audit-fixture.ts', 'bin/gstack-repo-mode'],
-  'review-coverage-audit': ['review/**', 'test/fixtures/coverage-audit-fixture.ts'],
-  'plan-eng-coverage-audit': ['plan-eng-review/**', 'test/fixtures/coverage-audit-fixture.ts'],
-  'ship-triage': ['ship/**', 'bin/gstack-repo-mode'],
+  'review-coverage-audit': ['review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
+  'plan-eng-coverage-audit': ['plan-eng-review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
+  'ship-triage': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-triage.test.ts'],
 
   // Plan completion audit + verification
   'ship-plan-completion': ['ship/**', 'scripts/gen-skill-docs.ts'],

@@ -107,7 +107,19 @@ describe('getChangedFiles union', () => {
 
   test('missing base ref → throws naming EVALS_ALL and the failing command', () => {
     expect(() => getChangedFiles('no-such-ref', repo)).toThrow(/EVALS_ALL=1/);
-    expect(() => getChangedFiles('no-such-ref', repo)).toThrow(/git diff --name-only no-such-ref\.\.\.HEAD/);
+    expect(() => getChangedFiles('no-such-ref', repo)).toThrow(/diff --name-only no-such-ref\.\.\.HEAD/);
+  });
+
+  test('non-ASCII filenames come back as raw UTF-8, not C-escaped (core.quotePath=false)', () => {
+    const name = 'résumé-fixture.md';
+    fs.writeFileSync(path.join(repo, name), 'x');
+    try {
+      const files = getChangedFiles('base', repo);
+      expect(files).toContain(name);
+      expect(files.every((f) => !f.includes('\\303'))).toBe(true);
+    } finally {
+      fs.rmSync(path.join(repo, name), { force: true });
+    }
   });
 
   test('injected spawn failure → throws with stderr in the message', () => {

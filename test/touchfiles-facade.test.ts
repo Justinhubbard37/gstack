@@ -105,6 +105,23 @@ describe('touchfiles-data.ts literal-only tripwire', () => {
     expect(sawBacktick, explain).toBe(false);
     expect(code, explain).not.toContain('${');
   });
+
+  test('no duplicate keys within any map block', () => {
+    // JS object evaluation silently keeps the LAST duplicate — the earlier
+    // dep list becomes dead weight an editor can update to no effect, and
+    // no runtime assertion can see the collapsed key. Scan the source.
+    const blocks = src.split(/export const /).slice(1);
+    const dupes: string[] = [];
+    for (const block of blocks) {
+      const name = block.slice(0, block.indexOf(' '));
+      const seen = new Set<string>();
+      for (const match of block.matchAll(/^\s{2}'([^']+)':/gm)) {
+        if (seen.has(match[1])) dupes.push(`${name}: '${match[1]}'`);
+        seen.add(match[1]);
+      }
+    }
+    expect(dupes, 'duplicate keys collapse silently — the earlier entry is dead').toEqual([]);
+  });
 });
 
 describe('facade export parity', () => {
