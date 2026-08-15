@@ -180,8 +180,10 @@ export function readGstackConfigYamlKey(key: string): string | null {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   try {
     const yaml = fs.readFileSync(path.join(resolveGstackHome(), 'config.yaml'), 'utf-8');
-    const m = yaml.match(new RegExp(`^\\s*${escaped}\\s*:\\s*['"]?([^'"#\\n]*?)['"]?\\s*(?:#.*)?$`, 'm'));
-    return m ? m[1] : null;
+    // Last match wins: bin/gstack-config's `get` reads duplicates with
+    // `tail -1`, and both surfaces must agree on the same line.
+    const all = [...yaml.matchAll(new RegExp(`^\\s*${escaped}\\s*:\\s*['"]?([^'"#\\n]*?)['"]?\\s*(?:#.*)?$`, 'gm'))];
+    return all.length > 0 ? all[all.length - 1][1] : null;
   } catch {
     return null;
   }
