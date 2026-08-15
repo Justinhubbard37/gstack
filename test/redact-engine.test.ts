@@ -54,6 +54,8 @@ describe("HIGH credential patterns", () => {
       "gcp.service_account",
       '{"private_key_id": "abc123", "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIE..."}',
     ],
+    ["google.oauth_client_secret", 'client_secret: "GOCSPX-' + "Ab3xQ9zLmNp2RtVw7YkD1sHf" + '"'],
+    ["telegram.bot_token", "TELEGRAM_TOKEN=8326208591:AA" + "HdqRy9Lm2ZpXvKb4NcQw8TuEr6YoP1sVg"],
   ];
   for (const [id, text] of cases) {
     test(`flags ${id}`, () => {
@@ -167,6 +169,22 @@ describe("#1946 pattern negatives (placeholders never fire)", () => {
   });
 });
 
+describe("google.oauth_client_secret / telegram.bot_token negatives", () => {
+  test("undersized and placeholder shapes never fire", () => {
+    // Length floor keeps short repo fixtures quiet (e.g. the 19-char body in
+    // openclaw's extensions/google/oauth.test.ts).
+    expect(ids("GOCSPX-FakeSecretValue123")).not.toContain("google.oauth_client_secret");
+    expect(ids("GOCSPX-short")).not.toContain("google.oauth_client_secret");
+    // Placeholder suppression on an otherwise correctly-sized body.
+    expect(ids("GOCSPX-example" + "a".repeat(17))).not.toContain("google.oauth_client_secret");
+    expect(ids("1234567890:AAexample" + "a".repeat(26))).not.toContain("telegram.bot_token");
+    // A plain number pair must not read as a bot token.
+    expect(ids("1234567890:1234567890")).not.toContain("telegram.bot_token");
+    // The AIza key stays MEDIUM (google.api_key); it is not promoted here.
+    expect(ids("AIza" + "a".repeat(35))).not.toContain("google.oauth_client_secret");
+  });
+});
+
 describe("PII patterns", () => {
   test("email flags + is autoRedactable", () => {
     const f = scan("ping alice@corp.io please", { repoVisibility: "private" }).findings.find(
@@ -185,8 +203,9 @@ describe("PII patterns", () => {
       scan("bob@acme.co", { repoVisibility: "private", repoPublicEmails: ["bob@acme.co"] }).findings,
     ).toHaveLength(0);
   });
-  test("phone E.164", () => {
+  test("phone E.164 flags, skips compact timestamps", () => {
     expect(ids("call +14155550123 now")).toContain("pii.phone.e164");
+    expect(ids("backup stamp 20260727202423 ran late")).not.toContain("pii.phone.e164");
   });
   test("ssn flags valid, skips 000 octet", () => {
     expect(ids("ssn 123-45-6789")).toContain("pii.ssn");
@@ -200,6 +219,34 @@ describe("PII patterns", () => {
     expect(ids("connect 8.8.8.8")).toContain("pii.ip_public");
     expect(ids("local 192.168.1.5")).not.toContain("pii.ip_public");
     expect(ids("local 10.0.0.1")).not.toContain("pii.ip_public");
+  });
+
+  // Digit-only UUIDs are the standard test-fixture shape, and their digit runs
+  // collide with both the card pattern (a 13-19 digit slice passes Luhn often
+  // enough to matter) and the phone pattern (hyphen groups read as national
+  // formatting). Observed live: 14 of 21 MEDIUM findings on one ordinary branch
+  // were exactly this, all from test files — the volume that makes people stop
+  // reading MEDIUM output at all.
+  test("digit-only UUID fixtures are not cards or phones", () => {
+    expect(ids("owner_user_id: '00000000-0000-0000-0000-000000000000'")).not.toContain("pii.cc");
+    expect(ids("const OWNER = '11111111-1111-1111-1111-111111111111'")).not.toContain(
+      "pii.phone.e164",
+    );
+    expect(ids("const TEAM = '22222222-2222-2222-2222-222222222222'")).not.toContain(
+      "pii.phone.e164",
+    );
+    // Hex UUIDs never matched these digit patterns; pinned so the suppression
+    // is not silently widened to something that swallows real numbers.
+    expect(ids("id 'a1b2c3d4-1111-2222-3333-444455556666'")).not.toContain("pii.cc");
+  });
+
+  test("UUID suppression requires TOTAL containment", () => {
+    // Real card sitting next to a UUID still reports — suppression is the
+    // exception and may only fire when the whole match is UUID interior.
+    expect(ids("00000000-0000-0000-0000-000000000000 4111111111111111")).toContain("pii.cc");
+    // And the plain cases are untouched.
+    expect(ids("card 4111-1111-1111-1111")).toContain("pii.cc");
+    expect(ids("reach me on +1 415 555 2671")).toContain("pii.phone.e164");
   });
 });
 

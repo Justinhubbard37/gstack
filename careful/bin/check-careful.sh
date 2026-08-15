@@ -1,22 +1,55 @@
 #!/usr/bin/env bash
 # check-careful.sh — PreToolUse hook for /careful skill
 # Reads JSON from stdin, checks Bash command for destructive patterns.
-# Returns {"permissionDecision":"ask","message":"..."} to warn, or {} to allow.
+# Returns a PreToolUse hookSpecificOutput with permissionDecision "ask" to warn,
+# or {} to allow. The decision MUST be nested under hookSpecificOutput — Claude
+# Code ignores a top-level permissionDecision, which silently no-ops the warning.
 set -euo pipefail
 
 # Read stdin (JSON with tool_input)
 INPUT=$(cat)
 
-# Extract the "command" field value from tool_input
-# Try grep/sed first (handles 99% of cases), fall back to Python for escaped quotes
-CMD=$(printf '%s' "$INPUT" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//' || true)
+# Extract the "command" field value from tool_input with a real JSON parser.
+#
+# The previous extractor was
+#   grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"'
+# whose [^"]* stops at the first escaped quote in the JSON string value. Any
+# destructive command preceded by a quoted argument was therefore truncated
+# away before the pattern checks ever ran:
+#
+#   git commit -m "wip" && rm -rf /   ->  CMD='git commit -m \'   -> allowed
+#   bash -c "rm -rf /"                ->  CMD='bash -c \'         -> allowed
+#   echo "x"; rm -rf ~                ->  CMD='echo \'            -> allowed
+#
+# The python3 fallback never rescued these because CMD was non-empty, so the
+# `[ -z "$CMD" ]` guard did not fire. Parse the payload properly instead, and
+# fail CLOSED when it cannot be parsed at all — a hook that gates destructive
+# commands must not allow-by-default on unreadable input.
+#
+# python3 is tried first because it ships with macOS and most Linux distros and
+# is reliably on PATH in a hook environment; node is the fallback.
+extract_cmd() {
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$INPUT" | python3 -c 'import sys,json; d=json.loads(sys.stdin.read()); c=d.get("tool_input",{}).get("command",""); sys.stdout.write(c if isinstance(c,str) else "")' 2>/dev/null && return 0
+  fi
+  if command -v node >/dev/null 2>&1; then
+    printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const c=(j&&j.tool_input&&j.tool_input.command)||"";process.stdout.write(typeof c==="string"?c:"")}catch(e){process.exit(3)}})' 2>/dev/null && return 0
+  fi
+  return 1
+}
 
-# Python fallback if grep returned empty (e.g., escaped quotes in command)
-if [ -z "$CMD" ]; then
-  CMD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; print(json.loads(sys.stdin.read()).get("tool_input",{}).get("command",""))' 2>/dev/null || true)
+set +e
+CMD=$(extract_cmd)
+EXTRACT_RC=$?
+set -e
+
+# No parser available, or the payload is not parseable JSON. Fail closed.
+if [ "$EXTRACT_RC" -ne 0 ] && [ -n "$INPUT" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] Could not parse the tool payload to safety-check this command. Approve only if you know what it does."}}\n'
+  exit 0
 fi
 
-# If we still couldn't extract a command, allow
+# Parsed fine, but there is genuinely no command field (non-Bash payload) — allow.
 if [ -z "$CMD" ]; then
   echo '{}'
   exit 0
@@ -24,6 +57,23 @@ fi
 
 # Normalize: lowercase for case-insensitive SQL matching
 CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
+
+# --- Shell-obfuscation tripwire ---
+# Every check below inspects the command as a STRING, but bash executes what the
+# string MEANS after expansion. ${IFS} holds the default field separator and
+# contains no literal whitespace, so
+#
+#   rm${IFS}-rf${IFS}/
+#
+# matches none of the `rm\s+` patterns while executing as a full recursive
+# delete. The same holds for a command assembled by a base64 decode piped to a
+# shell. Rather than try to out-parse bash, treat these splitting/decoding
+# primitives as a reason to ask: they are vanishingly rare in commands a human
+# actually means to run unattended.
+if printf '%s' "$CMD" | grep -qE '\$\{IFS\}|\$IFS|\$\(echo[^)]*base64[^)]*\)|base64[[:space:]]+(-d|--decode)[^|]*\|[[:space:]]*(sh|bash)' 2>/dev/null; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] Shell obfuscation detected (IFS word-splitting or base64-to-shell). Read the command carefully before approving."}}\n'
+  exit 0
+fi
 
 # --- Check for safe exceptions (one standalone rm of build artifacts) ---
 # Match the complete command. Parsing only the last rm is unsafe because shell
@@ -37,10 +87,20 @@ CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
 #     ENDS in a whitelisted suffix (`rm -rf $(./wipe-all)/node_modules`)
 #     cannot ride the whitelist. Plain $VAR expansion (no parenthesis) is
 #     still allowed.
-if printf '%s' "$CMD" | grep -qE '^[[:space:]]*rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+|--recursive[[:space:]]+)(([^[:space:];&|#(`]*/)?(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage)[[:space:]]*)+$' 2>/dev/null; then
-  echo '{}'
-  exit 0
-fi
+#   - multi-line commands never ride the whitelist: grep matches the anchored
+#     shape against EACH line, so `rm -rf /\nrm -rf node_modules` would be
+#     allowed by its second line. With the JSON-parser extraction the \n in
+#     the payload is a real newline (the old grep extractor kept it as two
+#     literal characters, which broke the anchored match by accident).
+case "$CMD" in
+  *$'\n'*) : ;; # multi-line: fall through to the destructive checks
+  *)
+    if printf '%s' "$CMD" | grep -qE '^[[:space:]]*rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+|--recursive[[:space:]]+)(([^[:space:];&|#(`]*/)?(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage)[[:space:]]*)+$' 2>/dev/null; then
+      echo '{}'
+      exit 0
+    fi
+    ;;
+esac
 
 # --- Destructive pattern checks ---
 WARN=""
@@ -101,7 +161,7 @@ if [ -n "$WARN" ]; then
   echo '{"event":"hook_fire","skill":"careful","pattern":"'"$PATTERN"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
 
   WARN_ESCAPED=$(printf '%s' "$WARN" | sed 's/"/\\"/g')
-  printf '{"permissionDecision":"ask","message":"[careful] %s"}\n' "$WARN_ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] %s"}}\n' "$WARN_ESCAPED"
 else
   echo '{}'
 fi

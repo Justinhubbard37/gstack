@@ -45,7 +45,9 @@ describe("gstack-memory-ingest: gbrain import must not be filtered by .gitignore
     const stripped = stripComments(readFileSync(SOURCE_PATH, "utf-8"));
     // Match the spawn call's argument array and assert both the subcommand
     // and the flag live in it, so the flag can't drift onto another call.
-    const call = stripped.match(/spawnGbrainAsync\(\s*\[[^\]]*"import"[^\]]*\]/s);
+    // [\s\S]*? bridges the conditional-spread's nested brackets (main's
+    // capability-probed --include-gitignored merged with our baseEnv defense).
+    const call = stripped.match(/spawnGbrainAsync\(\s*\[[\s\S]*?"import"[\s\S]*?\]/s);
     expect(call).not.toBeNull();
     expect(call![0]).toContain("--include-gitignored");
   });
@@ -58,7 +60,7 @@ describe("gstack-memory-ingest: gbrain import must not be filtered by .gitignore
     // the flag's semantics drift, and symlinked staging paths still match.
     expect(stripped).toContain("GIT_CEILING_DIRECTORIES");
     expect(stripped).toMatch(/realpathSync\(dirname\(stagingDir\)\)/);
-    const call = stripped.match(/spawnGbrainAsync\(\s*\[[^\]]*"import"[^\]]*\]\s*,\s*\{\s*baseEnv\s*\}/s);
+    const call = stripped.match(/spawnGbrainAsync\(\s*\[[\s\S]*?"import"[\s\S]*?\]\s*,\s*\{\s*baseEnv\s*\}/s);
     expect(call).not.toBeNull();
   });
 

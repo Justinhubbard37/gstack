@@ -214,7 +214,9 @@ const MONOLITH_INVARIANTS: ParityInvariant[] = [
     // codexPreflight() block (install + auth tri-state + CODEX_MODE branch prose),
     // landing ~6.3% over the v1.53.0.0 baseline. Intentional: it adds proper
     // not-installed vs not-authed handling, not slop.
-    maxSizeRatio: 1.08,
+    // v1.64+v1.65 merge: both waves grew the shared preamble (evidence
+    // directive + telemetry failure flags); measured 1.094.
+    maxSizeRatio: 1.10,
     minBytes: 70_000,
   },
   {
@@ -225,8 +227,9 @@ const MONOLITH_INVARIANTS: ParityInvariant[] = [
     // P3 loop tip) is added to every skill's shared preamble — intentional, ~1KB.
     // Fork port wave 2: the shared coverage-audit detection block gained the
     // multi-ecosystem markers (Django/JVM, script/target/test-file census —
-    // e3259078 port); measured 1.111x. Tight headroom only.
-    maxSizeRatio: 1.12,
+    // e3259078 port); measured 1.111x. v1.64+v1.65 merge sums both waves'
+    // preamble growth; measured 1.125.
+    maxSizeRatio: 1.13,
     minBytes: 50_000,
   },
   {

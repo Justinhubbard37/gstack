@@ -4,6 +4,7 @@ import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawnSync } from 'child_process';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const MAX_SKILL_DESCRIPTION_LENGTH = 1024;
@@ -323,6 +324,31 @@ describe('gen-skill-docs', () => {
     const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
     expect(content).toContain('_BRANCH');
     expect(content).toContain('git branch --show-current');
+  });
+
+  // #2001: update_check: false silences the binary but the upgrade-handling
+  // instruction prose used to ship unconditionally. Every skill that carries
+  // the runtime config-echo cluster must (a) echo UPDATE_CHECK so the
+  // instruction layer can read it, and (b) gate the UPGRADE_AVAILABLE /
+  // JUST_UPGRADED prose on it — the same echo-then-gate convention every other
+  // flag (PROACTIVE, SKILL_PREFIX, EXPLAIN_LEVEL, QUESTION_TUNING) follows.
+  test('update_check opt-out gates preamble echo and upgrade-handling prose (issue #2001)', () => {
+    let checked = 0;
+    for (const skill of CLAUDE_GENERATED_SKILLS) {
+      const content = fs.readFileSync(path.join(ROOT, skill.dir, 'SKILL.md'), 'utf-8');
+      // Scope: only skills that render the runtime config-echo cluster.
+      if (!content.includes('echo "QUESTION_TUNING: $_QUESTION_TUNING"')) continue;
+      checked++;
+      expect(content, `${skill.dir} must echo UPDATE_CHECK`).toContain('echo "UPDATE_CHECK: $_UPDATE_CHECK"');
+      expect(content, `${skill.dir} must read update_check config`).toContain('_UPDATE_CHECK=$(');
+      // Whenever the upgrade-handling prose ships, it must gate on the flag.
+      if (content.includes('UPGRADE_AVAILABLE <old> <new>')) {
+        expect(content, `${skill.dir} upgrade prose must gate on UPDATE_CHECK`)
+          .toContain('If `UPDATE_CHECK` is `"false"`');
+      }
+    }
+    // Guard against the scope filter silently matching nothing.
+    expect(checked).toBeGreaterThan(0);
   });
 
   test('tier 2+ skills contain ELI10 simplification rules (AskUserQuestion format)', () => {
@@ -1780,14 +1806,37 @@ describe('Codex generation (--host codex)', () => {
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-claude', 'SKILL.md'), 'utf-8');
     expect(content).toContain('claude -p');
     expect(content).toContain('mktemp /tmp/gstack-claude-prompt-');
+    expect(content).toContain('mktemp /tmp/gstack-claude-response-XXXXXX');
+    expect(content).toContain('mktemp /tmp/gstack-claude-error-XXXXXX');
     expect(content).toContain('mktemp /tmp/gstack-claude-diff-');
+    expect(content).not.toMatch(/gstack-claude-(?:prompt|response|error|diff)-X{6,}\.\w+/);
     expect(content).not.toContain('/tmp/gstack-claude-diff-$$');
-    expect(content).toContain('cat "$PROMPT_FILE" | claude -p');
+    expect(content).toContain('cat "$PROMPT_FILE" | "$CLAUDE_BIN" -p');
+    expect(content).toContain('Resolve the binary and invoke it in the same host execution context');
     expect(content).toContain('--disable-slash-commands');
     expect(content).toContain('--tools ""');
     expect(content).toContain('--allowedTools Read,Grep,Glob');
     expect(content).toContain('--disallowedTools Bash,Edit,Write');
+    expect(content).toContain('Do not infer authentication state from credential files');
+    expect(content).toContain('run the actual `claude -p`');
+    expect(content).not.toContain('AUTH_MISSING');
+    expect(content).not.toContain('$HOME/.claude/.credentials.json');
     expect(content).toContain('is_error');
+  });
+
+  test('Claude temp file templates are accepted by host mktemp', () => {
+    for (const template of [
+      '/tmp/gstack-claude-prompt-XXXXXX',
+      '/tmp/gstack-claude-response-XXXXXX',
+      '/tmp/gstack-claude-error-XXXXXX',
+      '/tmp/gstack-claude-diff-XXXXXX',
+    ]) {
+      const result = spawnSync('mktemp', [template], { encoding: 'utf-8' });
+      expect(result.status).toBe(0);
+      const created = result.stdout.trim();
+      expect(created.startsWith(template.replace('XXXXXX', ''))).toBe(true);
+      fs.unlinkSync(created);
+    }
   });
 
   test('Codex review step stripped from Codex-host ship and review', () => {
@@ -1947,16 +1996,21 @@ describe('Codex generation (--host codex)', () => {
     const content = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
     expect(content).toContain('.claude/skills/review/checklist.md');
     expect(content).toContain('~/.claude/skills/gstack');
-    // Must NOT contain Codex paths
+    // Must NOT contain Codex HOST paths. `~/.codex/sessions/` is exempt: the
+    // timeout-wrapper guidance documents the Codex CLI's own rollout-log
+    // location (a user-facing CLI path, same class as ~/.codex/logs/ in the
+    // codex skill), not the gstack Codex host install path.
     expect(content).not.toContain('.agents/skills');
-    expect(content).not.toContain('~/.codex/');
+    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: ship skill still uses .claude/skills/ paths', () => {
     const content = readShipUnion();
     expect(content).toContain('~/.claude/skills/gstack');
     expect(content).not.toContain('.agents/skills');
-    expect(content).not.toContain('~/.codex/');
+    // ~/.codex/sessions/ is the Codex CLI's rollout-log path (user-facing),
+    // documented by the adversarial-pass timeout guidance — see review test above.
+    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: all Claude skills have zero Codex paths', () => {
@@ -1965,9 +2019,11 @@ describe('Codex generation (--host codex)', () => {
       // pair-agent legitimately documents how Codex agents store credentials.
       // codex + autoplan document the Codex CLI auth file (~/.codex/auth.json)
       // and log path (~/.codex/logs/) — those are user-facing Codex CLI paths,
-      // not the gstack Codex host install path.
+      // not the gstack Codex host install path. ~/.codex/sessions/ (rollout
+      // logs, referenced by the review/ship timeout guidance) is the same
+      // user-facing class, so it is scrubbed before the ban.
       if (skill.dir !== 'pair-agent' && skill.dir !== 'codex' && skill.dir !== 'autoplan') {
-        expect(content).not.toContain('~/.codex/');
+        expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
       }
       // gstack-upgrade legitimately references .agents/skills for cross-platform detection
       if (skill.dir !== 'gstack-upgrade') {
@@ -2409,6 +2465,7 @@ describe('setup script validation', () => {
     expect(setupContent).toContain('kiro-cli');
     expect(setupContent).toContain('KIRO_SKILLS=');
     expect(setupContent).toContain('~/.kiro/skills/gstack');
+    expect(setupContent).toContain('$KIRO_GSTACK/lib');
   });
 
   test('setup supports --host opencode with install section and OpenCode skill path vars', () => {
@@ -2424,14 +2481,16 @@ describe('setup script validation', () => {
     expect(setupContent).toContain('qa/templates');
     expect(setupContent).toContain('qa/references');
     expect(setupContent).toContain('dx-hall-of-fame.md');
+    expect(setupContent).toContain('$opencode_gstack/lib');
   });
 
   test('create_agents_sidecar links runtime assets', () => {
-    // Sidecar must link bin, browse, review, qa
+    // Sidecar must link bin with its shared lib modules, plus browse, review, qa
     const fnStart = setupContent.indexOf('create_agents_sidecar()');
     const fnEnd = setupContent.indexOf('}', setupContent.indexOf('done', fnStart));
     const fnBody = setupContent.slice(fnStart, fnEnd);
     expect(fnBody).toContain('bin');
+    expect(fnBody).toContain('lib');
     expect(fnBody).toContain('browse');
     expect(fnBody).toContain('review');
     expect(fnBody).toContain('qa');
@@ -2442,6 +2501,7 @@ describe('setup script validation', () => {
     const fnEnd = setupContent.indexOf('}', setupContent.indexOf('done', setupContent.indexOf('review/', fnStart)));
     const fnBody = setupContent.slice(fnStart, fnEnd);
     expect(fnBody).toContain('gstack/SKILL.md');
+    expect(fnBody).toContain('$codex_gstack/lib');
     expect(fnBody).toContain('browse/dist');
     expect(fnBody).toContain('browse/bin');
     expect(fnBody).toContain('gstack-upgrade/SKILL.md');
@@ -2451,6 +2511,14 @@ describe('setup script validation', () => {
     expect(fnBody).toContain('greptile-triage.md');
     expect(fnBody).toContain('TODOS-format.md');
     expect(fnBody).not.toContain('_link_or_copy "$gstack_dir" "$codex_gstack"');
+  });
+
+  test('create_factory_runtime_root links shared lib modules beside bin', () => {
+    const fnStart = setupContent.indexOf('create_factory_runtime_root()');
+    const fnEnd = setupContent.indexOf('create_opencode_runtime_root()', fnStart);
+    const fnBody = setupContent.slice(fnStart, fnEnd);
+    expect(fnBody).toContain('$factory_gstack/bin');
+    expect(fnBody).toContain('$factory_gstack/lib');
   });
 
   test('direct Codex installs are migrated out of ~/.codex/skills/gstack', () => {
@@ -2807,21 +2875,54 @@ describe('codex commands must not use inline $(git rev-parse --show-toplevel) fo
     expect(violations).toEqual([]);
   });
 
-  test('codex review commands pass diff scope through prompt, not --base', () => {
+  test('codex review commands take their scope from a flag, never from prompt text', () => {
+    // `codex review` scope comes ONLY from --base/--commit/--uncommitted. The
+    // positional [PROMPT] is mutually exclusive with all three (#1428, #1479),
+    // and a prompt-only `codex review` silently falls back to the *uncommitted
+    // working-tree* scope (`git status --short; git diff`) — so describing the
+    // diff range in prompt text produces a confident review of the wrong
+    // changes, with no error. Both halves are pinned here:
+    //   (a) every `codex review` invocation carries a scope flag, and
+    //   (b) no invocation puts a positional prompt in front of that flag.
+    //
+    // This does NOT apply to `codex exec`, which is agentic and really does run
+    // the git command it's told to — the adversarial pass legitimately scopes
+    // itself in prompt text.
     const checkedFiles = [
-      'codex/SKILL.md.tmpl',
-      'codex/SKILL.md',
       'scripts/resolvers/review.ts',
       'review/SKILL.md',
       'ship/SKILL.md',
+      'codex/SKILL.md.tmpl',
+      'codex/SKILL.md',
     ];
 
+    const violations: string[] = [];
     for (const rel of checkedFiles) {
       // ship's codex/adversarial command moved into sections/adversarial.md (T9 carve).
       const content = rel === 'ship/SKILL.md' ? readShipUnion() : fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-      expect(content).not.toContain('--base <base> -c \'model_reasoning_effort="high"\'');
-      expect(content).toContain('Run git diff origin/<base>...HEAD 2>/dev/null || git diff <base>...HEAD');
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Only inspect real shell invocations, not prose mentioning the command.
+        if (line.includes('`codex review`')) continue;
+        const match = line.match(/(?:^|[;&|]\s*|\s)codex\s+review\b(.*)$/);
+        if (!match) continue;
+        const rest = match[1];
+        const scopeFlag = /--base\b|--commit\b|--uncommitted\b/;
+        if (!scopeFlag.test(rest)) {
+          // A quoted prompt with no scope flag is the silent-wrong-scope bug.
+          if (/^\s*["'$]/.test(rest)) {
+            violations.push(`${rel}:${i + 1} — prompt-only codex review (falls back to working-tree scope)`);
+          }
+          continue;
+        }
+        const beforeFlag = rest.split(scopeFlag)[0].trim();
+        if (/^["'$]|^--\s*["']/.test(beforeFlag)) {
+          violations.push(`${rel}:${i + 1} — positional prompt passed alongside a scope flag`);
+        }
+      }
     }
+    expect(violations).toEqual([]);
   });
 });
 

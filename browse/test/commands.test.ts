@@ -94,11 +94,14 @@ beforeAll(async () => {
   await bm.launch();
 });
 
-afterAll(() => {
-  // Force kill browser instead of graceful close (avoids hang)
+afterAll(async () => {
   try { testServer.server.stop(); } catch {}
-  // bm.close() can hang — just let process exit handle it
-  setTimeout(() => process.exit(0), 500);
+  // Close only this file's own browser — never process.exit(): bun test runs
+  // all files in one process, so a delayed exit kills the whole suite
+  // (see test/no-suicide-exit.test.ts). close() can hang when the browser
+  // already died, and its internal 5s timeout ties bun's 5s hook timeout —
+  // so race it at 3s and abandon; the child is reaped at process exit.
+  try { await Promise.race([bm?.close(), new Promise((resolve) => setTimeout(resolve, 3000))]); } catch {}
 });
 
 // ─── Navigation ─────────────────────────────────────────────────
@@ -881,7 +884,10 @@ describe('CLI lifecycle', () => {
     cliEnv.BROWSE_STATE_FILE = stateFile;
     const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
       const proc = spawn('bun', ['run', cliPath, 'status'], {
-        timeout: 15000,
+        // Must exceed the CLI's startup budget (resolveStartTimeout, 15s
+        // non-CI POSIX) or a slow cold boot under full-suite load gets the
+        // child killed at the exact moment the CLI would have succeeded.
+        timeout: 18000,
         env: cliEnv,
       });
       let stdout = '';
@@ -2295,6 +2301,19 @@ describe('load-html', () => {
       expect(err.message).toMatch(/does not appear to be HTML/);
     } finally {
       try { fs.unlinkSync(txtPath); } catch {}
+    }
+  });
+
+  test('load-html rejects .svg files', async () => {
+    const svgPath = path.join(tmpDir, `load-html-test-${Date.now()}.svg`);
+    fs.writeFileSync(svgPath, '<svg xmlns="http://www.w3.org/2000/svg"><text>hi</text></svg>');
+    try {
+      await handleWriteCommand('load-html', [svgPath], bm);
+      expect(true).toBe(false);
+    } catch (err: any) {
+      expect(err.message).toMatch(/does not appear to be HTML/);
+    } finally {
+      try { fs.unlinkSync(svgPath); } catch {}
     }
   });
 
