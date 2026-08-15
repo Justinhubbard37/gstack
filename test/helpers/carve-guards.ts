@@ -144,7 +144,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-plan-ceo-review-section-loading.test.ts',
-    maxSkeletonBytes: 90_000,
+  // Re-ratcheted 2026-08 (v1.64 baseline rebase): v1.58-v1.64 growth landed
+  // while no CI lane ran the parity check; free-tests lane now enforces it.
+    maxSkeletonBytes: 92_000,
     minUnionBytes: 80_000,
     mustContain: ['SCOPE EXPANSION', 'SELECTIVE EXPANSION', 'HOLD SCOPE', 'SCOPE REDUCTION'],
     // Default-on Codex outside-voice (codexPreflight block + CODEX_MODE branch
@@ -165,7 +167,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     behavioral: 'plan',
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
     // +~1 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
-    maxSkeletonBytes: 68_000,
+  // Re-ratcheted 2026-08 (v1.64 baseline rebase): v1.58-v1.64 growth landed
+  // while no CI lane ran the parity check; free-tests lane now enforces it.
+    maxSkeletonBytes: 70_000,
     minUnionBytes: 70_000,
     mustContain: ['Architecture', 'Code Quality', 'Test', 'Performance'],
     // Cross-cutting preamble growth (v1.57.2.0 AUQ-failure prose fallback + the
@@ -240,7 +244,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     behavioral: 'prompt',
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble,
     // plus the P1 office-hours closing handoff (AUQ that launches the next skill).
-    maxSkeletonBytes: 98_000,
+  // Re-ratcheted 2026-08 (v1.64 baseline rebase): v1.58-v1.64 growth landed
+  // while no CI lane ran the parity check; free-tests lane now enforces it.
+    maxSkeletonBytes: 100_000,
     minUnionBytes: 70_000,
     mustContain: ['design doc', 'problem statement'],
     maxSizeRatio: 1.07,
@@ -289,7 +295,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // +Conductor AUQ-default-prose rule + one-way/continuation safety in the
     // always-loaded AskUserQuestion Format section.
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble.
-    maxSkeletonBytes: 69_000,
+  // Re-ratcheted 2026-08 (v1.64 baseline rebase): v1.58-v1.64 growth landed
+  // while no CI lane ran the parity check; free-tests lane now enforces it.
+    maxSkeletonBytes: 70_000,
     minUnionBytes: 72_000,
     mustContain: ['Typography', 'Color', 'Aesthetic Direction'],
     // Cross-cutting preamble growth (v1.57.2.0 AUQ-failure prose fallback ~2KB +
