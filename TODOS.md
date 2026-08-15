@@ -84,18 +84,6 @@ debug of what the child's preamble actually echoes.
 **Why:** every red periodic run costs triage time; two of these have burned
 three triage passes across two releases. **Effort:** M. **Priority:** P2.
 
-### P3: gbrain-adapter add/delete/export behavioral coverage
-
-**What:** Extend test/code-intelligence.test.ts's fake-gbrain shim to pin the
-three untested capability-advertised ops: add() pipes the body to `put <slug>`
-and writes a receipt with the body's sha256, delete() survives the stdin-EOF
-prompt guard, export() returns stdout, and each degrades to
-PROVIDER_UNAVAILABLE when the CLI is absent.
-
-**Why:** Shipped public ops with zero exercise; the harness to test them
-cheaply already exists. **Effort:** S. **Priority:** P3.
-
-
 ### P1: #1882 — portable skill-install prefix (non-`gstack` install dirs break silently)
 
 **What:** Every generated SKILL.md hardcodes the literal `~/.claude/skills/gstack/...`

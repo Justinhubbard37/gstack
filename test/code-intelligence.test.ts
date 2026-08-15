@@ -33,6 +33,7 @@ import {
   RECOMMENDED_ORDER,
   shouldOfferIndexing,
   trackedFileCount,
+  LARGE_REPO_FILE_THRESHOLD,
 } from "../lib/code-intelligence";
 
 describe("capability matrix", () => {
@@ -804,6 +805,265 @@ describe("consent CLI requires an explicit yes|no (never defaults to granted)", 
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("yes|no");
     expect(readSelection(env).consents).toEqual({});
+  });
+});
+
+// ── GBrain document ops (add/delete/export) — behavioral pins over the same
+// fake-gbrain shim harness. add() must pipe the body to `put <slug>` on stdin
+// and receipt the body's sha256 BEFORE the send; delete() must survive a
+// confirmation prompt via the stdin-EOF guard; export() must return the CLI's
+// stdout verbatim; and each must degrade to PROVIDER_UNAVAILABLE (not a hard
+// error) when the CLI is absent.
+describe("GBrain document ops (add/delete/export) via fake gbrain shim", () => {
+  let binDir: string;
+  let home: string;
+  let argvLog: string;
+  let stdinLog: string;
+  function env(): NodeJS.ProcessEnv {
+    return { PATH: `${binDir}:${process.env.PATH}`, HOME: home, GSTACK_HOME: home };
+  }
+  function ledgerLines(): Array<Record<string, unknown>> {
+    const p = path.join(home, "security", "egress.jsonl");
+    if (!fs.existsSync(p)) return [];
+    return fs
+      .readFileSync(p, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+  beforeEach(() => {
+    binDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gb-docops-bin-"));
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gb-docops-home-"));
+    argvLog = path.join(home, "gbrain-argv.log");
+    stdinLog = path.join(home, "gbrain-stdin.log");
+    // Shim logs every argv (so "refused BEFORE the subprocess" is provable),
+    // captures put's stdin byte-for-byte, and blocks delete on a confirmation
+    // read the way a real prompt would — the adapter's stdin-EOF guard is the
+    // only thing keeping that from hanging until the op timeout.
+    fs.writeFileSync(
+      path.join(binDir, "gbrain"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${argvLog}"
+case "$1" in
+  put) cat > "${stdinLog}"; echo "stored $2"; exit 0;;
+  delete) read -r _confirm; echo "deleted $2"; exit 0;;
+  export) printf 'line-one\\nline-two\\n'; exit 0;;
+esac
+exit 1
+`,
+      { mode: 0o755 },
+    );
+  });
+  afterEach(() => {
+    fs.rmSync(binDir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  test("add() pipes the document body to `put <slug>` on stdin and receipts the body's sha256", async () => {
+    const body = "# curated memory\nthe exact body bytes\n";
+    const s = await new GbrainProvider().add({ slug: "my-doc", body }, { env: env(), consented: true });
+    expect(s).toEqual({ id: "my-doc", state: "ready" });
+    expect(fs.readFileSync(argvLog, "utf-8").trim()).toBe("put my-doc");
+    // The body reached gbrain via stdin, byte-for-byte (not argv, not a temp file).
+    expect(fs.readFileSync(stdinLog, "utf-8")).toBe(body);
+    const lines = ledgerLines();
+    expect(lines.length).toBe(1);
+    expect(lines[0].sink).toBe("gbrain");
+    expect(String(lines[0].payload_class)).toContain("document-body");
+    expect(String(lines[0].consent)).toContain("consented=true");
+    expect(lines[0].sha256).toBe(sha256Hex(body));
+    expect(lines[0].bytes).toBe(Buffer.byteLength(body));
+  });
+
+  test("add() asserts consent: unconsented add is refused BEFORE the subprocess runs, no receipt", async () => {
+    await expect(new GbrainProvider().add({ slug: "s", body: "secret body" }, { env: env() })).rejects.toMatchObject({
+      code: "PROVIDER_NOT_CONSENTED",
+    });
+    expect(fs.existsSync(argvLog)).toBe(false); // the body never left the machine
+    expect(ledgerLines()).toEqual([]);
+  });
+
+  test("delete() survives a confirmation prompt via the stdin-EOF guard (never hangs)", async () => {
+    // Shim blocks on `read` — with the adapter's input:"" the read gets EOF
+    // instantly. A regression to inherited/open stdin fails here at the 5s
+    // op timeout (PROVIDER_TIMEOUT) instead of returning state=absent.
+    const s = await new GbrainProvider().delete("stale-doc", { env: env(), timeout: 5_000 });
+    expect(s).toEqual({ id: "stale-doc", state: "absent" });
+    expect(fs.readFileSync(argvLog, "utf-8").trim()).toBe("delete stale-doc");
+  });
+
+  test("export() returns the CLI's stdout verbatim (multi-line, unparsed)", async () => {
+    const body = await new GbrainProvider().export({ id: "code" }, { env: env(), consented: true });
+    expect(body).toBe("line-one\nline-two\n");
+    expect(fs.readFileSync(argvLog, "utf-8").trim()).toBe("export");
+  });
+
+  test("add/delete/export each degrade to PROVIDER_UNAVAILABLE when the CLI is absent", async () => {
+    const missing = { PATH: os.tmpdir(), HOME: home, GSTACK_HOME: home };
+    const g = new GbrainProvider();
+    await expect(g.add({ slug: "s", body: "b" }, { env: missing, consented: true })).rejects.toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+    });
+    await expect(g.delete("s", { env: missing })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+    await expect(g.export({ id: "code" }, { env: missing, consented: true })).rejects.toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+    });
+  });
+});
+
+// ── CLI rendering surfaces: options / status / suggest --json ───────────────
+// The human/agent-facing renderers had zero reach: pin that `options` lists
+// the three providers with availability rows (GBrain first), `status` renders
+// the persisted selection + per-provider availability, and `suggest --json`
+// emits the machine-readable offer/reason contract.
+describe("CLI rendering (options / status / suggest --json)", () => {
+  const CLI = path.join(import.meta.dir, "..", "bin", "gstack-code-intelligence");
+  let home: string;
+  let shimDir: string;
+  let env: NodeJS.ProcessEnv;
+
+  function runCli(...args: string[]) {
+    return spawnSync("bun", [CLI, ...args], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: env as Record<string, string>,
+    });
+  }
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-cli-render-"));
+    shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-cli-render-bin-"));
+    // Fake gbrain satisfies the FULL localEngineStatus probe chain (--version
+    // resolution + `sources list --json` liveness) so the GBrain row is
+    // deterministically available; config.json lives in the temp GBRAIN_HOME
+    // so the operator's real ~/.gbrain is never read.
+    fs.writeFileSync(
+      path.join(shimDir, "gbrain"),
+      `#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "gbrain 0.42.0"; exit 0; fi
+if [ "$1" = "sources" ]; then echo '{"sources":[]}'; exit 0; fi
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    const gbrainHome = path.join(home, ".gbrain");
+    fs.mkdirSync(gbrainHome, { recursive: true });
+    fs.writeFileSync(path.join(gbrainHome, "config.json"), JSON.stringify({ engine: "pglite" }));
+    env = {
+      ...process.env,
+      GSTACK_HOME: home,
+      HOME: home,
+      GBRAIN_HOME: gbrainHome,
+      PATH: `${shimDir}:${process.env.PATH}`,
+      // Dead loopback port → the Sourcebot probe fails fast + deterministically
+      // (connection refused) instead of poking whatever operator dev server
+      // happens to sit on localhost:3000.
+      SOURCEBOT_URL: "http://127.0.0.1:1",
+    };
+  });
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  });
+
+  function makeRepoWithFiles(count: number): string {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "ci-cli-suggest-"));
+    Bun.spawnSync(["git", "init", "-q", repo]);
+    for (let i = 0; i < count; i++) fs.writeFileSync(path.join(repo, `f${i}.ts`), "x\n");
+    Bun.spawnSync(["git", "-C", repo, "add", "-A"]);
+    return repo;
+  }
+
+  test("options lists the three providers with availability rows, GBrain first", () => {
+    const res = runCli("options");
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("Code-intelligence providers");
+    // GBrain row: recommended marker + deterministically available via the shim.
+    expect(res.stdout).toMatch(/\* GBrain\s+\[available\]/);
+    expect(res.stdout).toContain("gbrain engine: ok");
+    // Sourcebot row: dead loopback port → not available, probe detail rendered.
+    expect(res.stdout).toMatch(/Sourcebot\s+\[not available\]/);
+    expect(res.stdout).toContain("unreachable at http://127.0.0.1:1");
+    // Graphify row renders an availability mark either way (the operator
+    // machine may or may not have graphify installed).
+    expect(res.stdout).toMatch(/Graphify\s+\[(available|not available)\]/);
+    // Rows come out in recommendation order (GBrain → Sourcebot → Graphify).
+    const at = ["GBrain", "Sourcebot", "Graphify"].map((s) => res.stdout.indexOf(s));
+    expect(at[0]).toBeGreaterThan(-1);
+    expect(at[0]).toBeLessThan(at[1]);
+    expect(at[1]).toBeLessThan(at[2]);
+    expect(res.stdout).toContain("select <provider>");
+  });
+
+  test("status renders the provider-OFF selection and per-provider availability", () => {
+    const res = runCli("status");
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("selected: none (grep / file-only fallback)");
+    expect(res.stdout).toContain("GBrain: available (gbrain engine: ok)");
+    expect(res.stdout).toContain("Sourcebot: unavailable (unreachable at http://127.0.0.1:1)");
+    expect(res.stdout).toMatch(/Graphify: (available|unavailable)/);
+  });
+
+  test("status renders a persisted selection", () => {
+    setProvider("gbrain", env);
+    const res = runCli("status");
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("selected: gbrain");
+  });
+
+  test("suggest --json: small repo → machine-readable offer:false / reason:small-repo", () => {
+    const repo = makeRepoWithFiles(3);
+    try {
+      const res = runCli("suggest", repo, "--json");
+      expect(res.status).toBe(0);
+      const parsed = JSON.parse(res.stdout) as Record<string, unknown>;
+      expect(parsed).toEqual({
+        offer: false,
+        reason: "small-repo",
+        fileCount: 3,
+        threshold: LARGE_REPO_FILE_THRESHOLD,
+        repoPath: repo,
+      });
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("suggest --json: large repo → offer:true with self-contained provider options", () => {
+    const repo = makeRepoWithFiles(LARGE_REPO_FILE_THRESHOLD);
+    try {
+      const res = runCli("suggest", repo, "--json");
+      expect(res.status).toBe(0);
+      const parsed = JSON.parse(res.stdout) as {
+        offer: boolean;
+        reason: string;
+        fileCount: number;
+        options: Array<{ id: string; label: string; reason: string; local: boolean; available: boolean; detail: string }>;
+      };
+      expect(parsed.offer).toBe(true);
+      expect(parsed.reason).toBe("large-repo");
+      expect(parsed.fileCount).toBe(LARGE_REPO_FILE_THRESHOLD);
+      // The offer is self-contained: every provider option carries the fields
+      // an agent needs to render the question without a second CLI call.
+      expect(parsed.options.map((o) => o.id)).toEqual(["gbrain", "sourcebot", "graphify"]);
+      for (const o of parsed.options) {
+        expect(typeof o.label).toBe("string");
+        expect(typeof o.reason).toBe("string");
+        expect(typeof o.local).toBe("boolean");
+        expect(typeof o.available).toBe("boolean");
+        expect(typeof o.detail).toBe("string");
+      }
+      const gbrain = parsed.options[0];
+      expect(gbrain.label).toBe("GBrain");
+      expect(gbrain.local).toBe(false);
+      expect(gbrain.available).toBe(true);
+      expect(gbrain.detail).toContain("gbrain engine:");
+      const sourcebot = parsed.options[1];
+      expect(sourcebot.local).toBe(true); // loopback SOURCEBOT_URL
+      expect(sourcebot.available).toBe(false);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 
