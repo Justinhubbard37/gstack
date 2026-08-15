@@ -1568,8 +1568,13 @@ export class BrowserManager {
         console.log('[browse] Handoff: extension not found — headed mode without side panel');
       }
 
-      const userDataDir = path.join(process.env.HOME || '/tmp', '.gstack', 'chromium-profile');
+      // Same profile resolution + singleton-lock cleanup as launchHeaded().
+      // This path previously hardcoded ~/.gstack/chromium-profile, silently
+      // ignoring $CHROMIUM_PROFILE / $GSTACK_HOME and skipping the lock
+      // cleanup — the third shipped drift between the three launch paths.
+      const userDataDir = resolveChromiumProfile();
       fs.mkdirSync(userDataDir, { recursive: true });
+      cleanSingletonLocks(userDataDir);
 
       // T1: same automation-tell-stripping defaults as launchHeaded().
       // The handoff path (headless → headed re-launch) takes the same
