@@ -11,7 +11,7 @@
 import type { TemplateContext } from './types';
 
 function binDir(ctx: TemplateContext): string {
-  return ctx.host === 'codex' ? '$GSTACK_BIN' : ctx.paths.binDir;
+  return ctx.paths.binDir; // env-var hosts already resolve to $GSTACK_BIN via types.ts
 }
 
 /**
