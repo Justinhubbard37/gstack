@@ -5,7 +5,11 @@ import { applyStealth, STEALTH_LAUNCH_ARGS } from '../src/stealth';
 let browser: Browser;
 
 beforeAll(async () => {
-  browser = await chromium.launch({ headless: true, args: STEALTH_LAUNCH_ARGS });
+  // Playwright's default launch timeout is 30s — under the full-suite
+  // --parallel run, ~400 workers contend and a cold Chromium launch can
+  // stall past it (observed: hook death reported as an '(unnamed)' test at
+  // 30006ms). The runner's external wall-clock still bounds the ceiling.
+  browser = await chromium.launch({ headless: true, args: STEALTH_LAUNCH_ARGS, timeout: 120_000 });
 });
 
 afterAll(async () => {
@@ -292,6 +296,7 @@ describe('applyStealth — persistent context (headed + handoff parity)', () => 
     const ctx = await chromium.launchPersistentContext(userDataDir, {
       headless: true,
       args: STEALTH_LAUNCH_ARGS,
+      timeout: 120_000, // same parallel-load headroom as the top-level launch
     });
     try {
       await applyStealth(ctx);
