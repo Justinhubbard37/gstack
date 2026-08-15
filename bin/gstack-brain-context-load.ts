@@ -190,16 +190,26 @@ function resolveSkillFile(args: CliArgs): string | null {
 
 // ── Dispatchers ────────────────────────────────────────────────────────────
 
+// Memoized: availability can't change mid-invocation, and the per-query
+// re-probe was both wasteful (N probes per run) and load-flaky — a cold
+// `gbrain --version` on a saturated box can exceed the 500ms budget, branding
+// gbrain "missing" for one query while its siblings succeed (observed under
+// the parallel free-suite runner: SKIP at dur=505ms with two OKs after it).
+let _gbrainAvailable: boolean | null = null;
 function gbrainAvailable(): boolean {
+  if (_gbrainAvailable !== null) return _gbrainAvailable;
   try {
     execFileSync("gbrain", ["--version"], {
       stdio: "ignore",
-      timeout: MCP_TIMEOUT_MS,
+      // Generous first-probe budget: this runs ONCE, and a slow-to-start CLI
+      // is not a missing CLI. Query calls keep the tight MCP_TIMEOUT_MS.
+      timeout: 5_000,
     });
-    return true;
+    _gbrainAvailable = true;
   } catch {
-    return false;
+    _gbrainAvailable = false;
   }
+  return _gbrainAvailable;
 }
 
 function dispatchVector(q: GbrainManifestQuery, args: CliArgs): QueryResult {

@@ -31,6 +31,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 import { captureBaseline, type ParityBaseline } from './helpers/capture-parity-baseline';
 import { logBudgetOverride } from './helpers/budget-override';
 import { CARVED_SKILLS } from './helpers/carve-guards';
@@ -212,10 +213,27 @@ describe('SKILL.md size budget regression (gate, free)', () => {
 
   test('catalog token estimate stays compressed (v1.45 target ≤ 7000)', () => {
     const current = captureBaseline({ repoRoot: REPO_ROOT });
+    // Count only git-TRACKED skills. Under the parallel free-suite runner,
+    // concurrent test files can leave transient skill-shaped dirs in the live
+    // repo mid-run (observed: this estimate exactly DOUBLED, 8356 vs 4177,
+    // while a solo run passed). A repo-budget ratchet should measure the
+    // catalog that ships, not another worker's scratch state.
+    const tracked = new Set(
+      execSync('git ls-files -- "*/SKILL.md"', { cwd: REPO_ROOT, encoding: 'utf-8' })
+        .split('\n')
+        .filter(Boolean)
+        .filter((p) => p.split('/').length === 2)
+        .map((p) => p.split('/')[0]),
+    );
+    const catalogTokens = Math.round(
+      Object.values(current.skills)
+        .filter((s) => tracked.has(s.skill))
+        .reduce((sum, s) => sum + s.descriptionLen, 0) / 4,
+    );
     const v145Target = 7000;
-    if (current.estTotalCatalogTokens <= v145Target) {
+    if (catalogTokens <= v145Target) {
       // eslint-disable-next-line no-console
-      console.log(`[skill-size-budget] catalog OK: ~${current.estTotalCatalogTokens} tokens (target ≤${v145Target})`);
+      console.log(`[skill-size-budget] catalog OK: ~${catalogTokens} tokens (target ≤${v145Target}, ${tracked.size} tracked skills)`);
       return;
     }
     const overrideReason = process.env.GSTACK_SIZE_BUDGET_OVERRIDE_REASON?.trim();
@@ -223,12 +241,12 @@ describe('SKILL.md size budget regression (gate, free)', () => {
       logBudgetOverride({
         scope: 'skill-size-budget-catalog',
         reason: overrideReason,
-        details: { target: v145Target, observed: current.estTotalCatalogTokens },
+        details: { target: v145Target, observed: catalogTokens },
       });
       return;
     }
     throw new Error(
-      `Catalog token estimate regressed past v1.45 target: ${current.estTotalCatalogTokens} tokens > ${v145Target}. ` +
+      `Catalog token estimate regressed past v1.45 target: ${catalogTokens} tokens > ${v145Target}. ` +
       `T4 catalog trim should keep this under control. Override: set GSTACK_SIZE_BUDGET_OVERRIDE_REASON to allow.`,
     );
   });
