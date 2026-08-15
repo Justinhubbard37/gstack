@@ -109,6 +109,13 @@ beforeEach(() => {
   pwCache = path.join(tmpHome, 'pw-cache', 'ms-playwright');
   fs.mkdirSync(pwCache, { recursive: true });
   fs.mkdirSync(path.join(tmpHome, '.gstack'), { recursive: true });
+  // The migration gates on `uname -s` = Darwin; on the Linux CI runner the
+  // real uname made every test early-exit with empty output. Shim Darwin so
+  // the Darwin-path tests run everywhere; the non-Darwin test overwrites
+  // this shim with its own Linux uname.
+  fs.writeFileSync(path.join(fakeBinDir, 'uname'), '#!/bin/bash\necho Darwin\n', {
+    mode: 0o755,
+  });
 });
 
 afterEach(() => {

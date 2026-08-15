@@ -363,7 +363,25 @@ gbrain:
     const dir = mkdtempSync(join(tmpdir(), "gstack-bcl-"));
     const binDir = join(dir, "bin");
     mkdirSync(binDir);
-    writeFakeGbrain(binDir);
+    // A SLOW fake, not the shared instant one: on a fast CI runner the
+    // instant fake answered inside even a 1ms budget (observed dur=0ms on
+    // ubicloud) and no SKIP ever printed. Sleeping makes the timeout
+    // deterministic on every machine; --version stays instant so detection
+    // has nothing to wait on.
+    const fakeBin = join(binDir, "gbrain");
+    writeFileSync(
+      fakeBin,
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gbrain 0.test"
+else
+  sleep 0.3
+  echo "fake gbrain $*"
+fi
+`,
+      "utf-8",
+    );
+    chmodSync(fakeBin, 0o755);
 
     try {
       const env = { ...prependPath(binDir), GSTACK_BRAIN_TIMEOUT_MS: "1" };
