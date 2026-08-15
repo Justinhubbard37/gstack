@@ -1257,10 +1257,12 @@ export const engStep0Boundary: Step0BoundaryPredicate = (fp) =>
   ) ||
   // plan-eng-review's Step 0 may legitimately end with NO scope-reduction /
   // learnings AUQ. When it does, the first answered review-phase question —
-  // tagged <gstack-qid:eng-review-...> by the question-tuning resolver —
+  // tagged <gstack-qid:plan-eng-review-...> ({skill}-{slug} convention) —
   // must fire the boundary, or every per-finding AUQ stays classified
-  // preReview and the multi-finding batching counter reads 0.
-  /gstack-qid:\s*eng-review-/i.test(fp.promptSnippet);
+  // preReview and the multi-finding batching counter reads 0. Anchor allows
+  // the skill-name prefix; live qids observed: plan-eng-review-jitter,
+  // plan-eng-review-idempotency, plan-eng-review-todos-e2e-concurrent.
+  /gstack-qid:\s*(?:plan-)?eng-review-/i.test(fp.promptSnippet);
 
 export const designStep0Boundary: Step0BoundaryPredicate = (fp) =>
   /design system|design posture|design score|first dimension/i.test(
