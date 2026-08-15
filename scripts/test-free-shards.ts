@@ -95,7 +95,7 @@ const ROOT = path.resolve(import.meta.dir, '..');
 // or local free run. Keep the two lists in sync. This list is the single
 // source of truth for free-suite roots: package.json's `test` script routes
 // through this runner rather than passing its own directory globs.
-const TEST_ROOTS = [
+export const TEST_ROOTS = [
   'browse/test',
   'test',
   'make-pdf/test',
@@ -206,6 +206,26 @@ export const FREE_TEST_TIMEOUT_MS = 30_000;
 // minutes, not sat out — 15min of silence was pure diagnosis latency.
 // Override per run with --wall-timeout <secs>.
 export const DEFAULT_WALL_TIMEOUT_MS = 6 * 60_000;
+/**
+ * Full-suite shards scale their wall deadline with shard size:
+ * max(DEFAULT_WALL_TIMEOUT_MS, files × PER_FILE_WALL_MS). The 6-min floor
+ * keeps wedge diagnosis fast on a typical ~70-file local shard, while a
+ * low-core machine (jobs=1 → the whole suite in one shard) or the Windows
+ * lane (~130 files/shard) gets proportional headroom instead of a false
+ * timed-out kill of a healthy run. Explicit --wall-timeout disables scaling.
+ */
+export const PER_FILE_WALL_MS = 5_000;
+export function wallTimeoutForShard(fileCount: number, baseMs = DEFAULT_WALL_TIMEOUT_MS): number {
+  return Math.max(baseMs, fileCount * PER_FILE_WALL_MS);
+}
+/**
+ * Full-suite parallelism: leave RESERVED_CPUS cores for the parent runner +
+ * OS, cap at MAX_FULL_SUITE_JOBS — beyond ~6 concurrent bun processes the
+ * playwright-heavy shards contend on browser launches instead of finishing
+ * sooner (measured on an M-series dev box).
+ */
+export const MAX_FULL_SUITE_JOBS = 6;
+export const RESERVED_CPUS = 2;
 
 /**
  * Files that crash or wedge Bun's --parallel WORKERS but run fine in a plain
@@ -222,26 +242,26 @@ export const WORKER_HOSTILE: Record<string, string> = {
 };
 
 /**
- * Tests that REGENERATE shared repo artifacts in place (skill SKILL.md files
- * or the .agents/ host outputs). Any shard reading those files concurrently
- * sees a moving target — this one family produced today's exactly-doubled
- * catalog estimate, golden-file drift, and the spec-sync mismatch. Full-suite
- * mode runs them in ONE serial shard AFTER the parallel shards finish, so
- * readers never race a mutator. (CI's --shards matrix is unaffected: each CI
- * shard has its own checkout.) Each mutator restores default state itself.
- */
-/**
  * TREE-SERIAL files: run in ONE serial shard AFTER the parallel shards.
  * Two kinds live here:
- *   - MUTATORS: tests that regenerate shared repo artifacts in place.
+ *   - MUTATORS: tests that regenerate shared repo artifacts in place (skill
+ *     SKILL.md files or the .agents/ host outputs). A shard reading those
+ *     files concurrently sees a moving target — this family produced an
+ *     exactly-doubled catalog estimate, golden-file drift, and a spec-sync
+ *     mismatch before serialization.
  *   - RATCHET READERS: tests that MEASURE the shared tree (parity caps,
  *     size budgets). Measuring while any concurrent test regenerates is
  *     undefined behavior — two runs failed with byte-identical inflated
  *     skeletons while the tree was clean before and after, so rather than
  *     hunt every present and future mutator, the measurers get a quiet
  *     tree by construction.
- * Serial order within the shard: readers are appended after mutators by the
- * assignment below, and every mutator restores default state itself.
+ * Order within the serial shard is alphabetical (the file census is sorted
+ * and the serial shard is a filter over it) — safety does NOT depend on
+ * mutators-before-readers ordering; it rests on every mutator restoring
+ * default state itself. (CI's --shards matrix is unaffected: each CI shard
+ * has its own checkout.)
+ * Keys are pinned against the live file census by test-free-shards.test.ts —
+ * a renamed file fails the suite instead of silently dropping serialization.
  */
 export const TREE_MUTATING: Record<string, string> = {
   'test/catalog-mode-full.test.ts': 'regenerates ALL SKILL.md in full-catalog mode, then restores',
@@ -254,7 +274,8 @@ export const TREE_MUTATING: Record<string, string> = {
   // Ratchet readers (measure the tree; need it quiet):
   'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
   'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',
-  'test/carve-guard-checks.test.ts': 'RATCHET READER — carve-guard skeleton checks measure the live tree',
+  'test/carve-guard-completeness.test.ts': 'RATCHET READER — registry-vs-disk parity reads live sections/manifest.json files',
+  'test/carve-section-ordering.test.ts': 'RATCHET READER — checkOrdering(ROOT) reads live skeletons and sections',
 };
 
 export function normalizeRelativePath(filePath: string): string {
@@ -378,7 +399,12 @@ export function assignFilesToShards(files: string[], shardCount: number): string
 }
 
 export interface BuildShardArgsOptions {
-  /** Run test files in parallel worker processes (bun 1.3.13+, implies --isolate). */
+  /**
+   * Pass bun's --parallel (worker-per-file, implies --isolate). No production
+   * caller today — full-suite mode uses N shard PROCESSES after the worker
+   * pathologies documented in main(); retained for a future re-attempt on a
+   * newer Bun (see WORKER_HOSTILE).
+   */
   parallel?: boolean;
   rootDir?: string;
 }
@@ -402,6 +428,8 @@ type CliOptions = {
   shardCount: number;
   shardIndex: number | null;
   wallTimeoutMs: number;
+  /** True when --wall-timeout was passed explicitly; full-suite mode only auto-scales the default. */
+  wallTimeoutExplicit: boolean;
 };
 
 function parseCliOptions(argv: string[]): CliOptions {
@@ -412,6 +440,7 @@ function parseCliOptions(argv: string[]): CliOptions {
   let shardCount = DEFAULT_SHARD_COUNT;
   let shardIndex: number | null = null;
   let wallTimeoutMs = DEFAULT_WALL_TIMEOUT_MS;
+  let wallTimeoutExplicit = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -437,13 +466,14 @@ function parseCliOptions(argv: string[]): CliOptions {
       const value = Number.parseInt(argv[index + 1] ?? '', 10);
       if (!Number.isInteger(value) || value <= 0) throw new Error('--wall-timeout needs a positive integer (seconds)');
       wallTimeoutMs = value * 1000;
+      wallTimeoutExplicit = true;
       index += 1;
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { dryRun, listOnly, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs };
+  return { dryRun, listOnly, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs, wallTimeoutExplicit };
 }
 
 function formatShardSummary(shards: string[][]): string[] {
@@ -748,7 +778,7 @@ export interface RunFreeShardOptions {
   wallTimeoutMs?: number;
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
-  /** Full-suite mode: single bun invocation with --parallel (per-file worker isolation). */
+  /** Pass bun's --parallel. No production caller today (see BuildShardArgsOptions.parallel). */
   parallel?: boolean;
   /** Override the spawned command. Tests inject fake pass/fail/slow commands. */
   commandFor?: (files: string[]) => ShardCommand;
@@ -885,7 +915,7 @@ export async function runFreeShard(
   const consumeStream = (stream: NodeJS.ReadableStream, origin: StreamOrigin): Promise<void> =>
     new Promise((resolve, reject) => {
       stream.on('data', (chunk: Buffer | string) => {
-        classifier.write(chunk); // strict verdict ALWAYS sees the full stream
+        classifier.write(chunk, origin); // strict verdict ALWAYS sees the full stream
         if (!logWriteFailed) logStream.write(chunk);
         reporter.write(chunk, origin);
         if (options.verbose) emitToConsole(typeof chunk === 'string' ? chunk : chunk.toString('utf8'), origin);
@@ -1000,7 +1030,8 @@ async function main(): Promise<number> {
     const occupied = shards.filter((s) => s.length > 0).length;
     console.log(
       `\nWould run ${files.length} files across ${shards.length} shards (${occupied} occupied). `
-      + 'Without --shard, the full suite runs as ONE bun --parallel invocation instead.',
+      + 'Without --shard, the full suite runs as N concurrent shard processes '
+      + '(plus a serial tree-mutating shard) instead.',
     );
     for (const line of formatShardSummary(shards)) console.log(line);
     return 0;
@@ -1032,7 +1063,7 @@ async function main(): Promise<number> {
   // proven spawn semantics, per-shard group-kill, per-shard logs, and a
   // wedge only ever costs its own shard. WORKER_HOSTILE files are moot in
   // process shards (no workers) and fold back into normal assignment.
-  const jobs = Math.max(1, Math.min(6, os.cpus().length - 2));
+  const jobs = Math.max(1, Math.min(MAX_FULL_SUITE_JOBS, os.cpus().length - RESERVED_CPUS));
   // Phase split: tree-mutating tests run AFTER the parallel shards, in one
   // serial shard, so no concurrent shard ever reads a half-regenerated tree.
   const mutators = files.filter((f) => f in TREE_MUTATING);
@@ -1041,16 +1072,18 @@ async function main(): Promise<number> {
   const totalShards = jobs + (mutators.length > 0 ? 1 : 0);
   console.log(`[test:free] full suite: ${readers.length} files across ${jobs} shard processes`
     + (mutators.length > 0 ? `, then ${mutators.length} tree-mutating file(s) serially` : ''));
+  const shardTimeout = (fileCount: number): number =>
+    options.wallTimeoutExplicit ? options.wallTimeoutMs : wallTimeoutForShard(fileCount, options.wallTimeoutMs);
   const outcomes = await Promise.all(
     shards.map((shardFiles, index) => runFreeShard(shardFiles, index + 1, totalShards, {
-      wallTimeoutMs: options.wallTimeoutMs,
+      wallTimeoutMs: shardTimeout(shardFiles.length),
       verbose: options.verbose,
     })),
   );
   let worst = Math.max(...outcomes.map((o) => exitCodeFor(o.status)));
   if (mutators.length > 0) {
     const mutatorOutcome = await runFreeShard(mutators, totalShards, totalShards, {
-      wallTimeoutMs: options.wallTimeoutMs,
+      wallTimeoutMs: shardTimeout(mutators.length),
       verbose: options.verbose,
     });
     worst = Math.max(worst, exitCodeFor(mutatorOutcome.status));

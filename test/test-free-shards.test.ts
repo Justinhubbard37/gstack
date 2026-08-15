@@ -15,6 +15,12 @@ import {
   FreeRunReporter,
   buildRunEpilogue,
   FREE_TEST_TIMEOUT_MS,
+  DEFAULT_WALL_TIMEOUT_MS,
+  PER_FILE_WALL_MS,
+  wallTimeoutForShard,
+  TEST_ROOTS,
+  TREE_MUTATING,
+  WORKER_HOSTILE,
 } from '../scripts/test-free-shards';
 
 const ROOT = path.resolve(import.meta.dir, '..');
@@ -475,5 +481,40 @@ describe('test-free-shards: output contract (log capture, quiet console, failure
     reporter.write(`${failLine('boom')}\n`, 'stderr');
     reporter.end();
     expect(reporter.report().failures[0]).toEqual({ file: 'browse/test/x.test.ts', testName: 'boom' });
+  });
+});
+
+describe('test-free-shards: curated-list census pins', () => {
+  // A renamed test file must FAIL here, not silently drop its serialization
+  // (a phantom TREE_MUTATING key means the reader races regenerating shards
+  // again) or its serial-child quarantine (WORKER_HOSTILE).
+  test('every TREE_MUTATING and WORKER_HOSTILE key names a real free test file', () => {
+    const census = new Set(collectFreeTestFiles(ROOT));
+    const stale = [...Object.keys(TREE_MUTATING), ...Object.keys(WORKER_HOSTILE)]
+      .filter((key) => !census.has(key));
+    expect(stale).toEqual([]);
+  });
+
+  test('every TEST_ROOTS entry exists on disk and contributes at least one test file', () => {
+    const files = collectFreeTestFiles(ROOT);
+    for (const root of TEST_ROOTS) {
+      expect(fs.existsSync(path.join(ROOT, root))).toBe(true);
+      expect(files.some((f) => f.startsWith(`${root}/`))).toBe(true);
+    }
+  });
+});
+
+describe('test-free-shards: wall-timeout scaling', () => {
+  test('typical local shard keeps the 6-minute floor', () => {
+    expect(wallTimeoutForShard(70)).toBe(DEFAULT_WALL_TIMEOUT_MS);
+  });
+
+  test('oversized shards (jobs=1 machines, Windows lane) scale linearly past the floor', () => {
+    expect(wallTimeoutForShard(130)).toBe(130 * PER_FILE_WALL_MS);
+    expect(wallTimeoutForShard(420)).toBe(420 * PER_FILE_WALL_MS);
+  });
+
+  test('an explicit base above the scaled value wins', () => {
+    expect(wallTimeoutForShard(10, 10 * 60_000)).toBe(10 * 60_000);
   });
 });
