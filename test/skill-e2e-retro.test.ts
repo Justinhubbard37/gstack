@@ -6,6 +6,7 @@ import {
   logCost, recordE2E,
   createEvalCollector, finalizeEvalCollector,
 } from './helpers/e2e-helpers';
+import { extractSkillSections, RETRO_E2E_SECTIONS } from './helpers/skill-fixture';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -49,9 +50,13 @@ describeIfSelected('Base branch detection', ['retro-base-branch'], () => {
     run('git', ['add', 'test.ts'], dir);
     run('git', ['commit', '-m', 'test: add tests', '--date', '2026-03-16T11:00:00'], dir);
 
-    // Copy retro skill
+    // Retro skill — extract the repo-scoped retro flow only (drops the shared
+    // preamble + global/compare modes; CLAUDE.md: "extract, don't copy").
     fs.mkdirSync(path.join(dir, 'retro'), { recursive: true });
-    fs.copyFileSync(path.join(ROOT, 'retro', 'SKILL.md'), path.join(dir, 'retro', 'SKILL.md'));
+    fs.writeFileSync(
+      path.join(dir, 'retro', 'SKILL.md'),
+      extractSkillSections(path.join(ROOT, 'retro'), RETRO_E2E_SECTIONS),
+    );
 
     const result = await runSkillTest({
       prompt: `Read retro/SKILL.md for instructions on how to run a retrospective.
@@ -131,11 +136,11 @@ describeIfSelected('Retro E2E', ['retro'], () => {
     run('git', ['add', 'README.md']);
     run('git', ['commit', '-m', 'docs: add README', '--date', '2026-03-12T16:00:00']);
 
-    // Copy retro skill
+    // Retro skill — extracted repo-scoped flow, not the full 1820-line file.
     fs.mkdirSync(path.join(retroDir, 'retro'), { recursive: true });
-    fs.copyFileSync(
-      path.join(ROOT, 'retro', 'SKILL.md'),
+    fs.writeFileSync(
       path.join(retroDir, 'retro', 'SKILL.md'),
+      extractSkillSections(path.join(ROOT, 'retro'), RETRO_E2E_SECTIONS),
     );
   });
 
