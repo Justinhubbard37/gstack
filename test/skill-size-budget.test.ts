@@ -166,12 +166,19 @@ describe('SKILL.md size budget regression (gate, free)', () => {
     // skeleton+sections union), so exempt the skeleton from the body-strip floor.
     // EQ1: derived from the canonical CARVE_GUARDS registry — no parallel list.
     const SECTIONS_EXTRACTED = new Set<string>(CARVED_SKILLS);
+    // Intentional one-off shrinks vs the frozen baseline (each needs a reason):
+    // - spec: the baseline measured a template bug — prose at Phase 5 mentioned
+    //   {{PREAMBLE}} literally, so the generator expanded the ENTIRE preamble a
+    //   second time mid-sentence (~47 KB of duplication). Fixed by rewording the
+    //   prose; spec/SKILL.md now carries exactly one preamble (~80.9 KB, ×0.79).
+    const INTENTIONAL_SHRINKS = new Set<string>(['spec']);
 
     const undershoots: Array<{
       skill: string; beforeBytes: number; afterBytes: number; ratio: number;
     }> = [];
     for (const [skill, before] of Object.entries(baseline.skills)) {
       if (SECTIONS_EXTRACTED.has(skill)) continue;
+      if (INTENTIONAL_SHRINKS.has(skill)) continue;
       const after = current.skills[skill];
       if (!after) continue; // skill removed since baseline — separate concern
       const ratio = after.skillMdBytes / before.skillMdBytes;

@@ -1,5 +1,6 @@
 ---
 name: pair-agent
+preamble-tier: 4
 version: 0.1.0
 description: |
   Pair a remote AI agent with your browser. One command generates a setup key and

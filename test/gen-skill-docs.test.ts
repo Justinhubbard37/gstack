@@ -103,8 +103,9 @@ const ALL_SKILLS = (() => {
   return skills;
 })();
 
-const CLAUDE_SKIPPED_SKILL_DIRS = new Set(['claude']);
-const CLAUDE_GENERATED_SKILLS = ALL_SKILLS.filter(skill => !CLAUDE_SKIPPED_SKILL_DIRS.has(skill.dir));
+// hosts/claude.ts generation.skipSkills entries would filter here; the set is
+// currently empty (the /claude outside-voice template was removed).
+const CLAUDE_GENERATED_SKILLS = ALL_SKILLS;
 
 describe('gen-skill-docs', () => {
   test('generated SKILL.md contains all command categories', () => {
@@ -215,11 +216,6 @@ describe('gen-skill-docs', () => {
       const description = extractDescription(content);
       expect(description.length).toBeLessThanOrEqual(MAX_SKILL_DESCRIPTION_LENGTH);
     }
-  });
-
-  test('Claude outside-voice skill is not generated for Claude host', () => {
-    expect(fs.existsSync(path.join(ROOT, 'claude', 'SKILL.md.tmpl'))).toBe(true);
-    expect(fs.existsSync(path.join(ROOT, 'claude', 'SKILL.md'))).toBe(false);
   });
 
   test(`every Codex SKILL.md description stays within ${MAX_SKILL_DESCRIPTION_LENGTH} chars`, () => {
@@ -1773,20 +1769,6 @@ describe('Codex generation (--host codex)', () => {
     expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-codex'))).toBe(false);
   });
 
-  test('Codex output includes Claude outside-voice skill with read-only boundary', () => {
-    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-claude', 'SKILL.md'), 'utf-8');
-    expect(content).toContain('claude -p');
-    expect(content).toContain('mktemp /tmp/gstack-claude-prompt-');
-    expect(content).toContain('mktemp /tmp/gstack-claude-diff-');
-    expect(content).not.toContain('/tmp/gstack-claude-diff-$$');
-    expect(content).toContain('cat "$PROMPT_FILE" | claude -p');
-    expect(content).toContain('--disable-slash-commands');
-    expect(content).toContain('--tools ""');
-    expect(content).toContain('--allowedTools Read,Grep,Glob');
-    expect(content).toContain('--disallowedTools Bash,Edit,Write');
-    expect(content).toContain('is_error');
-  });
-
   test('Codex review step stripped from Codex-host ship and review', () => {
     const shipContent = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
     expect(shipContent).not.toContain('codex review --base');
@@ -2195,16 +2177,6 @@ describe('Parameterized host smoke tests', () => {
         }
       });
 
-      test('generates Claude outside-voice skill for external hosts', () => {
-        const skillMd = path.join(hostDir, 'gstack-claude', 'SKILL.md');
-        expect(fs.existsSync(skillMd)).toBe(true);
-        const content = fs.readFileSync(skillMd, 'utf-8');
-        expect(content).toContain('claude -p');
-        expect(content).toContain('--disable-slash-commands');
-        expect(content).toContain('--allowedTools Read,Grep,Glob');
-        expect(content).toContain('--disallowedTools Bash,Edit,Write');
-      });
-
       test('--dry-run freshness check passes', () => {
         const result = Bun.spawnSync(
           ['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', hostConfig.name, '--dry-run'],
@@ -2372,9 +2344,9 @@ describe('setup script validation', () => {
     expect(claudeSection).toContain('link_claude_root_skill_alias "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR"');
   });
 
-  test('setup supports --host auto|claude|codex|kiro|opencode', () => {
+  test('setup supports --host auto|claude|codex|kiro|opencode|cursor|slate', () => {
     expect(setupContent).toContain('--host');
-    expect(setupContent).toContain('claude|codex|kiro|factory|opencode|auto');
+    expect(setupContent).toContain('claude|codex|kiro|factory|opencode|cursor|slate|auto');
   });
 
   test('auto mode detects claude, codex, kiro, and opencode binaries', () => {
@@ -3360,5 +3332,41 @@ describe('GSTACK REVIEW REPORT mandatory unresolved-decisions status', () => {
     expect(src).toContain('FAILS the gate');
     // The old soft wording must be gone from the gate.
     expect(src).not.toContain('absorbs CODEX / CROSS-MODEL / UNRESOLVED lines if applicable');
+  });
+});
+
+// ─── {{PREAMBLE}} requires an explicit preamble-tier ────────
+
+describe('PREAMBLE resolution requires declared preamble-tier', () => {
+  test('resolving {{PREAMBLE}} without preamble-tier throws with the template path', async () => {
+    const { generatePreamble } = await import('../scripts/resolvers/preamble');
+    const { HOST_PATHS } = await import('../scripts/resolvers/types');
+    const ctx = {
+      skillName: 'tierless-skill',
+      tmplPath: 'tierless-skill/SKILL.md.tmpl',
+      host: 'claude' as const,
+      paths: HOST_PATHS.claude,
+      // preambleTier deliberately absent — the generator must refuse to default it.
+    };
+    expect(() => generatePreamble(ctx)).toThrow(/tierless-skill\/SKILL\.md\.tmpl/);
+    expect(() => generatePreamble(ctx)).toThrow(/preamble-tier/);
+  });
+
+  test('every template that resolves {{PREAMBLE}} declares preamble-tier in frontmatter', () => {
+    const entries = fs.readdirSync(ROOT, { withFileTypes: true });
+    const offenders: string[] = [];
+    const checkTmpl = (tmplPath: string) => {
+      const tmpl = fs.readFileSync(tmplPath, 'utf-8');
+      if (tmpl.includes('{{PREAMBLE}}') && !/^preamble-tier:\s*\d+$/m.test(tmpl)) {
+        offenders.push(path.relative(ROOT, tmplPath));
+      }
+    };
+    checkTmpl(path.join(ROOT, 'SKILL.md.tmpl'));
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const tmplPath = path.join(ROOT, e.name, 'SKILL.md.tmpl');
+      if (fs.existsSync(tmplPath)) checkTmpl(tmplPath);
+    }
+    expect(offenders).toEqual([]);
   });
 });

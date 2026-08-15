@@ -1,5 +1,6 @@
 ---
 name: skillify
+preamble-tier: 4
 version: 1.0.0
 description: |
   Codify the most recent successful /scrape flow into a permanent
