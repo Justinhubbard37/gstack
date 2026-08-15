@@ -19,6 +19,7 @@ import {
   logCost, recordE2E,
   createEvalCollector, finalizeEvalCollector,
 } from './helpers/e2e-helpers';
+import { extractSkillBody } from './helpers/skill-fixture';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -43,11 +44,14 @@ function setupWorkdir(suffix: string): { workDir: string; gstackHome: string; sl
   run('git', ['commit', '-m', 'initial']);
 
   // Install skills into .claude/skills/ for claude -p auto-discovery.
+  // The tests exercise the full save/restore/list flows, so keep the whole
+  // skill-specific body but drop the ~780-line shared preamble the tests
+  // never touch (CLAUDE.md: "E2E test fixtures: extract, don't copy").
   const skillsDir = path.join(workDir, '.claude', 'skills');
   for (const skill of ['context-save', 'context-restore']) {
     const destDir = path.join(skillsDir, skill);
     fs.mkdirSync(destDir, { recursive: true });
-    fs.copyFileSync(path.join(ROOT, skill, 'SKILL.md'), path.join(destDir, 'SKILL.md'));
+    fs.writeFileSync(path.join(destDir, 'SKILL.md'), extractSkillBody(path.join(ROOT, skill)));
   }
 
   // Install the bin scripts referenced by the preamble.
