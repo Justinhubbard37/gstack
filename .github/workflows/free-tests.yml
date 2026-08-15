@@ -3,8 +3,9 @@ name: Free Tests
 # The free suite (~400 files: test/, browse/test/, make-pdf/test/, design/test/)
 # had ZERO Linux CI coverage before this lane — only a curated Windows subset
 # ran anywhere. This job runs the whole thing through the canonical runner
-# (scripts/test-free-shards.ts): one `bun test --parallel` invocation with
-# strict-output classification, so a truncated or summary-less run can never
+# (scripts/test-free-shards.ts): N concurrent shard processes (serial within
+# each, plus a trailing serial tree-mutating shard) with strict-output
+# classification per shard, so a truncated or summary-less run can never
 # report green.
 #
 # Deliberately SECRETLESS: free tests make no API calls, so this lane gets no
@@ -16,9 +17,9 @@ name: Free Tests
 # red, fix or quarantine-with-issue — don't make it advisory; an advisory lane
 # is permanent false comfort.
 #
-# Sizing note (decision V3): single --parallel job first. If PR runs show it
-# slower than the eval matrix wall, switch to a matrix of
-# `--shards N --shard i` jobs (indices are stable, empty shards no-op).
+# Sizing note (decision V3): single job first. If PR runs show it slower than
+# the eval matrix wall, switch to a matrix of `--shards N --shard i` jobs
+# (indices are stable, empty shards no-op).
 
 on:
   pull_request:
@@ -29,12 +30,20 @@ concurrency:
   group: free-tests-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+# Least privilege: this job executes PR-controlled code (install lifecycle
+# scripts + the test suite), so the GITHUB_TOKEN gets read-only contents and
+# the checkout doesn't persist it into .git/config.
+permissions:
+  contents: read
+
 jobs:
   free-tests:
     runs-on: ubicloud-standard-8
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -44,6 +53,9 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: linux-bun-${{ hashFiles('bun.lock') }}
+          # A lockfile bump starts from the previous cache instead of cold.
+          restore-keys: |
+            linux-bun-
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -52,6 +64,8 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: linux-playwright-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            linux-playwright-
 
       # Cache restores browser binaries; install is still required for system
       # deps and is a fast no-op for already-present browsers.

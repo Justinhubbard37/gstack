@@ -53,4 +53,12 @@ describe('free-tests workflow wiring', () => {
       expect(entries.length).toBe(count);
     }
   });
+
+  test('least-privilege token: contents read-only, credentials not persisted', () => {
+    // The job executes PR-controlled code (install lifecycle scripts + the
+    // suite itself). A default-grant GITHUB_TOKEN persisted into .git/config
+    // by checkout would hand that code whatever the repo default allows.
+    expect(source).toMatch(/permissions:\s*\n\s*contents:\s*read/);
+    expect(source).toMatch(/persist-credentials:\s*false/);
+  });
 });
