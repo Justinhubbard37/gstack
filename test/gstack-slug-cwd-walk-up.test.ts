@@ -289,3 +289,23 @@ describe('gstack-slug — outermost project-root resolution', () => {
     expect(slug).toBe('custom-override');
   });
 });
+
+describe('_outermost_project_root termination (windows-free-tests regression)', () => {
+  // Under git-bash on Windows a mixed-form path walks C:/Users -> C: -> . -> .
+  // forever: dirname's fixed point there is never "/". The loop must break on
+  // the fixed point itself. Extract the function and drive it with hostile
+  // path forms under a hard timeout — a hang fails the spawn, not the suite.
+  const script = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-slug'), 'utf-8');
+  const fnMatch = script.match(/_outermost_project_root\(\) \{[\s\S]*?\n\}/);
+
+  test.each(['C:/Users/nobody/project', '.', '//server/share/dir'])(
+    'terminates on hostile path form: %s',
+    (hostile) => {
+      expect(fnMatch).not.toBeNull();
+      const r = Bun.spawnSync(['bash', '-c', `${fnMatch![0]}\n_outermost_project_root "$1"; echo TERMINATED`, '_', hostile], {
+        timeout: 5000,
+      });
+      expect(r.stdout.toString()).toContain('TERMINATED');
+    },
+  );
+});

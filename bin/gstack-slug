@@ -68,7 +68,12 @@ _outermost_project_root() {
   local dir="$1"
   local outermost_strong=""
   local outermost_weak=""
-  while [[ -n "$dir" && "$dir" != "/" ]]; do
+  local parent="" depth=0
+  # Terminate on dirname's FIXED POINT, not on a literal "/": under git-bash
+  # on Windows a mixed-form path walks C:/Users -> C: -> . -> . forever, which
+  # hung every bin that evals gstack-slug (caught by windows-free-tests CI).
+  # The depth cap is belt-and-braces for exotic path forms (UNC, //server).
+  while [[ -n "$dir" && "$dir" != "/" && $depth -lt 64 ]]; do
     if [[ -e "$dir/.git" \
        || -f "$dir/.project.yaml" \
        || -f "$dir/package.json" \
@@ -84,7 +89,10 @@ _outermost_project_root() {
          || -f "$dir/LICENSE.md" ]]; then
       outermost_weak="$dir"
     fi
-    dir=$(dirname "$dir")
+    parent=$(dirname "$dir")
+    [[ "$parent" == "$dir" ]] && break # dirname fixed point (C:/, ., //srv)
+    dir="$parent"
+    depth=$((depth + 1))
   done
   # Strong markers win over weak; either wins over nothing.
   if [[ -n "$outermost_strong" ]]; then
