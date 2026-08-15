@@ -23,9 +23,18 @@
  *   3. No per-shard env / eval dir. Each shard needs its own GSTACK_EVAL_DIR
  *      so eval baselines are per-test-file instead of last-flush-wins.
  *
- * Worst-case wall clock (all shards hit the 30min timeout, 4 parallel jobs):
- * gate tier is 49 shards × 30min / 4 jobs ≈ 6.2h; periodic is 59 shards ≈ 7.4h.
- * The eval:bg:* detach timeouts (25200s / 28800s) are sized against these.
+ * Worst-case wall clock = ceil(shards / jobs) × shard timeout. At the time of
+ * writing: gate is 44 one-file shards → ceil(44/4) × 30min = 5.5h; periodic is
+ * 63 → 8h. Do NOT hand-derive the eval:bg:* detach timeouts from a snapshot of
+ * these counts — test/eval-detach-timeout-floor.test.ts recomputes the bound
+ * from the live shard census every run and fails CI if package.json's numbers
+ * dip below it (undersized detach timeouts recreate never-started truncation).
+ *
+ * Env contract: EVALS_JOBS = how many shard PROCESSES run at once (this
+ * runner). EVALS_CONCURRENCY = bun's --max-concurrency WITHIN a shard (and the
+ * legacy single-process scripts). They were previously conflated: exporting
+ * the legacy value 15 gave you 15 concurrent Bun processes each spawning
+ * claude — the 429 storm.
  *
  * Enumeration matches package.json's `test:gate` globs (via the shared
  * test/helpers/paid-test-set.ts) and honors EVALS_TIER against the E2E_TIERS
@@ -50,6 +59,7 @@ import {
   exactTestFileSelectors,
   forwardAndClassify,
   installChildSignalForwarding,
+  killProcessGroup,
   strictTestExitCode,
 } from './test-strict-output';
 import { PAID_TEST_GLOBS, isPaidTestFile } from '../test/helpers/paid-test-set';
@@ -65,6 +75,10 @@ export const DEFAULT_TIER: PaidTier = 'gate';
 export const DEFAULT_SHARD_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_MAX_FILES_PER_SHARD = 1;
 export const DEFAULT_JOBS = 4;
+// Within one shard's bun process. 4 jobs × 4 ≈ the legacy single-process
+// default of 15, keeping total in-flight `claude` sessions inside known-safe
+// API rate headroom.
+export const DEFAULT_WITHIN_SHARD_CONCURRENCY = 4;
 
 export function collectPaidTestFiles(rootDir = ROOT): string[] {
   const testDir = path.join(rootDir, 'test');
@@ -135,8 +149,15 @@ export function planPaidShards(
   return shards;
 }
 
-export function buildPaidShardArgs(files: string[], timeoutMs: number): string[] {
-  return ['test', ...files, '--retry', '1', `--timeout=${timeoutMs}`];
+export function buildPaidShardArgs(
+  files: string[],
+  timeoutMs: number,
+  maxConcurrency: number = DEFAULT_WITHIN_SHARD_CONCURRENCY,
+): string[] {
+  // Explicit --concurrent/--max-concurrency: the legacy path always set one;
+  // omitting it here made within-shard parallelism differ silently between
+  // the two runners (observed: 1.6x sumdur/wall sharded vs 8x legacy).
+  return ['test', ...files, '--retry', '1', '--concurrent', `--max-concurrency=${maxConcurrency}`, `--timeout=${timeoutMs}`];
 }
 
 /**
@@ -169,6 +190,8 @@ export interface ShardCommand {
 export interface RunShardsOptions {
   timeoutMs?: number;
   jobs?: number;
+  /** bun --max-concurrency inside each shard (EVALS_CONCURRENCY). */
+  withinShardConcurrency?: number;
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
   /** When set, each shard child gets GSTACK_EVAL_DIR=<evalDirBase>/shards/<slug>/. */
@@ -176,35 +199,6 @@ export interface RunShardsOptions {
   /** Override the spawned command. Tests inject fake slow/spinning commands. */
   commandFor?: (files: string[]) => ShardCommand;
   log?: (line: string) => void;
-}
-
-/**
- * SIGKILL the shard's whole process group. Orphaned grandchildren (browsers,
- * claude sessions) are how a stalled run once burned a core for 15.7 hours.
- */
-function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform === 'win32' || typeof child.pid !== 'number') {
-    child.kill(signal);
-    return;
-  }
-  try {
-    process.kill(-child.pid, signal);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH') return; // group already gone
-    if (code !== 'EPERM') throw err;
-    // Observed on macOS after a SIGKILLed group is reaped: signalling the
-    // now-empty group id returns EPERM, not ESRCH. Throwing here loses the
-    // shard's real outcome (a timeout gets recorded as a failure) and, from
-    // the timeout timer, leaves the shard promise unsettled — a hang, which
-    // is the exact failure class this runner exists to kill. Fall back to the
-    // direct pid so a genuinely-live child is still signalled.
-    try {
-      child.kill(signal);
-    } catch {
-      // Best-effort reap: nothing actionable is left if this fails too.
-    }
-  }
 }
 
 export async function runPaidShard(
@@ -224,7 +218,11 @@ export async function runPaidShard(
     ? options.commandFor(files)
     : {
       command: process.execPath,
-      args: buildPaidShardArgs(exactTestFileSelectors(files, rootDir), timeoutMs),
+      args: buildPaidShardArgs(
+        exactTestFileSelectors(files, rootDir),
+        timeoutMs,
+        options.withinShardConcurrency ?? DEFAULT_WITHIN_SHARD_CONCURRENCY,
+      ),
     };
 
   const env = { ...(options.env ?? process.env) };
@@ -385,6 +383,7 @@ type CliOptions = {
   listOnly: boolean;
   timeoutMs: number;
   jobs: number;
+  withinShardConcurrency: number;
   maxFilesPerShard: number;
 };
 
@@ -413,7 +412,14 @@ export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process
     timeoutMs: env.EVALS_SHARD_TIMEOUT_MS
       ? parsePositiveInt(env.EVALS_SHARD_TIMEOUT_MS, 'EVALS_SHARD_TIMEOUT_MS')
       : DEFAULT_SHARD_TIMEOUT_MS,
-    jobs: env.EVALS_CONCURRENCY ? parsePositiveInt(env.EVALS_CONCURRENCY, 'EVALS_CONCURRENCY') : DEFAULT_JOBS,
+    // EVALS_JOBS = shard process count. EVALS_CONCURRENCY deliberately does
+    // NOT set jobs anymore — it's bun's within-shard --max-concurrency (its
+    // legacy meaning). Conflating them turned "EVALS_CONCURRENCY=15" into 15
+    // parallel Bun processes each spawning claude.
+    jobs: env.EVALS_JOBS ? parsePositiveInt(env.EVALS_JOBS, 'EVALS_JOBS') : DEFAULT_JOBS,
+    withinShardConcurrency: env.EVALS_CONCURRENCY
+      ? parsePositiveInt(env.EVALS_CONCURRENCY, 'EVALS_CONCURRENCY')
+      : DEFAULT_WITHIN_SHARD_CONCURRENCY,
     maxFilesPerShard: DEFAULT_MAX_FILES_PER_SHARD,
   };
 
@@ -462,6 +468,7 @@ async function main(): Promise<number> {
     // E2E_TIERS filter inside each child is the real selection mechanism.
     timeoutMs: options.timeoutMs,
     jobs: options.jobs,
+    withinShardConcurrency: options.withinShardConcurrency,
     env: { ...process.env, EVALS: '1', EVALS_TIER: options.tier },
     evalDirBase: process.env.GSTACK_EVAL_DIR || getProjectEvalDir(),
   });
