@@ -33,7 +33,8 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { writeSecureFile, appendSecureFile, mkdirSecure } from './file-permissions';
+import { restrictFilePermissions, appendSecureFile, mkdirSecure } from './file-permissions';
+import { atomicWriteQuiet } from '../../lib/fs-atomic';
 
 // ─── Thresholds + verdict types ──────────────────────────────
 
@@ -346,17 +347,17 @@ export interface SessionState {
 }
 
 /**
- * Atomic write of session state (temp + rename pattern). Writes are safe
- * across process boundaries.
+ * Atomic write of session state (via lib/fs-atomic). Writes are safe
+ * across process boundaries. Swallow-with-log polarity: a failed write
+ * must never take down the caller (security state is best-effort cache).
  */
 export function writeSessionState(state: SessionState): void {
-  try {
-    mkdirSecure(SECURITY_DIR);
-    const tmp = `${STATE_FILE}.tmp.${process.pid}`;
-    writeSecureFile(tmp, JSON.stringify(state, null, 2));
-    fs.renameSync(tmp, STATE_FILE);
-  } catch (err) {
-    console.error('[security] writeSessionState failed:', (err as Error).message);
+  try { mkdirSecure(SECURITY_DIR); } catch { /* write below fails and logs */ }
+  if (atomicWriteQuiet(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 })) {
+    // Windows ACL hardening (POSIX chmod is redundant with mode above).
+    restrictFilePermissions(STATE_FILE);
+  } else {
+    console.error('[security] writeSessionState failed');
   }
 }
 

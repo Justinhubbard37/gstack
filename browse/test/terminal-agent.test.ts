@@ -175,11 +175,13 @@ describe('Source-level guard: terminal-agent', () => {
     expect(AGENT_SRC).toContain("msg?.type === 'tabState'");
     expect(AGENT_SRC).toContain('function handleTabState');
     const fn = AGENT_SRC.slice(AGENT_SRC.indexOf('function handleTabState'));
-    // Atomic write via tmp + rename for both files (so claude never reads
-    // a half-written JSON document).
+    // Atomic write for both files (so claude never reads a half-written
+    // JSON document) — via the shared lib/fs-atomic helper, which owns the
+    // tmp + rename dance. Quiet variant: state-file writes are
+    // fire-and-forget and must never take down the agent.
     expect(fn).toContain("'tabs.json'");
     expect(fn).toContain("'active-tab.json'");
-    expect(fn).toContain('renameSync');
+    expect(fn).toContain('atomicWriteQuiet');
     // Skip chrome:// and chrome-extension:// pages — they're not useful
     // targets for browse commands.
     expect(fn).toContain("startsWith('chrome://')");
