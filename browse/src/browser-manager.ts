@@ -727,6 +727,12 @@ export class BrowserManager {
   }
 
   async close() {
+    // unref'd race timer: without unref, every successful close still pins
+    // the caller's event loop for the full window.
+    const raceTimeout = (ms: number) => new Promise<false>((resolve) => {
+      const t = setTimeout(() => resolve(false), ms);
+      (t as { unref?: () => void }).unref?.();
+    });
     if (this.browser || (this.connectionMode === 'headed' && this.context)) {
       if (this.connectionMode === 'headed') {
         // Headed/persistent context mode: close the context (which closes the browser)
@@ -734,15 +740,24 @@ export class BrowserManager {
         if (this.browser) this.browser.removeAllListeners('disconnected');
         await Promise.race([
           this.context ? this.context.close() : Promise.resolve(),
-          new Promise(resolve => setTimeout(resolve, 5000)),
+          raceTimeout(5000),
         ]).catch(() => {});
       } else {
-        // Launched mode: close the browser we spawned
+        // Launched mode: close the browser we spawned.
         this.browser.removeAllListeners('disconnected');
-        await Promise.race([
-          this.browser.close(),
-          new Promise(resolve => setTimeout(resolve, 5000)),
-        ]).catch(() => {});
+        // Grab the child handle BEFORE the race: nulling this.browser after a
+        // race-timeout used to ABANDON a live Chromium whose sockets kept the
+        // caller's event loop (and keep-alive connections into test servers)
+        // open forever — the intermittent whole-suite wedge. If graceful close
+        // doesn't finish in time, the child gets SIGKILL, not freedom.
+        const child = this.browser.process?.();
+        const closed = await Promise.race([
+          this.browser.close().then(() => true as const),
+          raceTimeout(5000),
+        ]).catch(() => false as const);
+        if (closed === false && child && child.exitCode === null && !child.killed) {
+          try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        }
       }
       this.browser = null;
     }
