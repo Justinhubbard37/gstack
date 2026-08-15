@@ -254,6 +254,22 @@ export function insideUuid(match: RegExpExecArray): boolean {
 
 // ── The taxonomy ─────────────────────────────────────────────────────────────
 
+/**
+ * URL-embedded passwords that are interpolation forms, not credentials:
+ * `${identifier}` (bash or JS template, any case) or bare `$UPPER_SNAKE`
+ * (shell convention). Bare lowercase `$word` stays BLOCKED — a real password
+ * that merely starts with `$` (e.g. `$` + a dictionary word) must not slip
+ * through the HIGH gate just because it looks vaguely variable-shaped.
+ * Shared by db.url_with_password and creds.basic_auth_url so the two
+ * validators cannot drift.
+ */
+const INTERPOLATED_PASSWORD_RE = /^(\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Z_][A-Z0-9_]*)$/;
+function urlPasswordIsPlaceholder(span: string): boolean {
+  const m = span.match(/:\/\/[^:]+:([^@]+)@/);
+  const pw = m?.[1] ?? "";
+  return pw === "" || isPlaceholderSpan(pw) || INTERPOLATED_PASSWORD_RE.test(pw);
+}
+
 export const PATTERNS: RedactPattern[] = [
   // ===== HIGH — genuinely-secret credentials (block) =====
   {
@@ -437,15 +453,8 @@ export const PATTERNS: RedactPattern[] = [
     category: "secret",
     description: "Database URL with embedded password",
     regex: /\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^:\s/@]+:[^@\s/]+@[^\s/]+)/,
-    // Skip when the password segment is itself a placeholder.
-    validate: (span) => {
-      const m = span.match(/:\/\/[^:]+:([^@]+)@/);
-      const pw = m?.[1] ?? "";
-      // Any $VAR / ${identifier} interpolation is code, not a credential —
-      // covers bash ${DB_PASS} and JS template `${dbPass}` alike (the
-      // uppercase-only form flagged ported TS templates as pushed secrets).
-      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(pw);
-    },
+    // Skip when the password segment is itself a placeholder/interpolation.
+    validate: (span) => !urlPasswordIsPlaceholder(span),
   },
   {
     id: "creds.basic_auth_url",
@@ -453,14 +462,8 @@ export const PATTERNS: RedactPattern[] = [
     category: "secret",
     description: "HTTP(S) URL with embedded basic-auth credentials",
     regex: /(https?:\/\/[^:\s/@]+:[^@\s/]+@[^\s/]+)/,
-    validate: (span) => {
-      const m = span.match(/:\/\/[^:]+:([^@]+)@/);
-      const pw = m?.[1] ?? "";
-      // Any $VAR / ${identifier} interpolation is code, not a credential —
-      // covers bash ${DB_PASS} and JS template `${dbPass}` alike (the
-      // uppercase-only form flagged ported TS templates as pushed secrets).
-      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(pw);
-    },
+    // Skip when the password segment is itself a placeholder/interpolation.
+    validate: (span) => !urlPasswordIsPlaceholder(span),
   },
 
   // ===== MEDIUM — demoted credential-shaped (high-FP / context-variable) =====

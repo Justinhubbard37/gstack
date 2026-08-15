@@ -114,6 +114,13 @@ describe("HIGH credential patterns", () => {
     // Assembled at runtime so this file's own diff never contains a
     // credential-shaped literal (the prepush guard scans exact pushed bytes).
     expect(ids("postgres://admin:" + "hun" + "ter2@db.internal/app")).toContain("db.url_with_password");
+    // Bare $UPPER_SNAKE is shell convention → suppressed; bare $lowercase is
+    // NOT an interpolation form — a real password starting with `$` must
+    // still block (both-braces-optional would have let it through).
+    expect(ids("postgres://user:$DB_PASSWORD@host/app")).not.toContain("db.url_with_password");
+    expect(ids("postgres://admin:$" + "hun" + "ter2@db.internal/app")).toContain("db.url_with_password");
+    // Mismatched brace is not an interpolation either.
+    expect(ids("postgres://admin:${dbPass@db.internal/app")).toContain("db.url_with_password");
   });
 
   test("all HIGH patterns block (exit 3)", () => {
