@@ -494,7 +494,7 @@ determined leaker (a CHANGELOG line that does would fail a hostile screenshotter
   `--auto-redact`, `--repo-visibility`, `--from-file`). `bin/gstack-redact-prepush`
   is the opt-in git hook.
 - **Skill docs are generated** from `scripts/resolvers/redact-doc.ts`
-  (`{{REDACT_TAXONOMY_TABLE}}`, `{{REDACT_INVOCATION_BLOCK:<sink>}}`) so /spec,
+  (`{{REDACT_INVOCATION_BLOCK:<sink>}}`) so /spec,
   /cso, /ship, /document-release, /document-generate never drift from the engine.
 - **Scan-at-sink:** always scan the EXACT bytes that will be sent — write to a
   temp file, scan that file, pass the SAME file to `gh`/`git`. Never scan a string

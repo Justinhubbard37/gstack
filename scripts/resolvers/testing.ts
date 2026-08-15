@@ -545,7 +545,3 @@ export function generateTestCoverageAuditPlan(_ctx: TemplateContext): string {
 export function generateTestCoverageAuditShip(_ctx: TemplateContext): string {
   return generateTestCoverageAuditInner('ship');
 }
-
-export function generateTestCoverageAuditReview(_ctx: TemplateContext): string {
-  return generateTestCoverageAuditInner('review');
-}

@@ -14,7 +14,7 @@ import { writeLlmsTxt } from './gen-llms-txt';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Host, TemplateContext } from './resolvers/types';
-import { HOST_PATHS, unwrapResolver } from './resolvers/types';
+import { HOST_PATHS } from './resolvers/types';
 import { RESOLVERS } from './resolvers/index';
 import { ALL_HOST_CONFIGS, ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
 import type { HostConfig } from './host-config';
@@ -683,10 +683,8 @@ function resolvePlaceholders(
       const resolverName = parts[0];
       const args = parts.slice(1);
       if (suppressed.has(resolverName)) return '';
-      const entry = RESOLVERS[resolverName];
-      if (!entry) throw new Error(`Unknown placeholder {{${resolverName}}} in ${relTmplPath}`);
-      const { resolve, appliesTo } = unwrapResolver(entry);
-      if (appliesTo && !appliesTo(ctx)) return '';
+      const resolve = RESOLVERS[resolverName];
+      if (!resolve) throw new Error(`Unknown placeholder {{${resolverName}}} in ${relTmplPath}`);
       return args.length > 0 ? resolve(ctx, args) : resolve(ctx);
     });
 
