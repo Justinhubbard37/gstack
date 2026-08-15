@@ -201,6 +201,21 @@ export const FREE_TEST_TIMEOUT_MS = 30_000;
 // Override per run with --wall-timeout <secs>.
 export const DEFAULT_WALL_TIMEOUT_MS = 6 * 60_000;
 
+/**
+ * Files that crash or wedge Bun's --parallel WORKERS but run fine in a plain
+ * serial process. Full-suite mode excludes them from the parallel invocation
+ * and runs them in their own serial child afterward (strict-classified like
+ * everything else — this is an execution-placement list, not a skip list).
+ * Each entry carries its reason; remove the entry when the underlying bug is
+ * fixed and a full parallel run stays green.
+ */
+export const WORKER_HOSTILE: Record<string, string> = {
+  'browse/test/security-live-playwright.test.ts':
+    'Bun 1.3.13 segfaults running this file in a --parallel worker ("panic: '
+    + 'Segmentation fault ... a bug in Bun"), and the crashed-worker retry then '
+    + 'wedges the whole invocation past the wall clock. Passes serially.',
+};
+
 export function normalizeRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
@@ -967,13 +982,25 @@ async function main(): Promise<number> {
 
   // Full-suite mode: one bun invocation, files parallelized across per-file
   // worker processes. See the header for the probe results that picked this
-  // over N spawned shard processes.
-  const outcome = await runFreeShard(files, 1, 1, {
+  // over N spawned shard processes. Worker-hostile files are pulled out and
+  // run in their own serial child afterward.
+  const hostile = files.filter((f) => f in WORKER_HOSTILE);
+  const parallelFiles = files.filter((f) => !(f in WORKER_HOSTILE));
+  const outcome = await runFreeShard(parallelFiles, 1, hostile.length > 0 ? 2 : 1, {
     parallel: true,
     wallTimeoutMs: options.wallTimeoutMs,
     verbose: options.verbose,
   });
-  return exitCodeFor(outcome.status);
+  let worst = exitCodeFor(outcome.status);
+  if (hostile.length > 0) {
+    for (const f of hostile) console.log(`[test:free] serial (worker-hostile): ${f} — ${WORKER_HOSTILE[f]}`);
+    const serialOutcome = await runFreeShard(hostile, 2, 2, {
+      wallTimeoutMs: options.wallTimeoutMs,
+      verbose: options.verbose,
+    });
+    worst = Math.max(worst, exitCodeFor(serialOutcome.status));
+  }
+  return worst;
 }
 
 if (import.meta.main) {
