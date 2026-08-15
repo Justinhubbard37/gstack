@@ -2,172 +2,50 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { runSkillTest } from './helpers/session-runner';
 import type { SkillTestResult } from './helpers/session-runner';
 import { outcomeJudge, callJudge } from './helpers/llm-judge';
-import { EvalCollector, judgePassed } from './helpers/eval-store';
+import { judgePassed } from './helpers/eval-store';
 import type { EvalTestEntry } from './helpers/eval-store';
 import { startTestServer } from '../browse/test/test-server';
-import { selectTests, detectBaseBranch, getChangedFiles, E2E_TOUCHFILES, GLOBAL_TOUCHFILES } from './helpers/touchfiles';
-import { spawnSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-
-const ROOT = path.resolve(import.meta.dir, '..');
-
-// Skip unless EVALS=1. Session runner strips CLAUDE* env vars to avoid nested session issues.
+// Skip unless EVALS=1 (evalsEnabled/describeE2E). Diff-based selection,
+// the EVALS_TIER filter, the API-reachability fail-fast ping, and the
+// ~/.gstack pre-seed all run at e2e-helpers import time — see that module.
 //
 // BLAME PROTOCOL: When an eval fails, do NOT claim "pre-existing" or "not related
 // to our changes" without proof. Run the same eval on main to verify. These tests
 // have invisible couplings — preamble text, SKILL.md content, and timing all affect
 // agent behavior. See CLAUDE.md "E2E eval failure blame protocol" for details.
-const evalsEnabled = !!process.env.EVALS;
-const describeE2E = evalsEnabled ? describe : describe.skip;
-
-// --- Diff-based test selection ---
-// When EVALS_ALL is not set, only run tests whose touchfiles were modified.
-// Set EVALS_ALL=1 to force all tests. Set EVALS_BASE to override base branch.
-let selectedTests: string[] | null = null; // null = run all
-
-if (evalsEnabled && !process.env.EVALS_ALL) {
-  const baseBranch = process.env.EVALS_BASE
-    || detectBaseBranch(ROOT)
-    || 'main';
-  const changedFiles = getChangedFiles(baseBranch, ROOT);
-
-  if (changedFiles.length > 0) {
-    const selection = selectTests(changedFiles, E2E_TOUCHFILES, GLOBAL_TOUCHFILES);
-    selectedTests = selection.selected;
-    process.stderr.write(`\nE2E selection (${selection.reason}): ${selection.selected.length}/${Object.keys(E2E_TOUCHFILES).length} tests\n`);
-    if (selection.skipped.length > 0) {
-      process.stderr.write(`  Skipped: ${selection.skipped.join(', ')}\n`);
-    }
-    process.stderr.write('\n');
-  }
-  // If changedFiles is empty (e.g., on main branch), selectedTests stays null → run all
-}
-
-/** Wrap a describe block to skip entirely if none of its tests are selected. */
-function describeIfSelected(name: string, testNames: string[], fn: () => void) {
-  const anySelected = selectedTests === null || testNames.some(t => selectedTests!.includes(t));
-  (anySelected ? describeE2E : describe.skip)(name, fn);
-}
-
-/** Skip an individual test if not selected (for multi-test describe blocks). */
-function testIfSelected(testName: string, fn: () => Promise<void>, timeout: number) {
-  const shouldRun = selectedTests === null || selectedTests.includes(testName);
-  (shouldRun ? test : test.skip)(testName, fn, timeout);
-}
+import {
+  ROOT,
+  evalsEnabled,
+  describeE2E,
+  selectedTests,
+  describeIfSelected,
+  testIfSelected,
+  createEvalCollector,
+  recordE2E as recordE2EShared,
+  finalizeEvalCollector,
+  runId,
+  browseBin,
+  copyDirSync,
+  setupBrowseShims,
+  logCost,
+  dumpOutcomeDiagnostic,
+  hasApiKey,
+} from './helpers/e2e-helpers';
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 // Eval result collector — accumulates test results, writes to ~/.gstack-dev/evals/ on finalize
-const evalCollector = evalsEnabled ? new EvalCollector('e2e') : null;
+const evalCollector = createEvalCollector('e2e');
 
-// Unique run ID for this E2E session — used for heartbeat + per-run log directory
-const runId = new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').slice(0, 15);
-
-/** DRY helper to record an E2E test result into the eval collector. */
+/** Record a result into this file's collector (recording logic lives in e2e-helpers). */
 function recordE2E(name: string, suite: string, result: SkillTestResult, extra?: Partial<EvalTestEntry>) {
-  // Derive last tool call from transcript for machine-readable diagnostics
-  const lastTool = result.toolCalls.length > 0
-    ? `${result.toolCalls[result.toolCalls.length - 1].tool}(${JSON.stringify(result.toolCalls[result.toolCalls.length - 1].input).slice(0, 60)})`
-    : undefined;
-
-  evalCollector?.addTest({
-    name, suite, tier: 'e2e',
-    passed: result.exitReason === 'success' && result.browseErrors.length === 0,
-    duration_ms: result.duration,
-    cost_usd: result.costEstimate.estimatedCost,
-    transcript: result.transcript,
-    output: result.output?.slice(0, 2000),
-    turns_used: result.costEstimate.turnsUsed,
-    browse_errors: result.browseErrors,
-    exit_reason: result.exitReason,
-    timeout_at_turn: result.exitReason === 'timeout' ? result.costEstimate.turnsUsed : undefined,
-    last_tool_call: lastTool,
-    ...extra,
-  });
+  recordE2EShared(evalCollector, name, suite, result, extra);
 }
 
 let testServer: ReturnType<typeof startTestServer>;
 let tmpDir: string;
-const browseBin = path.resolve(ROOT, 'browse', 'dist', 'browse');
-
-/**
- * Copy a directory tree recursively (files only, follows structure).
- */
-function copyDirSync(src: string, dest: string) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-/**
- * Set up browse shims (binary symlink, find-browse, remote-slug) in a tmpDir.
- */
-function setupBrowseShims(dir: string) {
-  // Symlink browse binary
-  const binDir = path.join(dir, 'browse', 'dist');
-  fs.mkdirSync(binDir, { recursive: true });
-  if (fs.existsSync(browseBin)) {
-    fs.symlinkSync(browseBin, path.join(binDir, 'browse'));
-  }
-
-  // find-browse shim
-  const findBrowseDir = path.join(dir, 'browse', 'bin');
-  fs.mkdirSync(findBrowseDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(findBrowseDir, 'find-browse'),
-    `#!/bin/bash\necho "${browseBin}"\n`,
-    { mode: 0o755 },
-  );
-
-  // remote-slug shim (returns test-project)
-  fs.writeFileSync(
-    path.join(findBrowseDir, 'remote-slug'),
-    `#!/bin/bash\necho "test-project"\n`,
-    { mode: 0o755 },
-  );
-}
-
-/**
- * Print cost summary after an E2E test.
- */
-function logCost(label: string, result: { costEstimate: { turnsUsed: number; estimatedTokens: number; estimatedCost: number }; duration: number }) {
-  const { turnsUsed, estimatedTokens, estimatedCost } = result.costEstimate;
-  const durationSec = Math.round(result.duration / 1000);
-  console.log(`${label}: $${estimatedCost.toFixed(2)} (${turnsUsed} turns, ${(estimatedTokens / 1000).toFixed(1)}k tokens, ${durationSec}s)`);
-}
-
-/**
- * Dump diagnostic info on planted-bug outcome failure (decision 1C).
- */
-function dumpOutcomeDiagnostic(dir: string, label: string, report: string, judgeResult: any) {
-  try {
-    const transcriptDir = path.join(dir, '.gstack', 'test-transcripts');
-    fs.mkdirSync(transcriptDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    fs.writeFileSync(
-      path.join(transcriptDir, `${label}-outcome-${timestamp}.json`),
-      JSON.stringify({ label, report, judgeResult }, null, 2),
-    );
-  } catch { /* non-fatal */ }
-}
-
-// Fail fast if Anthropic API is unreachable — don't burn through 13 tests getting ConnectionRefused
-if (evalsEnabled) {
-  const check = spawnSync('sh', ['-c', 'echo "ping" | claude -p --max-turns 1 --output-format stream-json --verbose --dangerously-skip-permissions'], {
-    stdio: 'pipe', timeout: 30_000,
-  });
-  const output = check.stdout?.toString() || '';
-  if (output.includes('ConnectionRefused') || output.includes('Unable to connect')) {
-    throw new Error('Anthropic API unreachable — aborting E2E suite. Fix connectivity and retry.');
-  }
-}
 
 describeIfSelected('Skill E2E tests', [
   'browse-basic', 'browse-snapshot', 'skillmd-setup-discovery',
@@ -674,7 +552,6 @@ Important: The design checklist should catch issues like blacklisted fonts, smal
 // --- B6/B7/B8: Planted-bug outcome evals ---
 
 // Outcome evals also need ANTHROPIC_API_KEY for the LLM judge
-const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
 const describeOutcome = (evalsEnabled && hasApiKey) ? describe : describe.skip;
 
 // Wrap describeOutcome with selection — skip if no planted-bug tests are selected
@@ -3266,12 +3143,4 @@ Write your summary to ${benefitsDir}/benefits-summary.md`,
 
 
 // Module-level afterAll — finalize eval collector after all tests complete
-afterAll(async () => {
-  if (evalCollector) {
-    try {
-      await evalCollector.finalize();
-    } catch (err) {
-      console.error('Failed to save eval results:', err);
-    }
-  }
-});
+afterAll(() => finalizeEvalCollector(evalCollector));

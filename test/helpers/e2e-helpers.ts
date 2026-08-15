@@ -32,25 +32,35 @@ export const evalsEnabled = !!process.env.EVALS;
 // --- Diff-based test selection ---
 // When EVALS_ALL is not set, only run tests whose touchfiles were modified.
 // Set EVALS_ALL=1 to force all tests. Set EVALS_BASE to override base branch.
-export let selectedTests: string[] | null = null; // null = run all
 
-if (evalsEnabled && !process.env.EVALS_ALL) {
+/**
+ * Compute the diff-based selection for a touchfiles table. Returns null for
+ * "run all" (EVALS off, EVALS_ALL=1, or no diff vs the base branch — e.g. on
+ * main). Shared by this module (E2E_TOUCHFILES) and skill-llm-eval.test.ts
+ * (LLM_JUDGE_TOUCHFILES) so the selection logic exists exactly once.
+ */
+export function computeDiffSelection(
+  touchfiles: Record<string, string[]>,
+  label: string,
+): string[] | null {
+  if (!evalsEnabled || process.env.EVALS_ALL) return null;
   const baseBranch = process.env.EVALS_BASE
     || detectBaseBranch(ROOT)
     || 'main';
   const changedFiles = getChangedFiles(baseBranch, ROOT);
+  // If changedFiles is empty (e.g., on main branch), run all
+  if (changedFiles.length === 0) return null;
 
-  if (changedFiles.length > 0) {
-    const selection = selectTests(changedFiles, E2E_TOUCHFILES, GLOBAL_TOUCHFILES);
-    selectedTests = selection.selected;
-    process.stderr.write(`\nE2E selection (${selection.reason}): ${selection.selected.length}/${Object.keys(E2E_TOUCHFILES).length} tests\n`);
-    if (selection.skipped.length > 0) {
-      process.stderr.write(`  Skipped: ${selection.skipped.join(', ')}\n`);
-    }
-    process.stderr.write('\n');
+  const selection = selectTests(changedFiles, touchfiles, GLOBAL_TOUCHFILES);
+  process.stderr.write(`\n${label} selection (${selection.reason}): ${selection.selected.length}/${Object.keys(touchfiles).length} tests\n`);
+  if (selection.skipped.length > 0) {
+    process.stderr.write(`  Skipped: ${selection.skipped.join(', ')}\n`);
   }
-  // If changedFiles is empty (e.g., on main branch), selectedTests stays null → run all
+  process.stderr.write('\n');
+  return selection.selected;
 }
+
+export let selectedTests: string[] | null = computeDiffSelection(E2E_TOUCHFILES, 'E2E'); // null = run all
 
 // EVALS_TIER: filter tests by tier after diff-based selection.
 // 'gate' = gate tests only (CI default — blocks merge)
@@ -72,9 +82,14 @@ if (evalsEnabled && process.env.EVALS_TIER) {
 
 export const describeE2E = evalsEnabled ? describe : describe.skip;
 
-/** Wrap a describe block to skip entirely if none of its tests are selected. */
-export function describeIfSelected(name: string, testNames: string[], fn: () => void) {
-  const anySelected = selectedTests === null || testNames.some(t => selectedTests!.includes(t));
+/**
+ * Wrap a describe block to skip entirely if none of its tests are selected.
+ * `selected` defaults to this module's E2E selection (diff + EVALS_TIER);
+ * pass an explicit selection (e.g. computeDiffSelection over
+ * LLM_JUDGE_TOUCHFILES) to reuse the gating against a different table.
+ */
+export function describeIfSelected(name: string, testNames: string[], fn: () => void, selected: string[] | null = selectedTests) {
+  const anySelected = selected === null || testNames.some(t => selected.includes(t));
   (anySelected ? describeE2E : describe.skip)(name, fn);
 }
 
@@ -272,14 +287,14 @@ if (evalsEnabled) {
 }
 
 /** Skip an individual test if not selected (for multi-test describe blocks). */
-export function testIfSelected(testName: string, fn: () => Promise<void>, timeout: number) {
-  const shouldRun = selectedTests === null || selectedTests.includes(testName);
+export function testIfSelected(testName: string, fn: () => Promise<void>, timeout: number, selected: string[] | null = selectedTests) {
+  const shouldRun = selected === null || selected.includes(testName);
   (shouldRun ? test : test.skip)(testName, fn, timeout);
 }
 
 /** Concurrent version — runs in parallel with other concurrent tests within the same describe block. */
-export function testConcurrentIfSelected(testName: string, fn: () => Promise<void>, timeout: number) {
-  const shouldRun = selectedTests === null || selectedTests.includes(testName);
+export function testConcurrentIfSelected(testName: string, fn: () => Promise<void>, timeout: number, selected: string[] | null = selectedTests) {
+  const shouldRun = selected === null || selected.includes(testName);
   (shouldRun ? test.concurrent : test.skip)(testName, fn, timeout);
 }
 
