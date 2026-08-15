@@ -5,7 +5,13 @@
  * Fetches /refs on snapshot completion, relays to content script.
  * Proxies commands from sidebar → browse server.
  * Updates badge: amber (connected), gray (disconnected).
+ * Denies token/port reads to content-script and foreign senders.
  */
+
+// Sender authorization for privileged message types (the token/port surface).
+// Classic (non-module) service worker: importScripts puts gstackSenderAuth on
+// the worker global. The same file is require()-able from bun tests.
+importScripts('sender-auth.js');
 
 const DEFAULT_PORT = 34567;  // Well-known port used by `$B connect`
 let serverPort = null;
@@ -309,6 +315,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
+  // Privileged types — anything that returns or spends the auth token or
+  // server port, or dumps the full tab list — are for this extension's own
+  // pages only (sidepanel/popup). Content scripts run inside web pages and
+  // can be influenced by page content; foreign extensions are foreign. Both
+  // get { error: 'unauthorized' } and nothing else — never the token, never
+  // the port. Policy + type list live in sender-auth.js.
+  const denial = gstackSenderAuth.denialFor(msg.type, sender, chrome.runtime.id);
+  if (denial) {
+    console.warn('[gstack] Rejected privileged message from unauthorized sender:', msg.type, sender.url || '(no sender url)');
+    sendResponse(denial);
+    return true;
+  }
+
   if (msg.type === 'getPort') {
     sendResponse({ port: serverPort, connected: isConnected, token: authToken });
     return true;
@@ -333,15 +352,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // Token delivered via targeted sendResponse, not broadcast — limits exposure.
-  // Only respond to extension pages (sidepanel/popup) — content scripts have
-  // sender.tab set, so reject those to prevent token access from injected contexts.
+  // Only this extension's own pages reach here: the sender-auth gate above
+  // denies content scripts (sender.tab set) and foreign senders before any
+  // privileged handler runs.
   if (msg.type === 'getToken') {
-    if (sender.tab) {
-      console.warn('[gstack] Rejected getToken from content script context');
-      sendResponse({ token: null });
-    } else {
-      sendResponse({ token: authToken });
-    }
+    sendResponse({ token: authToken });
     return true;
   }
 
