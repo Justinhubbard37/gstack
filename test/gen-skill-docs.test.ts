@@ -1944,16 +1944,21 @@ describe('Codex generation (--host codex)', () => {
     const content = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
     expect(content).toContain('.claude/skills/review/checklist.md');
     expect(content).toContain('~/.claude/skills/gstack');
-    // Must NOT contain Codex paths
+    // Must NOT contain Codex HOST paths. `~/.codex/sessions/` is exempt: the
+    // timeout-wrapper guidance documents the Codex CLI's own rollout-log
+    // location (a user-facing CLI path, same class as ~/.codex/logs/ in the
+    // codex skill), not the gstack Codex host install path.
     expect(content).not.toContain('.agents/skills');
-    expect(content).not.toContain('~/.codex/');
+    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: ship skill still uses .claude/skills/ paths', () => {
     const content = readShipUnion();
     expect(content).toContain('~/.claude/skills/gstack');
     expect(content).not.toContain('.agents/skills');
-    expect(content).not.toContain('~/.codex/');
+    // ~/.codex/sessions/ is the Codex CLI's rollout-log path (user-facing),
+    // documented by the adversarial-pass timeout guidance — see review test above.
+    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: all Claude skills have zero Codex paths', () => {
@@ -1962,9 +1967,11 @@ describe('Codex generation (--host codex)', () => {
       // pair-agent legitimately documents how Codex agents store credentials.
       // codex + autoplan document the Codex CLI auth file (~/.codex/auth.json)
       // and log path (~/.codex/logs/) — those are user-facing Codex CLI paths,
-      // not the gstack Codex host install path.
+      // not the gstack Codex host install path. ~/.codex/sessions/ (rollout
+      // logs, referenced by the review/ship timeout guidance) is the same
+      // user-facing class, so it is scrubbed before the ban.
       if (skill.dir !== 'pair-agent' && skill.dir !== 'codex' && skill.dir !== 'autoplan') {
-        expect(content).not.toContain('~/.codex/');
+        expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
       }
       // gstack-upgrade legitimately references .agents/skills for cross-platform detection
       if (skill.dir !== 'gstack-upgrade') {
