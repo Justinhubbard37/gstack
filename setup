@@ -521,23 +521,34 @@ fi
 if ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
   _PW_LOCK="${TMPDIR:-/tmp}/gstack-playwright-install.lock"
+  # Stale-lock self-heal: a SIGKILL'd prior setup leaves the lock dir behind
+  # forever (mkdir mutexes have no owner). If the recorded holder PID is dead,
+  # reclaim instead of telling the user to rmdir by hand.
+  if [ -d "$_PW_LOCK" ] && [ -f "$_PW_LOCK/pid" ]; then
+    _PW_HOLDER=$(cat "$_PW_LOCK/pid" 2>/dev/null || true)
+    if [ -n "$_PW_HOLDER" ] && ! kill -0 "$_PW_HOLDER" 2>/dev/null; then
+      echo "  reclaiming stale Chromium-install lock (holder pid $_PW_HOLDER is gone)" >&2
+      rm -rf "$_PW_LOCK" 2>/dev/null || true
+    fi
+  fi
   if mkdir "$_PW_LOCK" 2>/dev/null; then
+    echo "$$" > "$_PW_LOCK/pid" 2>/dev/null || true
     # Chain the earlier cleanup_copied_bun EXIT trap: `trap ... EXIT` REPLACES
     # the previous handler, so the lock trap must run both or any run taking
     # this path leaves .tmp-bun-bin behind.
-    trap 'rmdir "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun' EXIT
+    trap 'rm -rf "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun' EXIT
     (
       cd "$SOURCE_GSTACK_DIR"
       bunx playwright install chromium
     )
-    rmdir "$_PW_LOCK" 2>/dev/null || true
+    rm -rf "$_PW_LOCK" 2>/dev/null || true
     # Restore the original handler (never `trap - EXIT`, which would clear
     # cleanup_copied_bun for the rest of the script).
     trap cleanup_copied_bun EXIT
   else
     echo "  another gstack setup is already installing Chromium (lock: $_PW_LOCK)." >&2
     echo "  Wait for it to finish, then re-run ./setup. If no other setup is running," >&2
-    echo "  remove the stale lock: rmdir \"$_PW_LOCK\"" >&2
+    echo "  remove the stale lock: rm -rf \"$_PW_LOCK\"" >&2
     exit 1
   fi
 
