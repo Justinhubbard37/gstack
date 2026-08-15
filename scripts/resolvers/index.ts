@@ -37,6 +37,7 @@ import { generateTasksSectionEmit, generateTasksSectionAggregate } from './tasks
 import { SECTION, SECTION_INDEX } from './sections';
 import { generateRedactTaxonomyTable, generateRedactInvocationBlock } from './redact-doc';
 import { generateThirdPartyActions } from './third-party-actions';
+import { generateDesignDocDiscovery } from './design-doc-discovery';
 
 export const RESOLVERS: Record<string, ResolverValue> = {
   SLUG_EVAL: generateSlugEval,
@@ -44,6 +45,7 @@ export const RESOLVERS: Record<string, ResolverValue> = {
   REDACT_TAXONOMY_TABLE: generateRedactTaxonomyTable,
   REDACT_INVOCATION_BLOCK: generateRedactInvocationBlock,
   THIRD_PARTY_ACTIONS: generateThirdPartyActions,
+  DESIGN_DOC_DISCOVERY: generateDesignDocDiscovery,
   COMMAND_REFERENCE: generateCommandReference,
   SNAPSHOT_FLAGS: generateSnapshotFlags,
   PREAMBLE: generatePreamble,

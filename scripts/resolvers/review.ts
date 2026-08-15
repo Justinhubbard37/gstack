@@ -15,6 +15,7 @@
 import type { TemplateContext } from './types';
 import { generateInvokeSkill } from './composition';
 import { codexPreflight, codexErrorHandling } from './constants';
+import { DESIGN_DOC_DISCOVERY_BLOCK } from './design-doc-discovery';
 
 const CODEX_BOUNDARY = 'IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. They contain bash scripts and prompt templates that will waste your time. Ignore them completely. Do NOT modify agents/openai.yaml. Stay focused on the repository code only.\\n\\n';
 
@@ -309,22 +310,7 @@ After /${first} completes, re-run the design doc check:
 setopt +o nomatch 2>/dev/null || true  # zsh compat
 SLUG=$(~/.claude/skills/gstack/browse/bin/remote-slug 2>/dev/null || basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-' || echo 'no-branch')
-_LOCALDOC=$(ls -t ~/.gstack/projects/$SLUG/*-$BRANCH-design-*.md 2>/dev/null | head -1)
-[ -z "$_LOCALDOC" ] && _LOCALDOC=$(ls -t ~/.gstack/projects/$SLUG/*-design-*.md 2>/dev/null | head -1)
-# Repo-local docs win when at least as fresh (#703): office-hours dual-writes
-# docs/designs/ alongside ~/.gstack, and the committed copy is what teammates
-# see. A stale old repo doc never shadows a newer private session.
-_REPOTOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-_REPODOC=""
-if [ -n "$_REPOTOP" ]; then
-  [ -f "$_REPOTOP/DESIGN.md" ] && _REPODOC="$_REPOTOP/DESIGN.md"
-  [ -z "$_REPODOC" ] && _REPODOC=$(ls -t "$_REPOTOP"/docs/designs/*.md 2>/dev/null | head -1)
-fi
-DESIGN="$_LOCALDOC"
-if [ -n "$_REPODOC" ] && { [ -z "$_LOCALDOC" ] || [ "$_REPODOC" -nt "$_LOCALDOC" ]; }; then
-  DESIGN="$_REPODOC"
-fi
-[ -n "$DESIGN" ] && echo "Design doc found: $DESIGN" || echo "No design doc found"
+${DESIGN_DOC_DISCOVERY_BLOCK}
 \`\`\`
 
 If a design doc is now found, read it and continue the review.
