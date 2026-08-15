@@ -360,6 +360,17 @@ describe('wait', () => {
     expect(r.stderr).toContain('wait timed out');
     expect(r.stderr).toContain('--resume-provision abc');
   });
+
+  test('non-numeric --timeout dies at parse time instead of polling forever', async () => {
+    // NaN would make `elapsed >= timeout` always false: an infinite 5s poll loop.
+    // The bash predecessor errored on `[ "$elapsed" -ge "abc" ]`; the port
+    // must be at least as strict.
+    const r = await runCmd(['wait', 'abc', '--timeout', 'abc'], {
+      SUPABASE_ACCESS_TOKEN: 'sbp_test',
+    });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('--timeout must be a non-negative integer');
+  });
 });
 
 describe('pooler-url', () => {

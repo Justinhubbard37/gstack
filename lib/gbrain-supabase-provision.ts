@@ -411,6 +411,12 @@ async function cmdWait(ctx: Ctx, args: string[]): Promise<void> {
     else ref = arg;
   }
   if (!ref) die(ctx, 'wait: missing <ref>');
+  // Validate up front: NaN would make the deadline comparison below always
+  // false and the poll loop run forever (the bash predecessor errored here).
+  const timeoutSeconds = Number(timeout);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) {
+    die(ctx, 'wait: --timeout must be a non-negative integer (seconds)');
+  }
 
   requirePat(ctx);
 
@@ -439,7 +445,7 @@ async function cmdWait(ctx: Ctx, args: string[]): Promise<void> {
       ctx.stderr(`${PROG}: unexpected status '${status}' — continuing to poll\n`);
     }
 
-    if (elapsed >= Number(timeout)) {
+    if (elapsed >= timeoutSeconds) {
       ctx.stderr(`${PROG}: wait timed out after ${timeout}s (last status: ${status})\n`);
       ctx.stderr(`${PROG}: re-run with /setup-gbrain --resume-provision ${ref}\n`);
       throw new ExitError(6);
