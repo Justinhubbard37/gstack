@@ -3,7 +3,7 @@
  *
  * Spawns `codex exec` with skills installed in a temp HOME, parses JSONL
  * output, and validates structured results. Follows the same pattern as
- * skill-e2e.test.ts but adapted for Codex CLI.
+ * the skill-e2e-*.test.ts suites but adapted for Codex CLI.
  *
  * Prerequisites:
  * - `codex` binary installed (npm install -g @openai/codex)

@@ -34,6 +34,9 @@ describe('paid test enumeration', () => {
     expect(isPaidTestFile('test/codex-e2e.test.ts')).toBe(true);
     expect(isPaidTestFile('test/skill-e2e-triage-audit.test.ts')).toBe(true);
     // Outside the globs: no dash, extra suffix, or a free test.
+    // 'test/skill-e2e.test.ts' is the DELETED pre-split monolith's name,
+    // kept here as a regression pin: its glob-invisibility is exactly how
+    // two gate tests went unexecuted for ~8 releases before the rehoming.
     expect(isPaidTestFile('test/skill-e2e.test.ts')).toBe(false);
     expect(isPaidTestFile('test/codex-e2e-recommendation-substance.test.ts')).toBe(false);
     expect(isPaidTestFile('test/paid-shards.test.ts')).toBe(false);

@@ -200,7 +200,12 @@ describe('real-skill pins: section lists used by E2E fixtures', () => {
 });
 
 describe('real-skill pins: body/head extraction used by E2E fixtures', () => {
-  const BODY_EXTRACTED_SKILLS = ['scrape', 'skillify', 'context-save', 'context-restore'];
+  // scrape/skillify/context-*: skill-e2e-skillify + skill-e2e-context-skills.
+  // review/plan-eng-review/ship: skill-e2e-coverage-audit + skill-e2e-triage.
+  const BODY_EXTRACTED_SKILLS = [
+    'scrape', 'skillify', 'context-save', 'context-restore',
+    'review', 'plan-eng-review', 'ship',
+  ];
 
   for (const skill of BODY_EXTRACTED_SKILLS) {
     test(`extractSkillBody(${skill}) drops the shared preamble, keeps the flow`, () => {

@@ -112,6 +112,14 @@ jobs:
             file: test/skill-e2e-review-attribution.test.ts
           - name: e2e-workflow
             file: test/skill-e2e-workflow.test.ts
+          # Rehomed from the deleted pre-split monolith (its filename never
+          # matched the skill-e2e-* glob, so these gate tests silently never
+          # ran). Both files hold gate-tier tests: review/plan-eng coverage
+          # audits and the /ship failure-ownership triage.
+          - name: e2e-coverage-audit
+            file: test/skill-e2e-coverage-audit.test.ts
+          - name: e2e-triage
+            file: test/skill-e2e-triage.test.ts
           - name: e2e-routing
             file: test/skill-routing-e2e.test.ts
           - name: e2e-codex

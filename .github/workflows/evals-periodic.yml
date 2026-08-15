@@ -86,11 +86,16 @@ jobs:
             file: test/skill-e2e-review.test.ts
           - name: e2e-retro
             file: test/skill-e2e-retro.test.ts
-          # e2e-review-attribution is gate-only (all three of its tests are
-          # gate-tier) — deliberately absent here; an all-skip shard would just
-          # burn a container boot weekly.
+          # e2e-review-attribution, e2e-coverage-audit, and e2e-triage are
+          # gate-only (every test they hold is gate-tier) — deliberately absent
+          # here; an all-skip shard would just burn a container boot weekly.
           - name: e2e-workflow
             file: test/skill-e2e-workflow.test.ts
+          # Rehomed from the deleted pre-split monolith: the SDK-harness
+          # ship-idempotency check (periodic; the real-PTY variant runs via
+          # the periodic sharded runner).
+          - name: e2e-ship-idempotency-sdk
+            file: test/skill-e2e-ship-idempotency-sdk.test.ts
           - name: e2e-routing
             file: test/skill-routing-e2e.test.ts
           - name: e2e-codex

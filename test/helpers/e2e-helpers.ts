@@ -1,8 +1,8 @@
 /**
  * Shared helpers for E2E test files.
  *
- * Extracted from the monolithic skill-e2e.test.ts to support splitting
- * tests across multiple files by category.
+ * Extracted from the (since-deleted) pre-split monolith to support
+ * splitting tests across multiple skill-e2e-*.test.ts files by category.
  */
 
 import '../../lib/conductor-env-shim';
