@@ -45,29 +45,6 @@ a silent mistake breaks all 52 skills. High blast radius — needs its own focus
 
 ## Test infrastructure
 
-### P2: Wire `design/test/` into CI (all 8 files are invisible to every runner)
-
-**What:** Add `design/test/` to the `bun test` glob (`package.json:21`) and
-`TEST_ROOTS` (`scripts/test-free-shards.ts:32`) after auditing its 8 files for
-server-spawning/flakiness (they were plausibly excluded on purpose). While in
-there, fix the known timing flake: `variants-retry-after.test.ts` "HTTP-date:
-honors a future date with no extra leading exponential" fails ~1-2 in 9 runs
-under parallel suite load (verified pre-existing on v1.58.5.0 during the
-June 2026 fix wave — wall-clock assertion with a ~2s window).
-
-**Why:** Every test in `design/test/` runs only when someone types the path by
-hand — a silent coverage hole, the fix wave's theme at meta-level. The wave's
-own design tests went into `test/design-flag-utils.test.ts` to dodge this.
-
-**Pros:** design binary gets CI coverage; kills a latent "we have tests" illusion.
-**Cons:** unaudited files may spawn servers or flake; audit first, wire second.
-
-**Context:** Filed from the June 2026 fix-wave eng review (issue 11 + flake
-receipts). Start with the audit: which of the 8 files are hermetic? Wire the
-hermetic ones, quarantine or fix the rest.
-
-**Effort:** S-M (human ~1d, CC ~30min). **Depends on:** None.
-
 ### P2: /context-save worktree-identity hardening (the #2052 residual)
 
 **What:** Persist a stable worktree identity (path hash or worktree name) into

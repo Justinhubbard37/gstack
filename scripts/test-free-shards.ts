@@ -75,7 +75,17 @@ const ROOT = path.resolve(import.meta.dir, '..');
 // or local free run. Keep the two lists in sync. This list is the single
 // source of truth for free-suite roots: package.json's `test` script routes
 // through this runner rather than passing its own directory globs.
-const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test', 'design/test'] as const;
+const TEST_ROOTS = [
+  'browse/test',
+  'test',
+  'make-pdf/test',
+  'design/test',
+  // v1.65 orphan wire-in (decision D3a): these ran under NO script or CI —
+  // written coverage that caught nothing. All were green on arrival.
+  'ios-qa/daemon/test',
+  'ios-qa/scripts',
+  'browser-skills',
+] as const;
 const TEST_FILE_REGEX = /\.test\.(?:[cm]?[jt]s|tsx|jsx)$/;
 
 // POSIX-only patterns that indicate a test will fail on windows-latest no
