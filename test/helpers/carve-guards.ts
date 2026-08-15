@@ -194,10 +194,13 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // always-loaded AskUserQuestion Format section.
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
     // +~1.3 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
-    maxSkeletonBytes: 89_000,
+    // +~340 B: telemetry --error-message/--failed-step flags + prose in the
+    // shared completion-status preamble (PR #769, 2026-08); this skill was the
+    // closest to its ceiling (landed 89040 / ratio 1.072).
+    maxSkeletonBytes: 89_400,
     minUnionBytes: 70_000,
     mustContain: ['design', 'visual'],
-    maxSizeRatio: 1.07,
+    maxSizeRatio: 1.08,
   },
   'plan-devex-review': {
     skill: 'plan-devex-review',
