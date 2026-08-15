@@ -54,10 +54,16 @@ describe('process liveness probe (Windows terminal-agent leak)', () => {
     expect(isProcessAlive(2147483646)).toBe(false);
   });
 
-  test('3. isProcessAlive spawns NO subprocess', () => {
+  test('3. isProcessAlive spawns NO subprocess on POSIX (signal-0 path)', () => {
     // The heart of the bug: a liveness probe that forks is slow enough to
     // time out, and a timed-out probe silently answers "dead". Signal 0
     // cannot time out because it never leaves the process.
+    //
+    // Merged design note: on win32 the helper DOES keep a single hardened
+    // tasklist probe (windowsHide, bounded timeout, quoted-CSV PID match)
+    // because Bun's process.kill(pid, 0) throws ESRCH for live Windows PIDs
+    // in compiled binaries. The POSIX path stays subprocess-free.
+    if (process.platform === 'win32') return;
     const origSpawn = (Bun as any).spawn;
     const origSpawnSync = (Bun as any).spawnSync;
     const spawns: string[] = [];
@@ -73,11 +79,16 @@ describe('process liveness probe (Windows terminal-agent leak)', () => {
     }
   });
 
-  test('4. no source file probes liveness via tasklist', () => {
-    // Static tripwire: re-introducing a tasklist-based existence check
-    // anywhere in src/ resurrects the false-negative class.
+  test('4. no source file probes liveness via tasklist outside the central helper', () => {
+    // Static tripwire: ad-hoc tasklist existence checks scattered across src/
+    // resurrect the false-negative class (each call site re-invents the
+    // timeout/parse handling and gets it subtly wrong). The ONE sanctioned
+    // site is error-handling.ts's isProcessAlive win32 branch — centralized,
+    // windowsHide, bounded timeout, quoted-CSV `"${pid}"` match. Every other
+    // file must route through the helper.
     const offenders: string[] = [];
     for (const { file, content } of readAllSourceFiles()) {
+      if (file === 'error-handling.ts') continue; // the canonical helper
       const code = stripComments(content);
       // `PID eq` is the existence-probe form specifically. Other tasklist
       // uses (e.g. IMAGENAME filters for browser detection) are unaffected.

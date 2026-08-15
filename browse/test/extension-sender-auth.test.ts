@@ -32,9 +32,13 @@ const CONTENT_SCRIPT_SENDER = { id: OWN_ID, url: 'https://evil.example/page', ta
 const FOREIGN_SENDER = { id: FOREIGN_ID, url: `chrome-extension://${FOREIGN_ID}/background.html` };
 const NO_URL_SENDER = { id: OWN_ID };
 
+// 'sidebar-command' is no longer a message type at all — the chat-queue path
+// was ripped along with the /sidebar-command endpoint, so background.js now
+// rejects it pre-gate as an unknown type (no response, nothing to leak). It is
+// pinned separately below as a representative unknown type.
 const PRIVILEGED = [
   'getPort', 'setPort', 'getServerUrl', 'getToken', 'fetchRefs',
-  'command', 'sidebar-command', 'getTabState',
+  'command', 'getTabState',
 ];
 // Content-script-originated flows that must keep working.
 const CONTENT_SCRIPT_TYPES = ['openSidePanel', 'elementPicked', 'pickerCancelled', 'inspectResult'];
@@ -204,6 +208,16 @@ describe('background.js onMessage listener (behavioral)', () => {
     for (const type of PRIVILEGED) {
       const r = dispatch(listener, { type }, NO_URL_SENDER);
       expect(r.responded).toBe(true);
+      expectDenied(r);
+    }
+  });
+
+  test('retired sidebar-command type is rejected pre-gate with no response and no leaks', () => {
+    // Even from the most-trusted sender shape, a type outside ALLOWED_TYPES
+    // never reaches a handler: no sendResponse, no token/port fields possible.
+    for (const sender of [PAGE_SENDER, CONTENT_SCRIPT_SENDER, FOREIGN_SENDER, NO_URL_SENDER]) {
+      const r = dispatch(listener, { type: 'sidebar-command', message: 'hi' }, sender);
+      expect(r.responded).toBe(false);
       expectDenied(r);
     }
   });
