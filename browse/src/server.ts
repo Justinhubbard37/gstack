@@ -18,21 +18,20 @@ import { handleReadCommand, hasOutArg } from './read-commands';
 import { handleWriteCommand } from './write-commands';
 import { handleMetaCommand } from './meta-commands';
 import { handleCookiePickerRoute, hasActivePicker } from './cookie-picker-routes';
-import { sanitizeExtensionUrl } from './sidebar-utils';
 import { COMMAND_DESCRIPTIONS, PAGE_CONTENT_COMMANDS, DOM_CONTENT_COMMANDS, wrapUntrustedContent, canonicalizeCommand, buildUnknownCommandError, ALL_COMMANDS } from './commands';
 import {
   wrapUntrustedPageContent, datamarkContent,
   runContentFilters, type ContentFilterResult,
   markHiddenElements, getCleanTextWithStripping, cleanupHiddenMarkers,
 } from './content-security';
-import { generateCanary, injectCanary, getStatus as getSecurityStatus, writeDecision } from './security';
+import { getStatus as getSecurityStatus } from './security';
 import { isSidecarAvailable, scanWithSidecar } from './security-sidecar-client';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
 import { handleSnapshot, SNAPSHOT_FLAGS } from './snapshot';
 import {
   initRegistry, validateToken as validateScopedToken, checkScope, checkDomain,
   checkRate, createToken, createSetupKey, exchangeSetupKey, revokeToken,
-  rotateRoot, listTokens, serializeRegistry, restoreRegistry, recordCommand,
+  listTokens, recordCommand,
   isRootToken, checkConnectRateLimit, type TokenInfo,
 } from './token-registry';
 import { validateTempPath } from './path-security';
@@ -44,7 +43,7 @@ import { inspectElement, modifyStyle, resetModifications, getModificationHistory
 // Bun.spawn used instead of child_process.spawn (compiled bun binaries
 // fail posix_spawn on all executables including /bin/bash)
 import { safeUnlink, safeUnlinkQuiet, safeKill } from './error-handling';
-import { readAgentRecord, killAgentByRecord, clearAgentRecord, agentRecordPath, spawnTerminalAgent } from './terminal-agent-control';
+import { readAgentRecord, killAgentByRecord, agentRecordPath, spawnTerminalAgent } from './terminal-agent-control';
 import { isProcessAlive } from './error-handling';
 import { sanitizeBody, stripLoneSurrogateEscapes } from './sanitize';
 import { startSocksBridge, testUpstream, type BridgeHandle } from './socks-bridge';

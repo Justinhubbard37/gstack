@@ -98,11 +98,6 @@ export function buildPtySetCookie(token: string): string {
   return `${PTY_COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
 }
 
-/** Clear the PTY session cookie. */
-export function buildPtyClearCookie(): string {
-  return `${PTY_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
-}
-
 function pruneExpired(now: number): void {
   let checked = 0;
   for (const [token, session] of sessions) {

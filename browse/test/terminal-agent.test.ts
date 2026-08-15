@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   mintPtySessionToken, validatePtySessionToken, revokePtySessionToken,
-  extractPtyCookie, buildPtySetCookie, buildPtyClearCookie,
+  extractPtyCookie, buildPtySetCookie,
   PTY_COOKIE_NAME, __resetPtySessions,
 } from '../src/pty-session-cookie';
 
@@ -59,10 +59,6 @@ describe('pty-session-cookie: mint/validate/revoke', () => {
     expect(cookie).toMatch(/Max-Age=\d+/);
     // Secure is intentionally omitted — daemon binds 127.0.0.1 over HTTP.
     expect(cookie).not.toContain('Secure');
-  });
-
-  test('clear-cookie has Max-Age=0', () => {
-    expect(buildPtyClearCookie()).toContain('Max-Age=0');
   });
 
   test('extractPtyCookie reads gstack_pty from a Cookie header', () => {
@@ -150,10 +146,13 @@ describe('Source-level guard: terminal-agent', () => {
       AGENT_SRC.indexOf("if (url.pathname === '/ws')"),
       AGENT_SRC.indexOf("websocket: {"),
     );
-    expect(upgradeBlock).not.toContain('spawnClaude(');
+    // v1.44 renamed spawnClaude -> maybeSpawnPty (explicit `start` frame +
+    // lazy first-byte spawn share one helper). Pin was stale from then until
+    // the free suite got a CI job.
+    expect(upgradeBlock).not.toContain('maybeSpawnPty(');
     // Spawn must be invoked from the message handler (lazy on first byte).
     const messageHandler = AGENT_SRC.slice(AGENT_SRC.indexOf('message(ws, raw)'));
-    expect(messageHandler).toContain('spawnClaude(');
+    expect(messageHandler).toContain('maybeSpawnPty(');
     expect(messageHandler).toContain('!session.spawned');
   });
 

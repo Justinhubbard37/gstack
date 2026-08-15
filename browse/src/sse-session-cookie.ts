@@ -96,11 +96,6 @@ export function buildSseSetCookie(token: string): string {
   return `${SSE_COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
 }
 
-/** Build a Set-Cookie header that clears the SSE session cookie. */
-export function buildSseClearCookie(): string {
-  return `${SSE_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
-}
-
 function pruneExpired(now: number): void {
   // Opportunistic cleanup: check up to 20 entries per call so we don't
   // stall on a massive registry. O(1) amortized.  Runs on every mint

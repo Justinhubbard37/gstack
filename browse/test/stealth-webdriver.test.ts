@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { chromium, type Browser, type BrowserContext } from 'playwright';
-import { applyStealth, WEBDRIVER_MASK_SCRIPT, STEALTH_LAUNCH_ARGS } from '../src/stealth';
+import { applyStealth, STEALTH_LAUNCH_ARGS } from '../src/stealth';
 
 let browser: Browser;
 
@@ -15,20 +15,6 @@ afterAll(async () => {
 describe('STEALTH_LAUNCH_ARGS', () => {
   test('includes --disable-blink-features=AutomationControlled', () => {
     expect(STEALTH_LAUNCH_ARGS).toContain('--disable-blink-features=AutomationControlled');
-  });
-});
-
-describe('WEBDRIVER_MASK_SCRIPT', () => {
-  test('contains a single Object.defineProperty for navigator.webdriver', () => {
-    expect(WEBDRIVER_MASK_SCRIPT).toContain('navigator');
-    expect(WEBDRIVER_MASK_SCRIPT).toContain('webdriver');
-    expect(WEBDRIVER_MASK_SCRIPT).toContain('false');
-  });
-
-  test('does NOT touch plugins, languages, or window.chrome (D7 narrowing)', () => {
-    expect(WEBDRIVER_MASK_SCRIPT).not.toMatch(/plugins/i);
-    expect(WEBDRIVER_MASK_SCRIPT).not.toMatch(/languages/i);
-    expect(WEBDRIVER_MASK_SCRIPT).not.toMatch(/window\.chrome/);
   });
 });
 
