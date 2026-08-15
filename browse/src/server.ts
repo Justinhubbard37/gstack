@@ -45,7 +45,7 @@ import { inspectElement, modifyStyle, resetModifications, getModificationHistory
 import { safeUnlink, safeUnlinkQuiet, safeKill } from './error-handling';
 import { readAgentRecord, killAgentByRecord, agentRecordPath, spawnTerminalAgent } from './terminal-agent-control';
 import { isProcessAlive } from './error-handling';
-import { sanitizeBody, stripLoneSurrogateEscapes } from './sanitize';
+import { sanitizeBody, stripLoneSurrogateEscapes, stripLoneSurrogates, sanitizeReplacer } from './sanitize';
 import { startSocksBridge, testUpstream, type BridgeHandle } from './socks-bridge';
 import { parseProxyConfig, toUpstreamConfig, ProxyConfigError } from './proxy-config';
 import { writeReceipt } from '../../lib/egress-receipt';
@@ -68,41 +68,22 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 
 // ─── Unicode Sanitization ───────────────────────────────────────
-// Remove unpaired UTF-16 surrogate halves (\uD800–\uDFFF). Page DOM text,
-// OCR output, and other CDP-sourced strings can contain lone surrogates;
-// JSON consumers downstream (Anthropic API in particular) reject them with
-// "no low surrogate in string". Valid surrogate pairs (e.g. emoji) survive
-// unchanged. Lone halves become U+FFFD (�).
+// Unpaired UTF-16 surrogate halves (\uD800–\uDFFF) in page DOM text, OCR
+// output, and other CDP-sourced strings are rejected by JSON consumers
+// downstream (Anthropic API in particular: "no low surrogate in string").
+// The sanitizers live in sanitize.ts (single source of truth, shared with
+// sse-helpers.ts and the read/snapshot pipeline): `stripLoneSurrogates`
+// replaces lone halves with U+FFFD (valid pairs like emoji survive), and
+// `sanitizeReplacer` runs it on every string value inside JSON.stringify.
 //
 // INVARIANT: every server egress path that ships page-content strings MUST
-// route through this sanitizer. handleCommandInternal wraps the final
+// route through the sanitizer. handleCommandInternal wraps the final
 // cr.result string (text/plain bodies carry lone surrogates verbatim;
-// JSON.stringify already escapes them). The two SSE producers below
-// stringify with `sanitizeReplacer` so payload string fields get cleaned
-// BEFORE escaping. Plain post-stringify regex is a no-op there because
-// JSON.stringify converts \uD800 → "\\ud800" — the regex can't see the
-// surrogate after that point.
-function sanitizeLoneSurrogates(str: string): string {
-  return str.replace(/[\uD800-\uDFFF]/g, (match, offset) => {
-    const code = match.charCodeAt(0);
-    if (code >= 0xD800 && code <= 0xDBFF) {
-      const next = str.charCodeAt(offset + 1);
-      if (next >= 0xDC00 && next <= 0xDFFF) return match;
-    }
-    if (code >= 0xDC00 && code <= 0xDFFF) {
-      const prev = str.charCodeAt(offset - 1);
-      if (prev >= 0xD800 && prev <= 0xDBFF) return match;
-    }
-    return '�';
-  });
-}
-
-// JSON.stringify replacer that sanitizes string values before they get
-// escape-encoded. Pair with stringify when the consumer will JSON.parse the
-// payload back into JS strings (SSE clients do this).
-function sanitizeReplacer(_key: string, value: unknown): unknown {
-  return typeof value === 'string' ? sanitizeLoneSurrogates(value) : value;
-}
+// JSON.stringify already escapes them). The SSE producers stringify with
+// `sanitizeReplacer` so payload string fields get cleaned BEFORE escaping.
+// Plain post-stringify regex is a no-op there because JSON.stringify
+// converts \uD800 → "\\ud800" — the regex can't see the surrogate after
+// that point.
 
 // ─── Config ─────────────────────────────────────────────────────
 const config = resolveConfig();
@@ -400,6 +381,100 @@ async function closeTunnel(): Promise<void> {
   tunnelServer = null;
   tunnelUrl = null;
   tunnelActive = false;
+}
+
+/**
+ * Result of startTunnel(). `stage` tells the caller which half failed so it
+ * can keep its distinct error surface: 'bind' = the tunnel-surface Bun.serve
+ * listener could not bind (nothing to clean up), 'ngrok' = anything after the
+ * bind (ngrok forward, egress receipt, state-file write) — startTunnel has
+ * already torn down both ngrok and the Bun listener by the time it returns.
+ */
+type StartTunnelResult =
+  | { ok: true; url: string }
+  | { ok: false; stage: 'bind' | 'ngrok'; error: Error };
+
+/**
+ * Start the ngrok tunnel using the dual-listener pattern: bind a dedicated
+ * tunnel-surface listener on an ephemeral 127.0.0.1 port and point
+ * ngrok.forward() at THAT port — the local listener (which serves
+ * /extension-token, /cookie-picker, /inspector/*, welcome, etc.) is never
+ * exposed to ngrok. Shared by the /tunnel/start route handler (which passes
+ * its in-closure makeFetchHandler('tunnel')) and the BROWSE_TUNNEL=1
+ * auto-start flow in start() (which passes handle.fetchTunnel from the
+ * factory). The BROWSE_TUNNEL_LOCAL_ONLY=1 test path does NOT use this
+ * helper — it binds the tunnel surface with no ngrok forwarding at all.
+ *
+ * Hard fail on listener bind (`stage: 'bind'`) — NEVER fall back to the
+ * local port, which would silently defeat the whole security property.
+ *
+ * On success, sets the module tunnel state (tunnelListener / tunnelUrl /
+ * tunnelServer / tunnelActive) and records the tunnel in the state file.
+ */
+async function startTunnel(opts: {
+  fetchHandler: (req: Request, server: any) => Promise<Response>;
+  authtoken: string;
+  consent: string;
+}): Promise<StartTunnelResult> {
+  // Bind the tunnel listener on an ephemeral port.  HARD FAIL if this
+  // errors — never fall back to the local port.
+  let boundTunnel: ReturnType<typeof Bun.serve>;
+  try {
+    boundTunnel = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: opts.fetchHandler,
+    });
+  } catch (err: any) {
+    return { ok: false, stage: 'bind', error: err };
+  }
+  const tunnelPort = boundTunnel.port;
+
+  // Point ngrok at the TUNNEL port (not the local port).  If this fails,
+  // tear the listener back down so we don't leak sockets.
+  try {
+    const ngrok = await import('@ngrok/ngrok');
+    const domain = process.env.NGROK_DOMAIN;
+    const forwardOpts: any = { addr: tunnelPort, authtoken: opts.authtoken };
+    if (domain) forwardOpts.domain = domain;
+
+    // Egress receipt BEFORE the tunnel session opens, fail-closed: a
+    // writeReceipt failure lands in this catch, which tears the tunnel
+    // listener back down and refuses the start. One receipt per session
+    // open; browse command behavior over the tunnel is unchanged.
+    writeReceipt({
+      sink: 'browse-tunnel',
+      host: domain || 'connect.ngrok-agent.com',
+      payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
+      bytes: 0,
+      sha256: null,
+      consent: opts.consent,
+    });
+
+    tunnelListener = await ngrok.forward(forwardOpts);
+    tunnelUrl = tunnelListener.url();
+    tunnelServer = boundTunnel;
+    tunnelActive = true;
+    console.log(`[browse] Tunnel listener bound on 127.0.0.1:${tunnelPort}, ngrok → ${tunnelUrl}`);
+
+    // Update state file
+    const stateContent = JSON.parse(fs.readFileSync(config.stateFile, 'utf-8'));
+    stateContent.tunnel = { url: tunnelUrl, domain: domain || null, startedAt: new Date().toISOString() };
+    const tmpState = tmpStatePath();
+    fs.writeFileSync(tmpState, JSON.stringify(stateContent, null, 2), { mode: 0o600 });
+    fs.renameSync(tmpState, config.stateFile);
+
+    return { ok: true, url: tunnelUrl! };
+  } catch (err: any) {
+    // Clean up BOTH ngrok and the Bun listener on failure.  If
+    // ngrok.forward() succeeded but tunnelListener.url() or the
+    // state-file write threw, we'd otherwise leak an active ngrok
+    // session on the user's account.
+    try { if (tunnelListener) await tunnelListener.close(); } catch {}
+    try { boundTunnel.stop(true); } catch {}
+    tunnelListener = null;
+    return { ok: false, stage: 'ngrok', error: err };
+  }
 }
 
 // Module-level validateAuth deleted in v1.35.0.0. Factory-scoped equivalent
@@ -1310,7 +1385,7 @@ async function handleCommandInternal(
   opts?: { skipRateCheck?: boolean; skipActivity?: boolean; chainDepth?: number },
 ): Promise<CommandResult> {
   const cr = await handleCommandInternalImpl(body, tokenInfo, opts);
-  return { ...cr, result: sanitizeLoneSurrogates(cr.result) };
+  return { ...cr, result: stripLoneSurrogates(cr.result) };
 }
 
 /**
@@ -2379,71 +2454,24 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        // 2) Bind the tunnel listener on an ephemeral port.  HARD FAIL if
-        //    this errors — never fall back to the local port.
-        let boundTunnel: ReturnType<typeof Bun.serve>;
-        try {
-          boundTunnel = Bun.serve({
-            port: 0,
-            hostname: '127.0.0.1',
-            fetch: makeFetchHandler('tunnel'),
-          });
-        } catch (err: any) {
+        // 2) Bind the tunnel listener + open ngrok via the shared helper
+        //    (see startTunnel — hard-fails the bind, cleans up both ngrok
+        //    and the Bun listener on any post-bind failure).
+        const started = await startTunnel({
+          fetchHandler: makeFetchHandler('tunnel'),
+          authtoken,
+          consent: 'pair_agent=on',
+        });
+        if (!started.ok) {
           return new Response(JSON.stringify({
-            error: `Failed to bind tunnel listener: ${err.message}`,
+            error: started.stage === 'bind'
+              ? `Failed to bind tunnel listener: ${started.error.message}`
+              : `Failed to open ngrok tunnel: ${started.error.message}`,
           }), { status: 500, headers: { 'Content-Type': 'application/json' } });
         }
-        const tunnelPort = boundTunnel.port;
-
-        // 3) Point ngrok at the TUNNEL port (not the local port).  If this
-        //    fails, tear the listener back down so we don't leak sockets.
-        try {
-          const ngrok = await import('@ngrok/ngrok');
-          const domain = process.env.NGROK_DOMAIN;
-          const forwardOpts: any = { addr: tunnelPort, authtoken };
-          if (domain) forwardOpts.domain = domain;
-
-          // Egress receipt BEFORE the tunnel session opens, fail-closed: a
-          // writeReceipt failure lands in this catch, which tears the tunnel
-          // listener back down and refuses the start. One receipt per session
-          // open; browse command behavior over the tunnel is unchanged.
-          writeReceipt({
-            sink: 'browse-tunnel',
-            host: domain || 'connect.ngrok-agent.com',
-            payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
-            bytes: 0,
-            sha256: null,
-            consent: 'pair_agent=on',
-          });
-
-          tunnelListener = await ngrok.forward(forwardOpts);
-          tunnelUrl = tunnelListener.url();
-          tunnelServer = boundTunnel;
-          tunnelActive = true;
-          console.log(`[browse] Tunnel listener bound on 127.0.0.1:${tunnelPort}, ngrok → ${tunnelUrl}`);
-
-          // Update state file
-          const stateContent = JSON.parse(fs.readFileSync(config.stateFile, 'utf-8'));
-          stateContent.tunnel = { url: tunnelUrl, domain: domain || null, startedAt: new Date().toISOString() };
-          const tmpState = tmpStatePath();
-          fs.writeFileSync(tmpState, JSON.stringify(stateContent, null, 2), { mode: 0o600 });
-          fs.renameSync(tmpState, config.stateFile);
-
-          return new Response(JSON.stringify({ url: tunnelUrl }), {
-            status: 200, headers: { 'Content-Type': 'application/json' },
-          });
-        } catch (err: any) {
-          // Clean up BOTH ngrok and the Bun listener on failure.  If
-          // ngrok.forward() succeeded but tunnelListener.url() or the
-          // state-file write threw, we'd otherwise leak an active ngrok
-          // session on the user's account.
-          try { if (tunnelListener) await tunnelListener.close(); } catch {}
-          try { boundTunnel.stop(true); } catch {}
-          tunnelListener = null;
-          return new Response(JSON.stringify({
-            error: `Failed to open ngrok tunnel: ${err.message}`,
-          }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-        }
+        return new Response(JSON.stringify({ url: started.url }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
       }
 
       // ─── SSE session cookie mint (auth required) ──────────────────
@@ -3096,53 +3124,17 @@ export async function start() {
     if (!authtoken) {
       console.error('[browse] BROWSE_TUNNEL=1 but no NGROK_AUTHTOKEN found. Set it via env var or ~/.gstack/ngrok.env');
     } else {
-      let boundTunnel: ReturnType<typeof Bun.serve> | null = null;
-      try {
-        boundTunnel = Bun.serve({
-          port: 0,
-          hostname: '127.0.0.1',
-          fetch: handle.fetchTunnel,
-        });
-        const tunnelPort = boundTunnel.port;
-
-        const ngrok = await import('@ngrok/ngrok');
-        const domain = process.env.NGROK_DOMAIN;
-        const forwardOpts: any = { addr: tunnelPort, authtoken };
-        if (domain) forwardOpts.domain = domain;
-
-        // Egress receipt BEFORE the tunnel session opens, fail-closed: a
-        // writeReceipt failure lands in this catch, which cleans up the
-        // listener and skips the tunnel (same as any other startup failure).
-        writeReceipt({
-          sink: 'browse-tunnel',
-          host: domain || 'connect.ngrok-agent.com',
-          payloadClass: 'tunnel-session-open (scoped-token browser-command surface)',
-          bytes: 0,
-          sha256: null,
-          consent: 'pair_agent=on (BROWSE_TUNNEL=1)',
-        });
-
-        tunnelListener = await ngrok.forward(forwardOpts);
-        tunnelUrl = tunnelListener.url();
-        tunnelServer = boundTunnel;
-        tunnelActive = true;
-
-        console.log(`[browse] Tunnel listener bound on 127.0.0.1:${tunnelPort}, ngrok → ${tunnelUrl}`);
-
-        // Update state file with tunnel URL
-        const stateContent = JSON.parse(fs.readFileSync(config.stateFile, 'utf-8'));
-        stateContent.tunnel = { url: tunnelUrl, domain: domain || null, startedAt: new Date().toISOString() };
-        const tmpState = tmpStatePath();
-        fs.writeFileSync(tmpState, JSON.stringify(stateContent, null, 2), { mode: 0o600 });
-        fs.renameSync(tmpState, config.stateFile);
-      } catch (err: any) {
-        console.error(`[browse] Failed to start tunnel: ${err.message}`);
-        // Same cleanup as /tunnel/start's error path: tear down BOTH
-        // ngrok and the Bun listener so we don't leak an ngrok session
-        // if the error happened after ngrok.forward() resolved.
-        try { if (tunnelListener) await tunnelListener.close(); } catch {}
-        try { if (boundTunnel) boundTunnel.stop(true); } catch {}
-        tunnelListener = null;
+      // Shared startTunnel helper: binds the tunnel listener, opens ngrok,
+      // and on any failure tears down BOTH ngrok and the Bun listener so we
+      // don't leak an ngrok session if the error happened after
+      // ngrok.forward() resolved.
+      const started = await startTunnel({
+        fetchHandler: handle.fetchTunnel,
+        authtoken,
+        consent: 'pair_agent=on (BROWSE_TUNNEL=1)',
+      });
+      if (!started.ok) {
+        console.error(`[browse] Failed to start tunnel: ${started.error.message}`);
       }
     }
   } else if (process.env.BROWSE_TUNNEL_LOCAL_ONLY === '1') {
