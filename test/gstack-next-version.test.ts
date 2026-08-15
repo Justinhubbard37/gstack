@@ -4,6 +4,7 @@
 // when the relevant CLI isn't available).
 
 import { test, expect, describe } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -219,6 +220,104 @@ describe("resolveVersionPath (monorepo VERSION-path support)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+// Fixture-repo coverage for the default-base detection chain in parseArgs:
+// origin/HEAD symbolic-ref → origin/main probe → origin/master probe →
+// literal "main". No --base and no --current-version are passed, so the
+// detected base is observable through base_version: each fixture branch
+// carries a distinct VERSION and readBaseVersion does
+// `git show origin/<detected-base>:VERSION`.
+describe("default-base detection (no --base)", () => {
+  const SCRIPT = join(import.meta.dir, "..", "bin", "gstack-next-version");
+  // Point git at a nonexistent global/system config so operator settings
+  // (init.defaultBranch, commit.gpgsign, hooks, ...) can't leak into fixtures.
+  const noCfg = join(mkdtempSync(join(tmpdir(), "nextver-gitcfg-")), "empty");
+  const GIT_ENV = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: noCfg,
+    GIT_CONFIG_SYSTEM: noCfg,
+    GIT_AUTHOR_NAME: "fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.com",
+    GIT_COMMITTER_NAME: "fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.com",
+  };
+
+  function git(cwd: string, ...args: string[]): void {
+    execFileSync("git", args, { cwd, env: GIT_ENV, stdio: ["ignore", "pipe", "pipe"] });
+  }
+
+  // Origin repo whose branches each hold a distinct VERSION, plus a clone
+  // (the clone is the repo the CLI runs in).
+  function makeClone(branches: Array<[name: string, version: string]>): { root: string; clone: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-base-"));
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", branches[0][0]);
+    for (let i = 0; i < branches.length; i++) {
+      const [name, version] = branches[i];
+      if (i > 0) git(origin, "checkout", "-q", "-b", name);
+      writeFileSync(join(origin, "VERSION"), `${version}\n`);
+      git(origin, "add", "VERSION");
+      git(origin, "commit", "-q", "--no-gpg-sign", "-m", `VERSION ${version}`);
+    }
+    git(root, "clone", "-q", "origin", "clone");
+    return { root, clone: join(root, "clone") };
+  }
+
+  function runWithoutBase(cwd: string): { exitCode: number; parsed: any } {
+    const proc = Bun.spawnSync(
+      ["bun", "run", SCRIPT, "--bump", "patch", "--workspace-root", "null"],
+      { cwd },
+    );
+    const out = new TextDecoder().decode(proc.stdout);
+    return { exitCode: proc.exitCode, parsed: JSON.parse(out) };
+  }
+
+  test("origin/HEAD symbolic-ref wins — resolves trunk even though origin/main exists", () => {
+    const { root, clone } = makeClone([["main", "1.1.1.1"], ["trunk", "2.2.2.2"]]);
+    try {
+      git(clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk");
+      const { exitCode, parsed } = runWithoutBase(clone);
+      expect(exitCode).toBe(0);
+      // trunk's VERSION, not main's — the rev-parse probes never ran.
+      expect(parsed.base_version).toBe("2.2.2.2");
+      expect(parsed.version).toBe("2.2.3.0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("no origin/HEAD, no origin/main: the origin/master probe resolves master", () => {
+    const { root, clone } = makeClone([["master", "3.3.3.3"]]);
+    try {
+      // Plain clones that never ran `git remote set-head` have no origin/HEAD.
+      git(clone, "remote", "set-head", "origin", "--delete");
+      const { exitCode, parsed } = runWithoutBase(clone);
+      expect(exitCode).toBe(0);
+      // Read at origin/master. The "main" literal fallback would have warned
+      // and assumed 0.0.0.0 instead.
+      expect(parsed.base_version).toBe("3.3.3.3");
+      expect(parsed.version).toBe("3.3.4.0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("neither origin/HEAD nor main/master: falls back to the 'main' literal", () => {
+    const { root, clone } = makeClone([["develop", "4.4.4.4"]]);
+    try {
+      git(clone, "remote", "set-head", "origin", "--delete");
+      const { exitCode, parsed } = runWithoutBase(clone);
+      expect(exitCode).toBe(0);
+      // base = literal "main"; origin/main doesn't exist, so readBaseVersion
+      // warns and assumes 0.0.0.0 — which pins WHICH base the fallback chose.
+      expect(parsed.base_version).toBe("0.0.0.0");
+      expect(parsed.warnings.join("\n")).toContain("origin/main");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 // Integration smoke — only runs if gh is available and authenticated. Confirms

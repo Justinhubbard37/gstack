@@ -54,7 +54,7 @@ import {
   rmSync,
   realpathSync,
 } from "fs";
-import { join, basename, dirname } from "path";
+import { join, basename, dirname, delimiter } from "path";
 import { execFileSync, spawnSync, spawn, type ChildProcess } from "child_process";
 import { homedir } from "os";
 import { createHash } from "crypto";
@@ -1443,8 +1443,10 @@ function runGbrainImport(
     }
     const baseEnv: NodeJS.ProcessEnv = {
       ...process.env,
+      // path.delimiter, not ':' — git splits this on ';' on Windows, and
+      // drive-letter paths contain ':' themselves.
       GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES
-        ? `${ceiling}:${process.env.GIT_CEILING_DIRECTORIES}`
+        ? `${ceiling}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}`
         : ceiling,
     };
     const child = spawnGbrainAsync(
