@@ -236,6 +236,8 @@ export const TREE_MUTATING: Record<string, string> = {
   'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
   'test/gen-skill-docs.test.ts': 'regenerates .agents/ (codex host) golden artifacts in place',
   'test/skill-validation.test.ts': 'regenerates .agents/ (codex host) artifacts in place (3 sites)',
+  'test/gbrain-detection-override.test.ts':
+    'regenerates SKILL.md in place with --respect-detection (gbrain variant), then git-restores — readers see inflated skeletons mid-window',
 };
 
 export function normalizeRelativePath(filePath: string): string {
