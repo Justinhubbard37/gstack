@@ -106,6 +106,10 @@ jobs:
             file: test/skill-e2e-qa-workflow.test.ts
           - name: e2e-review
             file: test/skill-e2e-review.test.ts
+          - name: e2e-retro
+            file: test/skill-e2e-retro.test.ts
+          - name: e2e-review-attribution
+            file: test/skill-e2e-review-attribution.test.ts
           - name: e2e-workflow
             file: test/skill-e2e-workflow.test.ts
           - name: e2e-routing
@@ -357,14 +361,14 @@ jobs:
 
           BODY="## E2E Evals: ${STATUS}
 
-          **${PASSED}/${TOTAL}** tests passed | **\$${COST}** total cost | **13 parallel runners**
+          **${PASSED}/${TOTAL}** tests passed | **\$${COST}** total cost
 
           | Suite | Result | Status | Cost |
           |-------|--------|--------|------|
           $(echo -e "$SUITE_LINES")
 
           ---
-          *13x ubicloud-standard-8 (Docker: pre-baked toolchain + deps) | wall clock ≈ slowest suite*"
+          *ubicloud-standard-8 runners (Docker: pre-baked toolchain + deps) | wall clock ≈ slowest suite*"
 
           if [ "$FAILED" -gt 0 ]; then
             FAILURES=""

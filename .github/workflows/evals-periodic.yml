@@ -84,6 +84,11 @@ jobs:
             file: test/skill-e2e-qa-workflow.test.ts
           - name: e2e-review
             file: test/skill-e2e-review.test.ts
+          - name: e2e-retro
+            file: test/skill-e2e-retro.test.ts
+          # e2e-review-attribution is gate-only (all three of its tests are
+          # gate-tier) — deliberately absent here; an all-skip shard would just
+          # burn a container boot weekly.
           - name: e2e-workflow
             file: test/skill-e2e-workflow.test.ts
           - name: e2e-routing
