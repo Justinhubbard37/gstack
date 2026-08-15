@@ -49,7 +49,6 @@ function makeMinimalConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   return {
     authToken: token,
     browsePort: 34568,
-    idleTimeoutMs: 1_800_000,
     config: resolveConfig(),
     browserManager: new BrowserManager(),
     startTime: Date.now(),

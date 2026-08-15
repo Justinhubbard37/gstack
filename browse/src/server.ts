@@ -190,14 +190,16 @@ export interface ServerConfig {
   authToken: string;
   /** Local listener port. Used in /welcome URL + state-file. */
   browsePort: number;
-  /** Idle shutdown timeout. Default 30 min. */
-  idleTimeoutMs: number;
   /** Result of resolveConfig() — stateDir, auditLog, stateFile. */
   config: ReturnType<typeof resolveConfig>;
   /** Pre-launched BrowserManager. Caller owns lifecycle. */
   browserManager: BrowserManager;
-  /** Optional Chromium profile path override. Resolved by resolveChromiumProfile(). */
-  chromiumProfile?: string;
+  // NOTE: per-factory idleTimeoutMs and chromiumProfile were deleted — they
+  // were documented but never read (the idle timer, activity state, and
+  // shutdown target are module-global, so per-factory wiring would lie for
+  // any embedder running >1 handler). Real support belongs to the deferred
+  // server.ts singleton/route-table refactor. Until then: BROWSE_IDLE_TIMEOUT
+  // and CHROMIUM_PROFILE env are the honest knobs.
   /** Caller-owned. shutdown() does NOT call xvfb.stop(); caller is responsible. */
   xvfb?: XvfbHandle | null;
   /** Caller-owned. shutdown() does NOT call proxyBridge.close(); caller is responsible. */
@@ -283,7 +285,6 @@ export function resolveConfigFromEnv(): Omit<ServerConfig, 'browserManager' | 's
     // embedder can't ship a BOM/zero-width as the bearer secret.
     authToken: sanitizeAuthToken(process.env.AUTH_TOKEN) || crypto.randomUUID(),
     browsePort: parseInt(process.env.BROWSE_PORT || '0', 10),
-    idleTimeoutMs: parseInt(process.env.BROWSE_IDLE_TIMEOUT || '1800000', 10),
     config: resolveConfig(),
   };
 }
