@@ -455,8 +455,11 @@ ${tail}
   };
 
   try {
+    // Use the same binary resolution as every PTY launch in this file —
+    // judgePtyState previously hardcoded bare 'claude' three definitions
+    // below resolveClaudeBinary(), breaking under hermetic PATHs.
     const result = nodeSpawnSync(
-      'claude',
+      resolveClaudeBinary() ?? 'claude',
       ['-p', '--model', resolveEvalModel('warmup'), '--max-turns', '1'],
       {
         input: prompt,

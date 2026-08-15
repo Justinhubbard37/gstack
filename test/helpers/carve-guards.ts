@@ -154,6 +154,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-plan-ceo-review-section-loading.test.ts',
+    // v1.65 merge: provisional larger-of-both-waves budget; re-measured below.
         // Fork port wave 2 (#703): the repo-doc-preference block in the design
     // check grew every plan-review skeleton ~0.7KB. Measured values noted.
     maxSkeletonBytes: 92_500, // v1.64+v1.65 merge: both waves' preamble growth; measured 92,004
@@ -177,6 +178,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     behavioral: 'plan',
     // v1.2.0 activation lift (shared first-run-guidance preamble) + #2077 ask-first scope gate.
     // +~1 KB: plan-mode auto-select-B scope-gate exceptions (2026-08).
+    // v1.65 merge: provisional larger-of-both-waves budget; re-measured below.
         // Fork port wave 2 (#703): the repo-doc-preference block in the design
     // check grew every plan-review skeleton ~0.7KB. Measured values noted.
     maxSkeletonBytes: 70_000, // measured 68,780
@@ -257,6 +259,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     behavioral: 'prompt',
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble,
     // plus the P1 office-hours closing handoff (AUQ that launches the next skill).
+    // v1.65 merge: provisional larger-of-both-waves budget; re-measured below.
     // Fork port wave 2: the third-party web-actions contract sits inline
     // (judgment must be visible before the workflow directs the user to a
     // vendor site), plus the #703 dual-write + repo-doc-preference block and
@@ -310,7 +313,10 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // +Conductor AUQ-default-prose rule + one-way/continuation safety in the
     // always-loaded AskUserQuestion Format section.
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble.
-    maxSkeletonBytes: 69_800, // v1.64+v1.65 merge; measured 69,476
+    // v1.65 merge: provisional larger-of-both-waves budget; re-measured below.
+    // v1.64.1.0: shared-preamble prose from the two parallel v1.64 waves lands
+    // the skeleton at 69,022 B; +~1 KB headroom.
+    maxSkeletonBytes: 70_000,
     minUnionBytes: 72_000,
     mustContain: ['Typography', 'Color', 'Aesthetic Direction'],
     // Cross-cutting preamble growth (v1.57.2.0 AUQ-failure prose fallback ~2KB +

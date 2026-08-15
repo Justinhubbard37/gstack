@@ -26,6 +26,12 @@ const TEST_DIR = import.meta.dir;
 // silently drop a file from the invariant (fail-open is the defect class
 // this test exists to kill).
 const SELF_GATE_RE = /EVALS_TIER\s*===\s*['"](gate|periodic)['"]/g;
+// Consolidated gate helper (test/helpers/e2e-gate.ts). Both regexes stay
+// active: migrated files self-gate via `describeE2ETier('<tier>')` (or the
+// boolean form `e2eTierEnabled('<tier>')`), while stragglers still using the
+// raw predicate are caught by SELF_GATE_RE above. The tier argument maps to
+// the declared tier exactly like the raw predicate's tier literal did.
+const HELPER_GATE_RE = /\b(?:describeE2ETier|e2eTierEnabled)\(\s*['"](gate|periodic)['"]/g;
 
 describe('E2E tier alignment (touchfiles declaration vs test self-gate)', () => {
   const testFiles = readdirSync(TEST_DIR)
@@ -42,6 +48,7 @@ describe('E2E tier alignment (touchfiles declaration vs test self-gate)', () => 
       const content = readFileSync(path.join(TEST_DIR, file), 'utf-8');
       const tiers = new Set<string>();
       for (const m of content.matchAll(SELF_GATE_RE)) tiers.add(m[1]);
+      for (const m of content.matchAll(HELPER_GATE_RE)) tiers.add(m[1]);
       const repoPath = `test/${file}`;
       if (tiers.size === 0) {
         // Every skill-e2e file is expected to self-gate; zero matches means

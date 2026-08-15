@@ -1,0 +1,184 @@
+name: Free Tests
+# The full free suite (`bun test`: browse/test/ + test/ + make-pdf/test/ minus
+# paid evals) previously ran in NO CI job — only Windows curated shards, paid
+# evals, and doc-freshness gates existed. Two test files crashed at module load
+# for 48 versions without any signal. This job closes that hole.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: free-tests-${{ github.head_ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/ci
+
+jobs:
+  # Same cached pre-baked toolchain image as evals.yml (only rebuilds on
+  # Dockerfile/lockfile change).
+  build-image:
+    runs-on: ubicloud-standard-8
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'package.json', 'bun.lock') }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if image exists
+        id: check
+        run: |
+          if docker manifest inspect ${{ steps.meta.outputs.tag }} > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.exists == 'false'
+        run: cp package.json bun.lock .github/docker/
+
+      - if: steps.check.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .github/docker
+          file: .github/docker/Dockerfile.ci
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+
+  free-tests:
+    runs-on: ubicloud-standard-8
+    needs: build-image
+    container:
+      image: ${{ needs.build-image.outputs.image-tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user runner
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bun creates root-owned temp dirs during Docker build. GH Actions runs as
+      # runner user with HOME=/github/home. Redirect bun's cache to a writable dir.
+      - name: Fix bun temp
+        run: |
+          mkdir -p /home/runner/.cache/bun
+          {
+            echo "BUN_INSTALL_CACHE_DIR=/home/runner/.cache/bun"
+            echo "BUN_TMPDIR=/home/runner/.cache/bun"
+            echo "TMPDIR=/home/runner/.cache"
+          } >> "$GITHUB_ENV"
+
+      # Several test files exercise real git operations (gstack-artifacts-init,
+      # session-update-autostash, team-mode, brain-sync) and bins that read the
+      # current branch (gstack-decision-search). The container checkout is owned
+      # by a different uid than `runner`, so git needs safe.directory, and
+      # commit-making tests need an identity.
+      - name: Git identity for git-exercising tests
+        run: |
+          git config --global user.email "ci@gstack.invalid"
+          git config --global user.name "gstack CI"
+          git config --global --add safe.directory '*'
+
+      # Same restore rationale as evals.yml: recursive copy beats symlink
+      # (realpath escapes workspace) and hardlink (cross-device overlay-fs).
+      - name: Restore deps
+        run: |
+          if [ -d /opt/node_modules_cache ] && diff -q /opt/node_modules_cache/.package.json package.json >/dev/null 2>&1; then
+            cp -r /opt/node_modules_cache node_modules
+          else
+            bun install
+          fi
+
+      - run: bun run build
+
+      # Fail fast if the container can't launch Chromium — the browse
+      # integration tests need it.
+      - name: Verify Chromium
+        run: |
+          echo "whoami=$(whoami) HOME=$HOME TMPDIR=${TMPDIR:-unset}"
+          bun -e "import {chromium} from 'playwright';const b=await chromium.launch({args:['--no-sandbox']});console.log('Chromium OK');await b.close()"
+
+      # ONE BUN PROCESS PER FILE, on purpose. A single multi-file `bun test`
+      # run of this suite is structurally unreliable here — observed twice
+      # while building this job:
+      # 1. Silent truncation: server-lifecycle tests stub process.exit, and
+      #    shutdown's async timers can hit the REAL exit after restore,
+      #    killing the whole bun process mid-suite with exit 0 and NO
+      #    summary (died at file 47, then file 51, of 358).
+      # 2. Co-run state bleed: files green in isolation failed under
+      #    multi-file module sharing.
+      # Per-file spawning makes truncation impossible by construction (the
+      # census drives the loop; a killed child is a recorded failure, not a
+      # vanished suite) and also covers the old exit-0-on-module-load-error
+      # Bun behavior. Same isolation model as scripts/test-paid-shards.ts.
+      - name: Run free suite (per-file isolation)
+        shell: bash
+        run: |
+          set -o pipefail
+          # Container-incompatible files, each with a reason (same curated-
+          # exclusion pattern as the Windows shards in test-free-shards.ts).
+          # Anything NOT on this list that fails still fails the job. Trimming
+          # this list is tracked follow-up work.
+          declare -A SKIP=(
+            [browse/test/compare-board.test.ts]="pre-existing env failure (also fails on dev machines; needs a display-shaped env)"
+            [browse/test/handoff.test.ts]="needs the headed Chrome-for-Testing build (headless-only container)"
+            [browse/test/snapshot.test.ts]="pre-existing env failure (viewport/tab timing under container load)"
+            [browse/test/extension-sender-auth.test.ts]="extension identity checks need a real chrome-extension origin"
+            [browse/test/security-sidepanel-dom.test.ts]="sidepanel DOM harness needs the extension loaded headed"
+            [browse/test/terminal-agent-integration.test.ts]="real PTY round-trip; container TTY semantics differ"
+            [browse/test/xvfb.test.ts]="tests xvfb management; container has no X server to manage"
+            [browse/test/security-audit-r2.test.ts]="one behavioral tmpdir-allowlist test breaks under this job's TMPDIR override (bun temp-dir workaround above)"
+            [design/test/variants-retry-after.test.ts]="known timing flake, tracked in TODOS.md (HTTP-date Retry-After rounding)"
+          )
+          FILES=$(bun run scripts/test-free-shards.ts --list | grep -E '^  (browse/|test/|make-pdf/|design/)' | sed 's/^  //')
+          TOTAL=$(echo "$FILES" | wc -l | tr -d ' ')
+          echo "Enumerated $TOTAL free test files"
+          FAILED=""
+          N=0
+          SKIPPED=0
+          for f in $FILES; do
+            N=$((N+1))
+            if [ -n "${SKIP[$f]:-}" ]; then
+              echo "SKIP [$N/$TOTAL] $f — ${SKIP[$f]}"
+              SKIPPED=$((SKIPPED+1))
+              continue
+            fi
+            if ! bun test "$f" > /tmp/one.log 2>&1; then
+              echo "FAIL [$N/$TOTAL] $f"
+              tail -30 /tmp/one.log
+              FAILED="$FAILED $f"
+            fi
+          done
+          echo "Skipped $SKIPPED container-incompatible files (reasons above)."
+          # Tree-mutation tripwire: a test that rewrites tracked files poisons
+          # every later file in the loop with confusing failures (observed:
+          # gstack-config's skill_prefix auto-relink patched 52 SKILL.md names,
+          # failing five unrelated suites downstream). Name the real culprit.
+          MUTATED=$(git status --porcelain --untracked-files=no)
+          if [ -n "$MUTATED" ]; then
+            echo ""
+            echo "A test mutated tracked files in the working tree — later failures may be collateral:"
+            echo "$MUTATED"
+            FAILED="$FAILED [tree-mutation]"
+          fi
+          if [ -n "$FAILED" ]; then
+            echo ""
+            echo "Failed files:$FAILED"
+            exit 1
+          fi
+          echo "All $((TOTAL-SKIPPED)) runnable files green."

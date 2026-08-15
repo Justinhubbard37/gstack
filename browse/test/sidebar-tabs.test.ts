@@ -205,8 +205,9 @@ describe('server.ts: chat / sidebar-agent endpoints are gone', () => {
     expect(slice).not.toContain('agentStatus');
     expect(slice).not.toContain('messageQueue');
     expect(slice).not.toContain('agentStartTime');
-    // chatEnabled is hardcoded false now (older clients still see the field).
-    expect(slice).toMatch(/chatEnabled:\s*false/);
+    // chatEnabled is gone entirely — the chat pane no longer exists in any
+    // extension build, so /health stopped advertising a chat mode.
+    expect(slice).not.toContain('chatEnabled');
     // terminalPort survives.
     expect(slice).toContain('terminalPort');
   });

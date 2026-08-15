@@ -56,6 +56,20 @@ describe('tier classification', () => {
     expect(classifyPaidTestFile(periodicGuard, 'periodic').included).toBe(true);
   });
 
+  test('recognizes the consolidated e2e-gate helper guard (both forms)', () => {
+    // The shape test/helpers/e2e-gate.ts consumers use after consolidation.
+    const helperGate = "const describeE2E = describeE2ETier('gate');";
+    const helperPeriodic = "const describeE2E = describeE2ETier('periodic');";
+    const boolPeriodic = "const shouldRun = CODEX_AVAILABLE && e2eTierEnabled('periodic');";
+
+    expect(classifyPaidTestFile(helperGate, 'gate').included).toBe(true);
+    expect(classifyPaidTestFile(helperGate, 'periodic').included).toBe(false);
+    expect(classifyPaidTestFile(helperPeriodic, 'periodic').included).toBe(true);
+    expect(classifyPaidTestFile(helperPeriodic, 'gate').included).toBe(false);
+    expect(classifyPaidTestFile(boolPeriodic, 'gate').included).toBe(false);
+    expect(classifyPaidTestFile(boolPeriodic, 'periodic').included).toBe(true);
+  });
+
   test('keeps files whose tier is decided per-test at runtime', () => {
     // Naming an E2E_TIERS key is not evidence — 'retro' appears in the
     // LLM-judge file, which test:gate does run.

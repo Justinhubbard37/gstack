@@ -114,35 +114,9 @@ export interface TemplateContext {
 /** Resolver function signature. args is populated for parameterized placeholders like {{INVOKE_SKILL:name}}. */
 export type ResolverFn = (ctx: TemplateContext, args?: string[]) => string;
 
-/**
- * Optional gated resolver. When the gate returns false, the resolver is
- * skipped (substituted with empty string) — same effect as the placeholder
- * not being referenced. Use when a resolver's output is only meaningful for
- * a known subset of skills, so future template authors get a structural
- * guardrail instead of relying on social knowledge.
- *
- * Most resolvers don't need this — the {{NAME}} placeholder system is
- * already conditional at the template level. Use only when a resolver
- * lives inside another resolver (e.g. via preamble composition) AND must
- * be conditionalized, or when a top-level resolver has a small, well-defined
- * audience.
- */
-export interface ResolverEntry {
-  resolve: ResolverFn;
-  appliesTo?: (ctx: TemplateContext) => boolean;
-}
-
-/** Anything the RESOLVERS map accepts — either a bare function or a gated entry. */
-export type ResolverValue = ResolverFn | ResolverEntry;
-
-/**
- * Type-narrowing helper for the gen-skill-docs lookup.
- * Returns (resolverFn, gate) so callers can do gate?.(ctx) before invoking.
- */
-export function unwrapResolver(entry: ResolverValue): {
-  resolve: ResolverFn;
-  appliesTo?: (ctx: TemplateContext) => boolean;
-} {
-  if (typeof entry === 'function') return { resolve: entry };
-  return { resolve: entry.resolve, appliesTo: entry.appliesTo };
-}
+// NOTE: a gated-resolver mechanism (ResolverEntry { resolve, appliesTo } +
+// unwrapResolver) lived here, fully built and tested — and never used by a
+// single one of the 65 registry entries. Per-skill gating happens either at
+// the template level ({{NAME}} is already conditional) or, where it truly
+// exists, via explicit ctx.skillName branches inside resolvers. Deleted
+// rather than kept as speculative API.

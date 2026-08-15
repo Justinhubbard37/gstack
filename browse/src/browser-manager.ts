@@ -333,7 +333,7 @@ export class BrowserManager {
 
   // Called when the headed browser disconnects without intentional teardown
   // (user closed the window). Wired up by server.ts to run full cleanup
-  // (sidebar-agent, state file, profile locks) before exiting with code 2.
+  // (terminal agent, state file, profile locks) before exiting with code 2.
   // Returns void or a Promise; rejections are caught and fall back to exit(2).
   // `exitCode` is the resolved process exit code from the disconnect cause:
   // 0 on clean user-initiated quit (e.g., Cmd+Q on headed Chromium), 2 on
@@ -755,7 +755,7 @@ export class BrowserManager {
     // restart loop. Crash → process.exit(2) preserves the legacy headed
     // semantics that's distinct from launch()'s code 1.
     // Always calls onDisconnect() first to trigger full shutdown (kill
-    // sidebar-agent, save session, clean profile locks + state file) so
+    // terminal agent, save session, clean profile locks + state file) so
     // crashes don't strand resources either.
     if (this.browser) {
       this.browser.on('disconnected', () => {
@@ -1655,8 +1655,13 @@ export class BrowserManager {
         console.log('[browse] Handoff: extension not found — headed mode without side panel');
       }
 
-      const userDataDir = path.join(process.env.HOME || '/tmp', '.gstack', 'chromium-profile');
+      // Same profile resolution + singleton-lock cleanup as launchHeaded().
+      // This path previously hardcoded ~/.gstack/chromium-profile, silently
+      // ignoring $CHROMIUM_PROFILE / $GSTACK_HOME and skipping the lock
+      // cleanup — the third shipped drift between the three launch paths.
+      const userDataDir = resolveChromiumProfile();
       fs.mkdirSync(userDataDir, { recursive: true });
+      cleanSingletonLocks(userDataDir);
 
       // Self-heal probe (#2242): handoff always launches the Playwright-cache
       // bundle (this launchPersistentContext call passes no executablePath),

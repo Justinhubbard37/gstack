@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   mintPtySessionToken, validatePtySessionToken, revokePtySessionToken,
-  extractPtyCookie, buildPtySetCookie, buildPtyClearCookie,
+  extractPtyCookie, buildPtySetCookie,
   PTY_COOKIE_NAME, __resetPtySessions,
 } from '../src/pty-session-cookie';
 
@@ -59,10 +59,6 @@ describe('pty-session-cookie: mint/validate/revoke', () => {
     expect(cookie).toMatch(/Max-Age=\d+/);
     // Secure is intentionally omitted — daemon binds 127.0.0.1 over HTTP.
     expect(cookie).not.toContain('Secure');
-  });
-
-  test('clear-cookie has Max-Age=0', () => {
-    expect(buildPtyClearCookie()).toContain('Max-Age=0');
   });
 
   test('extractPtyCookie reads gstack_pty from a Cookie header', () => {
@@ -125,9 +121,11 @@ describe('Source-level guard: terminal-agent', () => {
   test('validates the session token against an in-memory token set', () => {
     const wsHandler = AGENT_SRC.slice(AGENT_SRC.indexOf("if (url.pathname === '/ws')"));
     // Two transports: Sec-WebSocket-Protocol (preferred for browsers) and
-    // Cookie gstack_pty (fallback). Both verify against validTokens.
+    // the gstack_pty cookie fallback — parsing shared via extractPtyCookie
+    // (the hand-rolled parse here had drifted from the server's), validation
+    // still against the agent's own validTokens map.
     expect(wsHandler).toContain('sec-websocket-protocol');
-    expect(wsHandler).toContain('gstack_pty');
+    expect(wsHandler).toContain('extractPtyCookie');
     expect(wsHandler).toContain('validTokens.has');
   });
 
@@ -155,6 +153,9 @@ describe('Source-level guard: terminal-agent', () => {
       AGENT_SRC.indexOf("if (url.pathname === '/ws')"),
       AGENT_SRC.indexOf("websocket: {"),
     );
+    // v1.44 renamed spawnClaude -> maybeSpawnPty (explicit `start` frame +
+    // lazy first-byte spawn share one helper). Pin was stale from then until
+    // the free suite got a CI job.
     expect(upgradeBlock).not.toContain('spawnClaude(');
     expect(upgradeBlock).not.toContain('maybeSpawnPty(');
     // Spawn must be invoked from the message handler (lazy on first byte).
@@ -195,11 +196,13 @@ describe('Source-level guard: terminal-agent', () => {
     expect(AGENT_SRC).toContain("msg?.type === 'tabState'");
     expect(AGENT_SRC).toContain('function handleTabState');
     const fn = AGENT_SRC.slice(AGENT_SRC.indexOf('function handleTabState'));
-    // Atomic write via tmp + rename for both files (so claude never reads
-    // a half-written JSON document).
+    // Atomic write for both files (so claude never reads a half-written
+    // JSON document) — via the shared lib/fs-atomic helper, which owns the
+    // tmp + rename dance. Quiet variant: state-file writes are
+    // fire-and-forget and must never take down the agent.
     expect(fn).toContain("'tabs.json'");
     expect(fn).toContain("'active-tab.json'");
-    expect(fn).toContain('renameSync');
+    expect(fn).toContain('atomicWriteQuiet');
     // Skip chrome:// and chrome-extension:// pages — they're not useful
     // targets for browse commands.
     expect(fn).toContain("startsWith('chrome://')");

@@ -120,7 +120,7 @@ describe('validateHostConfig', () => {
       generation: { generateMetadata: false },
       pathRewrites: [],
       runtimeRoot: { globalSymlinks: ['bin'] },
-      install: { prefixable: false, linkingStrategy: 'symlink-generated' },
+      install: { linkingStrategy: 'symlink-generated' },
     };
   }
 
@@ -441,16 +441,6 @@ describe('golden-file regression', () => {
 // ─── Individual host config correctness ─────────────────────
 
 describe('host config correctness', () => {
-  test('claude is the only prefixable host', () => {
-    for (const config of ALL_HOST_CONFIGS) {
-      if (config.name === 'claude') {
-        expect(config.install.prefixable).toBe(true);
-      } else {
-        expect(config.install.prefixable).toBe(false);
-      }
-    }
-  });
-
   test('claude is the only host with real-dir-symlink strategy', () => {
     for (const config of ALL_HOST_CONFIGS) {
       if (config.name === 'claude') {
@@ -476,18 +466,12 @@ describe('host config correctness', () => {
     expect(codex.frontmatter.descriptionLimitBehavior).toBe('error');
   });
 
-  test('codex generates openai.yaml metadata', () => {
+  test('codex generates metadata (openai.yaml, format hardcoded in gen-skill-docs)', () => {
     expect(codex.generation.generateMetadata).toBe(true);
-    expect(codex.generation.metadataFormat).toBe('openai.yaml');
   });
 
   test('codex rewrites CLAUDE.md to AGENTS.md', () => {
     expect(codex.pathRewrites).toContainEqual({ from: 'CLAUDE.md', to: 'AGENTS.md' });
-  });
-
-  test('codex has sidecar config', () => {
-    expect(codex.sidecar).toBeDefined();
-    expect(codex.sidecar!.path).toBe('.agents/skills/gstack');
   });
 
   test('factory has tool rewrites', () => {
@@ -525,17 +509,13 @@ describe('host config correctness', () => {
     expect(openclaw.pathRewrites.some(r => r.from === 'CLAUDE.md' && r.to === 'AGENTS.md')).toBe(true);
   });
 
-  test('openclaw has no adapter (dead code removed)', () => {
-    expect(openclaw.adapter).toBeUndefined();
-  });
-
-  test('openclaw has no staticFiles (SOUL.md removed)', () => {
-    expect(openclaw.staticFiles).toBeUndefined();
-  });
-
-  test('openclaw includeSkills is empty (native skills replaced generated ones)', () => {
-    expect(openclaw.generation.includeSkills).toBeDefined();
-    expect(openclaw.generation.includeSkills!.length).toBe(0);
+  test('no host carries a no-op empty includeSkills allowlist', () => {
+    // includeSkills: [] was a no-op (the generator's `?.length` guard treats an
+    // empty allowlist as absent), so configs omit the field instead of
+    // shipping a lie about "no skills generated".
+    for (const config of ALL_HOST_CONFIGS) {
+      expect(config.generation.includeSkills).toBeUndefined();
+    }
   });
 
   test('every host has coAuthorTrailer or undefined', () => {
