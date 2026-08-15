@@ -78,21 +78,27 @@ describe('session-persist units', () => {
   test('cookie filter drops malformed + internal-network domains', () => {
     const kept = filterSessionCookies([
       { name: 'ok', value: 'v', domain: 'example.com' },
+      { name: 'ok2', value: 'v', domain: '.example.com' }, // leading-dot public domain kept
       { name: 'bad1', value: 'v', domain: 'localhost' },
       { name: 'bad2', value: 'v', domain: '.corp.internal' },
       { name: 'bad3', value: 'v', domain: '169.254.169.254' },
-      { name: 'bad4', value: 42, domain: 'example.com' },
+      { name: 'bad4', value: 'v', domain: '169.254.1.2' }, // whole link-local block, not just metadata
+      { name: 'bad5', value: 'v', domain: '127.0.0.1' }, // IPv4 loopback literal
+      { name: 'bad6', value: 'v', domain: '.127.0.0.1' }, // leading-dot loopback variant
+      { name: 'bad7', value: 'v', domain: '::1' }, // IPv6 loopback
+      { name: 'bad8', value: 'v', domain: '[::1]' }, // bracketed IPv6 loopback
+      { name: 'bad9', value: 42, domain: 'example.com' },
       null,
     ]);
-    expect(kept.map((c: any) => c.name)).toEqual(['ok']);
+    expect(kept.map((c: any) => c.name)).toEqual(['ok', 'ok2']);
   });
 
-  test('restoreSessionState: missing file → false, corrupt file → quarantined to .corrupt', async () => {
+  test('restoreSessionState: missing file → null, corrupt file → quarantined to .corrupt', async () => {
     const bmNeverCalled = { closeAllPages() { throw new Error('must not restore'); } } as any;
-    expect(await restoreSessionState(bmNeverCalled, path.join(tmpRoot, 'nope.json'))).toBe(false);
+    expect(await restoreSessionState(bmNeverCalled, path.join(tmpRoot, 'nope.json'))).toBeNull();
     const corrupt = path.join(tmpRoot, 'corrupt.json');
     fs.writeFileSync(corrupt, '{oops');
-    expect(await restoreSessionState(bmNeverCalled, corrupt)).toBe(false);
+    expect(await restoreSessionState(bmNeverCalled, corrupt)).toBeNull();
     expect(fs.existsSync(corrupt)).toBe(false); // moved aside, won't block every future launch
     expect(fs.existsSync(`${corrupt}.corrupt`)).toBe(true); // forensic artifact kept (R3)
   });
@@ -106,10 +112,47 @@ describe('session-persist units', () => {
     await persistSessionState(bm, file);
     expect(fs.existsSync(file)).toBe(false);
   });
+
+  test('persist writes atomically: no .tmp left behind, file parses', async () => {
+    const file = path.join(tmpRoot, 'atomic.json');
+    const state: BrowserState = {
+      cookies: [{ name: 'sid', value: 'abc', domain: 'example.com' } as any],
+      pages: [{ url: 'https://example.com', isActive: true, storage: null }],
+    };
+    const bm = { getConnectionMode: () => 'launched', saveState: async () => state } as any;
+    await persistSessionState(bm, file);
+    expect(fs.existsSync(`${file}.tmp`)).toBe(false); // staged copy renamed away
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    expect(parsed.cookies[0].name).toBe('sid');
+  });
+
+  test('a failed snapshot write preserves the previous good snapshot', async () => {
+    // chmod-based read-only dirs don't bind on Windows or when running as root.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const dir = path.join(tmpRoot, 'ro');
+    fs.mkdirSync(dir);
+    const file = path.join(dir, 'session-state.json');
+    const goodState: BrowserState = {
+      cookies: [],
+      pages: [{ url: 'https://good.example', isActive: true, storage: null }],
+    };
+    const bm = { getConnectionMode: () => 'launched', saveState: async () => goodState } as any;
+    await persistSessionState(bm, file);
+    fs.chmodSync(dir, 0o500); // next .tmp write throws EACCES mid-persist
+    try {
+      await expect(persistSessionState(bm, file)).rejects.toThrow();
+      // The crash-mid-write scenario the feature exists to survive: the
+      // previous good snapshot is untouched and still parses.
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      expect(parsed.pages[0].url).toBe('https://good.example');
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+  });
 });
 
 describe('session-persist round-trip (real Chromium)', () => {
-  test('cookie + localStorage + URL survive teardown → relaunch', async () => {
+  test('cookie + localStorage + URL survive teardown → relaunch; loopback cookies dropped', async () => {
     const { BrowserManager } = await import('../src/browser-manager');
     const { startTestServer } = await import('./test-server');
     const { server, url } = startTestServer(0);
@@ -120,8 +163,14 @@ describe('session-persist round-trip (real Chromium)', () => {
     try {
       const page = bm1.getPage();
       await page.goto(`${url}/basic.html`, { waitUntil: 'domcontentloaded' });
+      // Real-site cookie: set on the context for a non-loopback domain (the
+      // restore hygiene filter deliberately drops loopback/link-local
+      // domains, so a 127.0.0.1 test-server cookie can't stand in for it).
+      await page.context().addCookies([
+        { name: 'session_marker', value: 'alive-after-restart', domain: 'example.com', path: '/' },
+      ]);
       await page.evaluate(() => {
-        document.cookie = 'session_marker=alive-after-restart; path=/';
+        document.cookie = 'loopback_marker=must-be-dropped; path=/'; // 127.0.0.1 host cookie
         localStorage.setItem('auth_marker', 'still-logged-in');
       });
       await persistSessionState(bm1, stateFile);
@@ -137,15 +186,22 @@ describe('session-persist round-trip (real Chromium)', () => {
     const bm2 = new BrowserManager();
     await bm2.launch();
     try {
-      expect(await restoreSessionState(bm2, stateFile)).toBe(true);
+      const restored = await restoreSessionState(bm2, stateFile);
+      expect(restored).not.toBeNull();
+      expect(restored!.pages.length).toBe(1); // counts derivable without a saveState() round-trip
+      // Hygiene filter applied at restore: the real-site cookie survives,
+      // the loopback cookie does not.
+      expect(restored!.cookies.map((c: any) => c.name)).toEqual(['session_marker']);
       const page = bm2.getPage();
       expect(page.url()).toContain('/basic.html');
       const marker = await page.evaluate(() => ({
         cookie: document.cookie,
         auth: localStorage.getItem('auth_marker'),
       }));
-      expect(marker.cookie).toContain('session_marker=alive-after-restart');
+      expect(marker.cookie).not.toContain('loopback_marker'); // dropped by isInternalCookieDomain
       expect(marker.auth).toBe('still-logged-in');
+      const restoredCookies = await page.context().cookies('https://example.com');
+      expect(restoredCookies.map((c) => `${c.name}=${c.value}`)).toContain('session_marker=alive-after-restart');
     } finally {
       await bm2.close();
       server.stop(true);
@@ -162,11 +218,51 @@ describe('server wiring (static tripwire)', () => {
     expect(SERVER_SRC).toContain('sessionPersistIntervalMs()');
   });
 
+  test('start() restores in the background AFTER the port binds (CLI readiness must not wait)', () => {
+    // Restore re-creates tabs with up-to-15s goto timeouts; the CLI gives up
+    // at 8s. A restore that runs before Bun.serve() makes every $B command
+    // report "Server failed to start" on one slow saved URL.
+    const serveAt = SERVER_SRC.indexOf('const server = Bun.serve(');
+    const restoreAt = SERVER_SRC.indexOf('restoreSessionState(browserManager');
+    expect(serveAt).toBeGreaterThan(-1);
+    expect(restoreAt).toBeGreaterThan(serveAt);
+  });
+
+  test('interval snapshots carry an in-flight guard (no overlapping persists)', () => {
+    expect(SERVER_SRC).toContain('persistInFlight');
+  });
+
+  test('interval ticks are gated on isShuttingDown (belt half of the shutdown ordering fix)', () => {
+    // A tick that fires during browser teardown snapshots a degraded state
+    // (zero tabs) over the good final snapshot. The handle-clear in shutdown()
+    // is the suspenders; this gate is the belt for a tick already scheduled.
+    const tickerAt = SERVER_SRC.indexOf('sessionPersistInterval = setInterval(');
+    expect(tickerAt).toBeGreaterThan(-1);
+    const tickerBlock = SERVER_SRC.slice(tickerAt, tickerAt + 500);
+    expect(tickerBlock).toContain('if (isShuttingDown) return;');
+  });
+
+  test('shutdown() clears the persist ticker BEFORE the final snapshot (suspenders half)', () => {
+    const shutdownStart = SERVER_SRC.indexOf('async function shutdown(');
+    const clearAt = SERVER_SRC.indexOf('clearInterval(sessionPersistInterval)', shutdownStart);
+    const persistAt = SERVER_SRC.indexOf('persistSessionState(cfgBrowserManager', shutdownStart);
+    expect(clearAt).toBeGreaterThan(shutdownStart);
+    expect(persistAt).toBeGreaterThan(clearAt);
+  });
+
   test('shutdown() takes a final snapshot BEFORE closing the browser', () => {
     const shutdownStart = SERVER_SRC.indexOf('async function shutdown(');
     const persistAt = SERVER_SRC.indexOf('persistSessionState(cfgBrowserManager', shutdownStart);
     const closeAt = SERVER_SRC.indexOf('await cfgBrowserManager.close()', shutdownStart);
     expect(persistAt).toBeGreaterThan(shutdownStart);
     expect(closeAt).toBeGreaterThan(persistAt);
+  });
+
+  test('shutdown() snapshot is deadlined — a wedged page.evaluate cannot hang shutdown', () => {
+    const shutdownStart = SERVER_SRC.indexOf('async function shutdown(');
+    const closeAt = SERVER_SRC.indexOf('await cfgBrowserManager.close()', shutdownStart);
+    const raceAt = SERVER_SRC.indexOf('Promise.race', shutdownStart);
+    expect(raceAt).toBeGreaterThan(shutdownStart);
+    expect(raceAt).toBeLessThan(closeAt);
   });
 });

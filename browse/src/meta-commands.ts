@@ -20,6 +20,7 @@ import * as path from 'path';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
 import { TEMP_DIR } from './platform';
 import { resolveConfig } from './config';
+import { filterSessionCookies } from './session-persist';
 import type { Frame } from 'playwright';
 
 /** Tokenize a pipe segment respecting double-quoted strings. */
@@ -959,15 +960,13 @@ export async function handleMetaCommand(
         if (!Array.isArray(data.cookies) || !Array.isArray(data.pages)) {
           throw new Error('Invalid state file: expected cookies and pages arrays');
         }
-        // Validate and filter cookies — reject malformed or internal-network cookies
-        const validatedCookies = data.cookies.filter((c: any) => {
-          if (typeof c !== 'object' || !c) return false;
-          if (typeof c.name !== 'string' || typeof c.value !== 'string') return false;
-          if (typeof c.domain !== 'string' || !c.domain) return false;
-          const d = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-          if (d === 'localhost' || d.endsWith('.internal') || d === '169.254.169.254') return false;
-          return true;
-        });
+        // Validate and filter cookies via the shared hygiene filter in
+        // session-persist.ts (isInternalCookieDomain): rejects malformed
+        // cookies and internal-network domains — localhost, *.internal,
+        // loopback literals (127.x, ::1), and link-local/cloud-metadata
+        // (169.254.x) — that a tampered state file could use to reach local
+        // services or the metadata endpoint.
+        const validatedCookies = filterSessionCookies(data.cookies);
         if (validatedCookies.length < data.cookies.length) {
           console.warn(`[browse] Filtered ${data.cookies.length - validatedCookies.length} invalid cookies from state file`);
         }

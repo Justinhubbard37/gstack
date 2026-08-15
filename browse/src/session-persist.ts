@@ -66,18 +66,34 @@ export function serializeSessionState(state: BrowserState): string {
 }
 
 /**
- * Same cookie hygiene as `state load` (meta-commands.ts, kept in sync by
- * comment there): drop malformed cookies and internal-network domains a
- * tampered file could use to reach localhost services or cloud metadata.
+ * True when a cookie domain points at an internal-network target a tampered
+ * state file could use to reach localhost services, *.internal hosts, or
+ * cloud metadata: `localhost`, `*.internal`, IPv4 loopback literals
+ * (127.0.0.0/8), IPv6 loopback (`::1`, `[::1]`), and link-local/metadata
+ * (169.254.0.0/16, which covers 169.254.169.254). Leading-dot domain
+ * variants (`.127.0.0.1`) are normalized before matching. Single source of
+ * truth for the persistence restore path here AND `state load`
+ * (meta-commands.ts).
+ */
+export function isInternalCookieDomain(domain: string): boolean {
+  const d = domain.startsWith('.') ? domain.slice(1) : domain;
+  if (d === 'localhost' || d.endsWith('.internal')) return true;
+  if (d === '::1' || d === '[::1]') return true; // IPv6 loopback
+  if (/^127\./.test(d)) return true; // IPv4 loopback block
+  if (/^169\.254\./.test(d)) return true; // link-local incl. cloud metadata
+  return false;
+}
+
+/**
+ * Cookie hygiene shared with `state load` (meta-commands.ts): drop malformed
+ * cookies and internal-network domains (see isInternalCookieDomain).
  */
 export function filterSessionCookies(cookies: unknown[]): BrowserState['cookies'] {
   return cookies.filter((c: any) => {
     if (typeof c !== 'object' || !c) return false;
     if (typeof c.name !== 'string' || typeof c.value !== 'string') return false;
     if (typeof c.domain !== 'string' || !c.domain) return false;
-    const d = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-    if (d === 'localhost' || d.endsWith('.internal') || d === '169.254.169.254') return false;
-    return true;
+    return !isInternalCookieDomain(c.domain);
   }) as BrowserState['cookies'];
 }
 
@@ -118,21 +134,33 @@ export function deserializeSessionState(raw: string): BrowserState | null {
 export async function persistSessionState(bm: BrowserManager, filePath: string): Promise<void> {
   if (bm.getConnectionMode() !== 'launched') return;
   const state = await bm.saveState();
-  writeSecureFile(filePath, serializeSessionState(state));
+  // Atomic replace: stage the new snapshot beside the target, then rename
+  // over it. A crash mid-write must never destroy the previous good
+  // snapshot — surviving crashes is the point of this feature.
+  const tmpPath = `${filePath}.tmp`;
+  writeSecureFile(tmpPath, serializeSessionState(state));
+  try {
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    safeUnlinkQuiet(tmpPath);
+    throw err;
+  }
 }
 
 /**
- * Restore a persisted session into a freshly launched manager. Returns true
- * when state was restored, false when there was nothing (or corrupt data —
- * which is warned, deleted, and skipped rather than blocking launch).
- * restoreState re-validates every URL before navigating.
+ * Restore a persisted session into a freshly launched manager. Returns the
+ * restored (already-filtered) state so callers can log counts without an
+ * extra saveState() round-trip, or null when there was nothing to restore
+ * (missing file, or corrupt data — which is warned, quarantined, and skipped
+ * rather than blocking launch). restoreState re-validates every URL before
+ * navigating.
  */
-export async function restoreSessionState(bm: BrowserManager, filePath: string): Promise<boolean> {
+export async function restoreSessionState(bm: BrowserManager, filePath: string): Promise<BrowserState | null> {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, 'utf-8');
   } catch (err: any) {
-    if (err?.code === 'ENOENT') return false;
+    if (err?.code === 'ENOENT') return null;
     throw err;
   }
   const state = deserializeSessionState(raw);
@@ -141,10 +169,10 @@ export async function restoreSessionState(bm: BrowserManager, filePath: string):
     // 3-week-later bug report is reconstructable from the artifact.
     console.warn(`[browse] SESSION_STATE_INVALID: corrupt ${filePath} moved to .corrupt; starting fresh`);
     quarantineCorrupt(filePath);
-    return false;
+    return null;
   }
   // launch() opens one blank tab; replace it rather than restoring alongside.
   await bm.closeAllPages();
   await bm.restoreState(state);
-  return true;
+  return state;
 }

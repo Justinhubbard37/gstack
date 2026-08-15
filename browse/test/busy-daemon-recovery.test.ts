@@ -88,44 +88,47 @@ describe('#1781 busy-daemon recovery (CLI integration)', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-busy-'));
     const stateFile = path.join(tmpDir, 'browse.json');
     const daemon = await startWedgedDaemon();
+    try {
+      // A live process standing in for the daemon PID. If the CLI takes the
+      // dead path it SIGTERMs this child — the aliveness assert catches it.
+      daemonPidChild = spawn('sleep', ['60'], { stdio: 'ignore' });
+      const daemonPid = daemonPidChild.pid!;
 
-    // A live process standing in for the daemon PID. If the CLI takes the
-    // dead path it SIGTERMs this child — the aliveness assert catches it.
-    daemonPidChild = spawn('sleep', ['60'], { stdio: 'ignore' });
-    const daemonPid = daemonPidChild.pid!;
+      const stateContent = {
+        pid: daemonPid,
+        port: daemon.port,
+        token: 'busy-test-token',
+        startedAt: new Date().toISOString(),
+        serverPath: '',
+        mode: 'launched' as const,
+      };
+      fs.writeFileSync(stateFile, JSON.stringify(stateContent, null, 2));
 
-    const stateContent = {
-      pid: daemonPid,
-      port: daemon.port,
-      token: 'busy-test-token',
-      startedAt: new Date().toISOString(),
-      serverPath: '',
-      mode: 'launched' as const,
-    };
-    fs.writeFileSync(stateFile, JSON.stringify(stateContent, null, 2));
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v !== undefined) env[k] = v;
+      }
+      env.BROWSE_STATE_FILE = stateFile;
 
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined) env[k] = v;
+      const result = await runCli(['status'], env);
+
+      // Recovered: retried the same command against the same daemon instance.
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(`RECOVERED ${BOOT_ID}`);
+      // The fork's CLI announces the busy retry on stderr; ours retries at the
+      // probe layer without a message. Either is fine — the load-bearing
+      // behavior is retry-without-kill, asserted below.
+      expect(daemon.commandRequests).toBe(2); // wedged once, served once
+
+      // Never killed, never restarted — tab/cookie state intact.
+      expect(result.stderr).not.toContain('Restarting');
+      expect(isProcessAlive(daemonPid)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(stateFile, 'utf-8'))).toEqual(stateContent);
+    } finally {
+      // Cleanup must run even when an assertion throws — otherwise a failed
+      // run leaks the wedged fake daemon and the tmp dir.
+      await daemon.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-    env.BROWSE_STATE_FILE = stateFile;
-
-    const result = await runCli(['status'], env);
-
-    // Recovered: retried the same command against the same daemon instance.
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain(`RECOVERED ${BOOT_ID}`);
-    // The fork's CLI announces the busy retry on stderr; ours retries at the
-    // probe layer without a message. Either is fine — the load-bearing
-    // behavior is retry-without-kill, asserted below.
-    expect(daemon.commandRequests).toBe(2); // wedged once, served once
-
-    // Never killed, never restarted — tab/cookie state intact.
-    expect(result.stderr).not.toContain('Restarting');
-    expect(isProcessAlive(daemonPid)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(stateFile, 'utf-8'))).toEqual(stateContent);
-
-    await daemon.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   }, 30_000);
 });
