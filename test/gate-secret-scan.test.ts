@@ -11,14 +11,16 @@
 
 import { describe, test, expect } from "bun:test";
 import { spawnSync } from "child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, ".github", "scripts", "gate-secret-scan.mjs");
 
-function scan(diff: string): { code: number; out: string } {
+function scan(diff: string, cwd: string = ROOT): { code: number; out: string } {
   const res = spawnSync("node", [SCRIPT], {
-    cwd: ROOT,
+    cwd,
     input: diff,
     encoding: "utf-8",
     timeout: 60_000,
@@ -54,5 +56,63 @@ describe("gate-secret-scan.mjs exit contract", () => {
     const r = scan(`+const key = "pk_live_${"a".repeat(24)}";\n`);
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/\d+ advisory/);
+  });
+});
+
+describe("gate-secret-scan.mjs fail-closed legs", () => {
+  test("oversize diff (report.oversize) fails the gate", () => {
+    // The script pins --max-bytes 16000000; bin/gstack-redact refuses to scan
+    // anything larger and reports oversize:true (fail-closed). The gate must
+    // exit 1 rather than pass unscanned bytes. ~17MB of added lines guarantees
+    // the joined additions exceed the cap.
+    const line = `+${"a".repeat(8190)}\n`;
+    const r = scan(line.repeat(2100));
+    expect(r.code).toBe(1);
+    // Proves the failure came from the parsed report (the engine surfaces
+    // oversize as a fail-closed HIGH), not from a crashed subprocess.
+    expect(r.out).toContain("1 high");
+  }, 60_000);
+
+  test("unexpected gstack-redact exit code fails the gate even when the report is clean", () => {
+    // Stub bin/gstack-redact that emits a CLEAN JSON report but exits 1 —
+    // not one of the contract codes (0 clean / 2 MEDIUM / 3 HIGH). The gate
+    // must treat the unexpected exit as failure: a broken scanner reporting
+    // "all clear" is exactly the fail-open shape this leg guards against.
+    const dir = mkdtempSync(join(tmpdir(), "gate-secret-scan-stub-"));
+    try {
+      mkdirSync(join(dir, "bin"));
+      writeFileSync(
+        join(dir, "bin", "gstack-redact"),
+        [
+          "#!/usr/bin/env bun",
+          'let input = "";',
+          'process.stdin.setEncoding("utf8");',
+          'process.stdin.on("data", (c) => { input += c; });',
+          'process.stdin.on("end", () => {',
+          '  console.log(JSON.stringify({ findings: [], counts: { HIGH: 0, MEDIUM: 0, LOW: 0, WARN: 0 }, repoVisibility: "public", oversize: false }));',
+          "  process.exit(1);",
+          "});",
+          "",
+        ].join("\n"),
+      );
+      const r = scan("+const x = 1;\n", dir);
+      expect(r.out).toContain("0 high"); // the clean report WAS parsed...
+      expect(r.code).toBe(1); // ...and the gate still failed on the exit code
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("missing gstack-redact (spawn crash, empty stdout) exits nonzero — never fail-open", () => {
+    // cwd with no bin/gstack-redact at all: bun exits module-not-found with
+    // empty stdout. Whatever the exact failure shape, the gate must not
+    // report success.
+    const dir = mkdtempSync(join(tmpdir(), "gate-secret-scan-absent-"));
+    try {
+      const r = scan("+const x = 1;\n", dir);
+      expect(r.code).not.toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -16,6 +16,12 @@ process.stdin.once("end", () => {
     .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
     .map((line) => line.slice(1))
     .join("\n");
+  // The scanner may exit before consuming an oversize payload (it refuses
+  // stdin over --max-bytes and reports oversize:true). EPIPE here is that
+  // refusal in flight, not a failure — the report + exit code carry the verdict.
+  child.stdin.on("error", (error) => {
+    if (error.code !== "EPIPE") throw error;
+  });
   child.stdin.end(additions);
 });
 let stdout = "";
@@ -23,7 +29,16 @@ child.stdout.setEncoding("utf8");
 child.stdout.on("data", (chunk) => { stdout += chunk; });
 child.once("error", (error) => { throw error; });
 child.once("close", (code) => {
-  const report = JSON.parse(stdout);
+  let report;
+  try {
+    report = JSON.parse(stdout);
+  } catch {
+    // No parseable report: the oversize refusal prints only to stderr and
+    // exits 3, and a crashed scanner emits nothing. Both fail closed.
+    console.log(`credential scan: 1 high, 0 advisory (scanner emitted no report, exit ${code} — fail-closed)`);
+    process.exitCode = 1;
+    return;
+  }
   const high = Number(report.counts?.HIGH ?? 0);
   const medium = Number(report.counts?.MEDIUM ?? 0);
   console.log(`credential scan: ${high} high, ${medium} advisory`);
