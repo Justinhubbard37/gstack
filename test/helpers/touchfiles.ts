@@ -31,4 +31,13 @@ export {
   detectBaseBranch,
   getChangedFiles,
   selectTests,
+  diffTouchfileMaps,
+  diffTouchfileMapsCore,
+  TOUCHFILES_DATA_PATH,
+} from './test-selection';
+
+export type {
+  TouchfileMaps,
+  MapDiffCause,
+  MapDiffOutcome,
 } from './test-selection';

@@ -812,9 +812,9 @@ export const GLOBAL_TOUCHFILES = [
   'test/helpers/hermetic-env.ts',    // Changes every E2E child's environment
   'test/helpers/eval-store.ts',      // All E2E tests store results here
   'test/helpers/test-selection.ts',  // Selection logic itself — a bug here mis-selects every test
-  // TEMPORARY — maximally conservative until map-diff selection lands: any
-  // edit to the data maps still forces a full run. A later change-set
-  // replaces this entry with map-diff (evaluate the old git version of this
-  // literal-only file, diff the maps, run only the affected tests).
-  'test/helpers/touchfiles-data.ts',
+  // NOTE: this file (touchfiles-data.ts) is deliberately NOT a global
+  // touchfile. Changes to it route through map-diff selection in
+  // test-selection.ts: the old git version is evaluated and the maps are
+  // diffed per key, so a data-only edit runs just the affected tests.
+  // Map-diff fails CLOSED — any error on that path still runs everything.
 ];
