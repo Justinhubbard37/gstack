@@ -40,6 +40,44 @@ evidence-before-claimed-limitations rule.
 
 **Effort:** S per run. **Priority:** P3. **Depends on:** a paid ADP account.
 
+### P2: office-hours design-doc dual-write functional E2E (fork port wave 2 review shortfall)
+
+**What:** A paid E2E (claude -p) that runs the office-hours Phase 5 handoff in
+a tmp repo and asserts BOTH write paths (docs/designs/<topic>.md + the
+~/.gstack copy) land and that `bin/gstack-redact` was invoked at the sink.
+Today only a static prose pin exists (test/skill-validation.test.ts) — the
+plan's R9 asked for the functional shape.
+
+**Why:** The dual-write is an egress path into the user's repo; prose drift
+that skips the redact scan-at-sink would ship user PII into git history with
+nothing failing. **Effort:** M → S with CC. **Priority:** P2.
+**Tier:** periodic (quality, non-deterministic).
+
+### P2: migration runners honor per-migration skip state
+
+**What:** Both migration runners (setup's post-setup block and
+/gstack-upgrade Step 4.75) select migrations purely by version window, so a
+migration that exits via the non-interactive default-skip (v1.27's
+GSTACK_MIGRATE_ASSUME_YES gate) is never offered again — the version marker
+advances past it. The remediation text now prints the honest direct
+invocation, but the runners should track per-migration .done/.skipped
+touchfiles and re-offer pending ones on the next interactive run.
+
+**Why:** Every remaining pre-v1.27 user upgrading via an agent session ([ -t 0 ]
+false) permanently misses the artifacts-rename migration unless they paste the
+manual command. **Effort:** M. **Priority:** P2.
+
+### P3: gbrain-adapter add/delete/export behavioral coverage
+
+**What:** Extend test/code-intelligence.test.ts's fake-gbrain shim to pin the
+three untested capability-advertised ops: add() pipes the body to `put <slug>`
+and writes a receipt with the body's sha256, delete() survives the stdin-EOF
+prompt guard, export() returns stdout, and each degrades to
+PROVIDER_UNAVAILABLE when the CLI is absent.
+
+**Why:** Shipped public ops with zero exercise; the harness to test them
+cheaply already exists. **Effort:** S. **Priority:** P3.
+
 
 ### P1: #1882 — portable skill-install prefix (non-`gstack` install dirs break silently)
 
