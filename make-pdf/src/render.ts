@@ -251,19 +251,88 @@ export function sanitizeUntrustedHtml(html: string): string {
   // at print time; the image inliner covers <img src> only, and must keep
   // seeing remote <img src> so its blocked-remote placeholder still fires) ──
 
-  // Remote url(...) in CSS → url(#). Scoped to <style> blocks and style
+  // Untrusted CSS neutralization. Scoped to <style> blocks and style
   // attributes below so prose/code samples that mention URLs stay untouched.
-  const neutralizeRemoteCssUrls = (css: string): string =>
-    css.replace(/url\(\s*(?:&quot;|&#0?39;|&#x27;|["'])?\s*(?:https?:)?\/\/[^)]*\)/gi, "url(#)");
+  //
+  // Chromium decodes CSS ident/string escapes (\69 → i, \68 → h) before
+  // fetching, so literal patterns alone are bypassable: @\69mport dodges
+  // /@import\b/, url("\68ttps://…") dodges the https?://-shaped remote-url
+  // pattern, and u\72l(…) dodges the url( prefix itself. Untrusted styling
+  // has no legitimate need for escaped url schemes or at-rule names, so any
+  // construct carrying a backslash escape is dropped/defanged (fail closed).
+  // In style ATTRIBUTES the HTML parser also entity-decodes before the CSS
+  // parser runs, so &#92; / &#x5c; / &bsol; spellings of the backslash count
+  // as escapes too. (<style> content is raw text — no entity layer there.)
+  const CSS_ESCAPE_MARKER = /\\|&#0*92(?![0-9])|&#x0*5c(?![0-9a-f])|&bsol;/i;
+  const neutralizeUntrustedCss = (css: string): string => {
+    // (a) At-rules whose keyword carries a backslash escape (@\69mport …):
+    //     drop the whole statement through `;`, `{`, or end-of-value.
+    let out = css.replace(
+      /@[-\w\\&#;]*?(?:\\|&#0*92(?![0-9]);?|&#x0*5c(?![0-9a-f]);?|&bsol;)[-\w\\&#;]*[^;{}]*(?:;|\{|$)/gi,
+      "");
+    // (b) Literal @import is always a fetch (relative ones can't resolve
+    //     under load-html either) — drop outright.
+    out = out.replace(/@import\b[^;]*(;|$)/gi, "");
+    // (c) Any function-like token whose name or arguments carry a backslash
+    //     escape → url(#). Covers escaped schemes (url("\68ttps://…")) and
+    //     escaped function names (u\72l(…)) in one fail-closed pass. The
+    //     end-of-value alternative closes the unterminated-url() dodge:
+    //     Chromium's CSS parser closes an open function token at EOF.
+    out = out.replace(/[-\w\\&#;][-\w \t\\&#;]*\(\s*[^)]*(?:\)|$)/g, (m) =>
+      CSS_ESCAPE_MARKER.test(m) ? "url(#)" : m);
+    // (d) Remote url(...) → url(#).
+    out = out.replace(
+      /url\(\s*(?:&quot;|&#0?39;|&#x27;|["'])?\s*(?:https?:)?\/\/[^)]*(?:\)|$)/gi,
+      "url(#)");
+    return out;
+  };
 
-  // Raw-HTML <style> blocks: drop @import outright (any @import is a fetch;
-  // relative ones can't resolve under load-html either), neutralize remote url().
+  // Raw-HTML <style> blocks. Element content is RAW TEXT — the HTML parser
+  // never entity-decodes it — so unlike style attributes below, no entity
+  // decode step is needed (or correct) here.
   s = s.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, open, css, close) =>
-    open + neutralizeRemoteCssUrls(css.replace(/@import\b[^;]*(;|$)/gi, "")) + close);
+    open + neutralizeUntrustedCss(css) + close);
 
-  // Inline style="background:url(https://…)" attributes.
-  s = s.replace(/(\s+style\s*=\s*)("[^"]*"|'[^']*')/gi,
-    (_m, pre, val) => pre + neutralizeRemoteCssUrls(val));
+  // Style ATTRIBUTE values are entity-decoded by the HTML parser before the
+  // CSS parser ever runs, so &#104;ttps://… reaches Chromium as https://… and
+  // &#47;&#47; as // — dodging every literal pattern above. Decode the value
+  // the way the parser will (numeric dec/hex refs with the spec's optional
+  // semicolon; the syntax-significant named refs; the legacy semicolonless
+  // four), in ONE left-to-right pass so the sanitizer performs exactly the
+  // browser's single decode round — decoding recursively would turn a
+  // double-encoded &amp;#104; into a live scheme the browser never sees.
+  const NAMED_REFS: Record<string, string> = {
+    amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+    sol: "/", bsol: "\\", colon: ":", semi: ";", num: "#",
+    lpar: "(", rpar: ")", commat: "@", grave: "`",
+    Tab: "\t", NewLine: "\n",
+  };
+  const refCodePoint = (n: number): string =>
+    (!Number.isFinite(n) || n <= 0 || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff))
+      ? "�" : String.fromCodePoint(n);
+  const decodeStyleAttrEntities = (v: string): string => v.replace(
+    /&(?:#[xX]([0-9a-fA-F]+);?|#(\d+);?|([a-zA-Z]+);|(amp|lt|gt|quot)(?![a-zA-Z0-9=;]))/g,
+    (m, hex, dec, named, legacy) => {
+      if (hex !== undefined) return refCodePoint(parseInt(hex, 16));
+      if (dec !== undefined) return refCodePoint(parseInt(dec, 10));
+      if (named !== undefined) return NAMED_REFS[named] ?? m;
+      return NAMED_REFS[legacy];
+    });
+
+  // Inline style attributes — quoted AND unquoted. HTML spec: an unquoted
+  // attribute value runs until whitespace or `>`, so
+  // <div style=background:url(https://…)> is live markup Chromium honors;
+  // a quoted-only pattern misses it. The value is unquoted, entity-decoded
+  // (see above), neutralized in decoded form, then RE-ENCODED and emitted
+  // double-quoted — never emit decoded text raw (a decoded `"` would break
+  // out of the attribute) and the re-encode also keeps once-decoded text like
+  // &#104; inert instead of granting it a second decode round.
+  s = s.replace(/(\s+style\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'>][^\s>]*))/gi,
+    (_m, pre, dq, sq, uq) => {
+      const raw = dq ?? sq ?? uq;
+      const cleaned = neutralizeUntrustedCss(decodeStyleAttrEntities(raw));
+      return `${pre}"${escapeHtml(cleaned)}"`;
+    });
 
   // srcset with a remote candidate: Chromium prefers srcset over the inlined
   // src, so a remote candidate fetches at print time. Strip the attribute;

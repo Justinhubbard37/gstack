@@ -47,6 +47,90 @@ describe("sanitizeUntrustedHtml (offline fetch vectors)", () => {
     expect(out).not.toContain("evil.example");
   });
 
+  // ── Bypass regressions: unquoted style attributes ──
+  // HTML spec: an unquoted attribute value runs until whitespace or `>`, so
+  // <div style=background:url(https://…)> is live markup Chromium honors.
+  // The original neutralizer only rewrote quoted values.
+
+  test("neutralizes remote url() in UNQUOTED style attributes", () => {
+    const out = sanitizeUntrustedHtml(`<div style=background:url(https://evil.example/px.gif)>x</div>`);
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain("url(#)");
+  });
+
+  test("keeps local url() in unquoted style attributes functional", () => {
+    const out = sanitizeUntrustedHtml(`<div style=background:url(local.png)>x</div>`);
+    expect(out).toContain("url(local.png)");
+  });
+
+  // ── Bypass regressions: CSS-escape obfuscation ──
+  // Chromium decodes CSS ident/string escapes before fetching, so \69 → i and
+  // \68 → h defeat literal-pattern matching. Untrusted styling has no
+  // legitimate need for escaped url schemes or at-rule names — fail closed.
+
+  test("drops CSS-escaped @import (@\\69mport url(...)) in <style> blocks", () => {
+    const out = sanitizeUntrustedHtml(`<style>@\\69mport url("https://evil.example/a.css");</style>`);
+    expect(out).not.toContain("evil.example");
+    expect(out).not.toMatch(/@\\/); // no escaped at-rule survives for Chromium to decode
+  });
+
+  test("drops CSS-escaped string-form @import (@\\69mport \"https://…\")", () => {
+    const out = sanitizeUntrustedHtml(`<style>@\\69mport "https://evil.example/a.css";</style>`);
+    expect(out).not.toContain("evil.example");
+    expect(out).not.toMatch(/@\\/);
+  });
+
+  test("neutralizes CSS-escaped scheme inside url() (\\68ttps://…)", () => {
+    const out = sanitizeUntrustedHtml(`<style>body{background:url("\\68ttps://evil.example/px.gif")}</style>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes CSS-escaped function names (u\\72l(https://…))", () => {
+    const out = sanitizeUntrustedHtml(`<style>body{background:u\\72l(https://evil.example/px.gif)}</style>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes HTML-entity-encoded backslash escapes in style attributes", () => {
+    // Attribute values are entity-decoded by the HTML parser before the CSS
+    // parser runs, so &#92;68ttps reaches Chromium as \68ttps → https.
+    const out = sanitizeUntrustedHtml(`<div style="background:url('&#92;68ttps://evil.example/px.gif')">x</div>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  // ── Bypass regressions: non-backslash entity obfuscation in style attrs ──
+  // The same attribute entity layer can hide ANY character of a fetch vector,
+  // not just backslashes: &#104; → h, &#47; → /. <style> BLOCKS don't need
+  // this handling — element content is raw text, never attribute-decoded.
+
+  test("neutralizes numeric-entity-obfuscated scheme in style attributes (&#104;ttps)", () => {
+    const out = sanitizeUntrustedHtml(`<div style="background:url(&#104;ttps://evil.example/px.gif)">x</div>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes entity-obfuscated slashes in style attributes (&#47;&#47; for //)", () => {
+    const out = sanitizeUntrustedHtml(`<div style="background:url(https:&#47;&#47;evil.example/px.gif)">x</div>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes entity-obfuscated url( name in style attributes (&#117;rl)", () => {
+    const out = sanitizeUntrustedHtml(`<div style="background:&#117;rl(https://evil.example/px.gif)">x</div>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("entity-decoded local styles stay functional and safely re-encoded", () => {
+    const out = sanitizeUntrustedHtml(`<div style="content:&quot;hi&quot;;background:url(local.png)">x</div>`);
+    expect(out).toContain("url(local.png)");
+    expect(out).toContain("&quot;hi&quot;");
+  });
+
+  test("double-encoded entities are not double-decoded into a live scheme", () => {
+    // Browser decodes &amp;#104; exactly once → literal &#104;ttps://… text,
+    // which is not a scheme. The sanitizer must mirror that single decode:
+    // decoding twice would CREATE url(https://…) where the browser sees none.
+    const out = sanitizeUntrustedHtml(`<div style="background:url(&amp;#104;ttps://evil.example/px.gif)">x</div>`);
+    expect(out).not.toMatch(/url\(\s*https:/);
+  });
+
   test("strips srcset with a remote candidate, leaves src for the inliner", () => {
     const input = `<img src="local.png" srcset="local.png 1x, https://evil.example/x.png 2x">`;
     const out = sanitizeUntrustedHtml(input);
@@ -92,5 +176,16 @@ describe("sanitizeUntrustedHtml (offline fetch vectors)", () => {
     ].join("\n\n");
     const { bodyHtml } = render({ markdown: md });
     expect(bodyHtml).not.toContain("evil.example");
+  });
+
+  test("end-to-end: unquoted and CSS-escaped vectors don't survive render()", () => {
+    const md = [
+      "# Doc",
+      `<style>@\\69mport "https://evil.example/b.css"; body{background:url("\\68ttps://evil.example/px.gif")}</style>`,
+      `<div style=background:url(https://evil.example/px.gif)>hi</div>`,
+    ].join("\n\n");
+    const { bodyHtml } = render({ markdown: md });
+    expect(bodyHtml).not.toContain("evil.example");
+    expect(bodyHtml).not.toMatch(/@\\/);
   });
 });
