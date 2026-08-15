@@ -78,7 +78,12 @@ describe("generateVariant Retry-After handling", () => {
 
   test("HTTP-date: honors a future date with no extra leading exponential", async () => {
     const calls: CallRecord[] = [];
-    const future = new Date(Date.now() + 3000).toUTCString();
+    // toUTCString() truncates to whole seconds: a +3000ms date could mean an
+    // effective wait as low as ~2001ms, which flaked against a 2500ms floor
+    // under suite load (~1-2 in 9 runs — the TODOS P2 flake). +4000ms makes
+    // the truncation floor 3001ms; the assertion floor sits safely below it
+    // and the ceiling stays wide enough for a loaded scheduler.
+    const future = new Date(Date.now() + 4000).toUTCString();
     const fetchFn = makeStubFetch([rateLimited(future), successResponse()], calls);
 
     const result = await generateVariant(
@@ -88,8 +93,8 @@ describe("generateVariant Retry-After handling", () => {
     expect(result.success).toBe(true);
     expect(calls.length).toBe(2);
     const gap = calls[1].ts - calls[0].ts;
-    expect(gap).toBeGreaterThanOrEqual(2500);
-    expect(gap).toBeLessThan(4500);
+    expect(gap).toBeGreaterThanOrEqual(2900);
+    expect(gap).toBeLessThan(5500);
   });
 
   test("invalid Retry-After (alphanumeric): falls through to exponential", async () => {
