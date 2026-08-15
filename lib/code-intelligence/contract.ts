@@ -1,6 +1,8 @@
 /**
  * code-intelligence/contract — the OPTIONAL, repo-oriented provider contract.
  *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * gstack does not maintain a home-grown indexer. It defines this small contract
  * and external providers (GBrain, Sourcebot, Graphify) implement it. The whole
  * contract is OPTIONAL: when no provider is available/consented,
@@ -16,6 +18,16 @@
  */
 
 export type CodeProviderId = "gbrain" | "sourcebot" | "graphify";
+
+/**
+ * Policy op classification for the per-remote trust-tier veto (selection.ts).
+ * Write-class ops (register_source / index / refresh / add / delete) cause
+ * pages to be written, so BOTH `deny` and `read-only` tiers veto them — the
+ * same semantics as runCodeImport in bin/gstack-gbrain-sync.ts ("code ingest
+ * writes pages"). Read-class ops (search / export / status) write nothing, so
+ * only `deny` vetoes them. Callers that don't say get "write" — fail-closed.
+ */
+export type OpClass = "read" | "write";
 
 export type CodeProviderCapability =
   | "register_source"
@@ -72,16 +84,18 @@ export interface CodeSearchHit {
 
 export interface OpOptions {
   /**
-   * Env override for spawned processes. Production callers leave this unset;
-   * tests inject a synthetic env (fake CLI on PATH). Matches the existing
-   * gbrain helpers.
+   * Env override for spawned processes and egress-receipt home resolution.
+   * Production callers leave this unset; tests inject a synthetic env (fake
+   * CLI on PATH, temp GSTACK_HOME). Matches the existing gbrain helpers.
    */
   env?: NodeJS.ProcessEnv;
   /** Timeout in ms for the underlying op. */
   timeout?: number;
   /**
    * Explicit per-repo consent that repo content may leave the machine. Required
-   * for non-local providers on register_source / refresh / add.
+   * for non-local providers on register_source / refresh / add / search (the
+   * search query text is repo-derived content). The recorded value also feeds
+   * the egress receipt, which attests the ACTUAL consent state — never assumed.
    */
   consented?: boolean;
 }

@@ -12,9 +12,10 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import {
   REQUIRED_CAPABILITIES,
+  detectAvailable,
   GbrainProvider,
   GraphifyProvider,
   SourcebotProvider,
@@ -260,6 +261,18 @@ exit 1
       new GraphifyProvider({ root: repo, env: { PATH: os.tmpdir() } }).search("q"),
     ).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
   });
+
+  test("status skips parsing a huge graph.json (heap guard): size in detail, no itemCount", async () => {
+    const outDir = path.join(repo, "graphify-out");
+    fs.mkdirSync(outDir, { recursive: true });
+    // 6MB of spaces — over the 5MB parse threshold, so the content is never
+    // parsed (on real target repos graph.json can run to hundreds of MB).
+    fs.writeFileSync(path.join(outDir, "graph.json"), Buffer.alloc(6 * 1024 * 1024, 0x20));
+    const s = await new GraphifyProvider({ root: repo, env: env() }).status();
+    expect(s.state).toBe("ready");
+    expect(s.itemCount).toBeUndefined();
+    expect(s.detail).toContain("node count skipped");
+  });
 });
 
 describe("Sourcebot adapter (injected fetch, real v5 auth + shape)", () => {
@@ -416,7 +429,8 @@ describe("consent unification — deny tier wins (R1)", () => {
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
 
-  test("unreadable policy store fails closed (consent vetoed)", () => {
+  test("unreadable policy store fails closed (consent vetoed) for BOTH op classes", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return; // chmod semantics differ
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-veto-"));
     try {
       const env = { ...process.env, GSTACK_HOME: home };
@@ -426,9 +440,269 @@ describe("consent unification — deny tier wins (R1)", () => {
       fs.chmodSync(path.join(home, "gbrain-repo-policy.json"), 0o000);
       try {
         expect(hasConsent(repo, env)).toBe(false);
+        expect(hasConsent(repo, env, "read")).toBe(false);
       } finally {
         fs.chmodSync(path.join(home, "gbrain-repo-policy.json"), 0o600);
       }
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
+
+  // ── R2: read-only is a WRITE veto, not a total one ─────────────────────────
+  // gstack-gbrain-sync semantics: "search allowed, page writes never". The
+  // code-intelligence veto must match: index/register/refresh (write-class)
+  // are refused on read-only; search (read-class) still works.
+  test("read-only tier vetoes write-class consent but allows read-class (R2)", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-veto-"));
+    try {
+      const env = { ...process.env, GSTACK_HOME: home };
+      const repo = makeRepo(home, URL);
+      setConsent(repo, true, env);
+      execFileSync(POLICY_BIN, ["set", URL, "read-only"], { env, encoding: "utf-8" });
+      // Default op class is write — a caller that doesn't say gets fail-closed.
+      expect(hasConsent(repo, env)).toBe(false);
+      expect(hasConsent(repo, env, "write")).toBe(false);
+      // Read-class (search/export/status) survives read-only.
+      expect(hasConsent(repo, env, "read")).toBe(true);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test("deny beats consent for BOTH op classes", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-veto-"));
+    try {
+      const env = { ...process.env, GSTACK_HOME: home };
+      const repo = makeRepo(home, URL);
+      setConsent(repo, true, env);
+      execFileSync(POLICY_BIN, ["set", URL, "deny"], { env, encoding: "utf-8" });
+      expect(hasConsent(repo, env, "write")).toBe(false);
+      expect(hasConsent(repo, env, "read")).toBe(false);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+});
+
+// ── R2 at the CLI: `index` is write-class, so read-only refuses it ──────────
+describe("read-only repo policy blocks write-class CLI index (R2)", () => {
+  const CLI = path.join(import.meta.dir, "..", "bin", "gstack-code-intelligence");
+  const POLICY_BIN = path.join(import.meta.dir, "..", "bin", "gstack-gbrain-repo-policy");
+  const URL = "https://github.com/acme/readonly-widget.git";
+
+  test("index refuses on read-only even with recorded consent (gbrain provider)", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-ro-"));
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-ro-bin-"));
+    try {
+      // Shim shadows any real gbrain on PATH: even if a regression lets the
+      // index proceed, this test can never touch a real brain.
+      fs.writeFileSync(path.join(shimDir, "gbrain"), "#!/usr/bin/env bash\nexit 1\n", { mode: 0o755 });
+      const env = { ...process.env, GSTACK_HOME: home, PATH: `${shimDir}:${process.env.PATH}` };
+      const repo = path.join(home, "repo");
+      fs.mkdirSync(repo, { recursive: true });
+      execFileSync("git", ["init", "-q", "."], { cwd: repo });
+      execFileSync("git", ["remote", "add", "origin", URL], { cwd: repo });
+      setProvider("gbrain", env);
+      setConsent(repo, true, env);
+      execFileSync(POLICY_BIN, ["set", URL, "read-only"], { env, encoding: "utf-8" });
+      const res = spawnSync("bun", [CLI, "index", repo], {
+        encoding: "utf-8",
+        timeout: 30_000,
+        env: env as Record<string, string>,
+      });
+      expect(res.status).not.toBe(0);
+      expect(res.stderr).toContain("repo trust policy");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── receipt truthfulness: the tamper-evident ledger must never claim a consent
+// that was never checked (red-team finding 1). Non-loopback Sourcebot only —
+// loopback sends nothing off-machine and writes no receipt at all.
+describe("Sourcebot egress receipts record the TRUE consent state", () => {
+  let home: string;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-sb-egress-"));
+  });
+  afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  function ledgerLines(): Array<Record<string, unknown>> {
+    const p = path.join(home, "security", "egress.jsonl");
+    if (!fs.existsSync(p)) return [];
+    return fs
+      .readFileSync(p, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  const okFetch = (async () =>
+    new Response(JSON.stringify({ files: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })) as unknown as typeof fetch;
+
+  test("status probe: allowed without consent, receipt says consent=unchecked (never consented=true)", async () => {
+    const sb = new SourcebotProvider({ baseUrl: "http://sb.example.com:3000", fetch: okFetch });
+    const s = await sb.status(undefined, { env: { GSTACK_HOME: home } });
+    expect(s.state).toBe("ready");
+    const lines = ledgerLines();
+    expect(lines.length).toBe(1);
+    expect(lines[0].sink).toBe("sourcebot");
+    expect(String(lines[0].consent)).toContain("consent=unchecked");
+    expect(String(lines[0].consent)).not.toContain("consented=true");
+    expect(String(lines[0].payload_class)).toContain("liveness-probe");
+  });
+
+  test("non-loopback search without consent is refused BEFORE any bytes leave (fail-closed)", async () => {
+    let calls = 0;
+    const spyFetch = (async () => {
+      calls++;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const sb = new SourcebotProvider({ baseUrl: "http://sb.example.com:3000", fetch: spyFetch });
+    await expect(sb.search("internalSecretFn", { env: { GSTACK_HOME: home } })).rejects.toMatchObject({
+      code: "PROVIDER_NOT_CONSENTED",
+    });
+    expect(calls).toBe(0); // the query never left the machine
+    expect(ledgerLines()).toEqual([]); // nothing sent → nothing receipted
+  });
+
+  test("non-loopback refresh without consent → PROVIDER_NOT_CONSENTED (write-class)", async () => {
+    const sb = new SourcebotProvider({ baseUrl: "http://sb.example.com:3000", fetch: okFetch });
+    await expect(sb.refresh({ id: "r" }, { env: { GSTACK_HOME: home } })).rejects.toMatchObject({
+      code: "PROVIDER_NOT_CONSENTED",
+    });
+    expect(ledgerLines()).toEqual([]);
+  });
+
+  test("consented non-loopback search sends, and the receipt truthfully records consented=true", async () => {
+    const sb = new SourcebotProvider({ baseUrl: "http://sb.example.com:3000", fetch: okFetch });
+    const hits = await sb.search("foo", { consented: true, env: { GSTACK_HOME: home } });
+    expect(hits).toEqual([]);
+    const lines = ledgerLines();
+    expect(lines.length).toBe(1);
+    expect(String(lines[0].consent)).toContain("consented=true");
+    expect(lines[0].payload_class).toBe("code-search-request");
+  });
+
+  test("loopback search stays consent-free and writes no receipt (no egress)", async () => {
+    const sb = new SourcebotProvider({ baseUrl: "http://localhost:3000", fetch: okFetch });
+    await sb.search("foo", { env: { GSTACK_HOME: home } });
+    expect(ledgerLines()).toEqual([]);
+  });
+});
+
+// ── consent CLI polarity — a recorded "no" must persist DENIED, never granted ─
+describe("consent CLI requires an explicit yes|no (never defaults to granted)", () => {
+  const CLI = path.join(import.meta.dir, "..", "bin", "gstack-code-intelligence");
+  let home: string;
+  let repo: string;
+  let env: NodeJS.ProcessEnv;
+
+  function runConsent(...args: string[]) {
+    const res = spawnSync("bun", [CLI, "consent", ...args], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: env as Record<string, string>,
+    });
+    return { status: res.status ?? -1, stdout: res.stdout || "", stderr: res.stderr || "" };
+  }
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-consent-home-"));
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), "ci-consent-repo-"));
+    env = { ...process.env, GSTACK_HOME: home };
+  });
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  test("consent <repo> no records FALSE, and the deny-check honors it", () => {
+    const r = runConsent(repo, "no");
+    expect(r.status).toBe(0);
+    expect(readSelection(env).consents[path.resolve(repo)]).toBe(false);
+    expect(hasConsent(repo, env)).toBe(false);
+  });
+
+  test("consent <repo> yes records true; a later no overrides it", () => {
+    expect(runConsent(repo, "yes").status).toBe(0);
+    expect(hasConsent(repo, env)).toBe(true);
+    expect(runConsent(repo, "no").status).toBe(0);
+    expect(readSelection(env).consents[path.resolve(repo)]).toBe(false);
+    expect(hasConsent(repo, env)).toBe(false);
+  });
+
+  test("true/false are accepted as aliases", () => {
+    expect(runConsent(repo, "false").status).toBe(0);
+    expect(readSelection(env).consents[path.resolve(repo)]).toBe(false);
+    expect(runConsent(repo, "true").status).toBe(0);
+    expect(readSelection(env).consents[path.resolve(repo)]).toBe(true);
+  });
+
+  test("missing value exits nonzero and records NOTHING (never defaults to yes)", () => {
+    const r = runConsent(repo);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("yes|no");
+    expect(readSelection(env).consents).toEqual({});
+    expect(hasConsent(repo, env)).toBe(false);
+  });
+
+  test("garbage value exits nonzero and records NOTHING", () => {
+    const r = runConsent(repo, "maybe");
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("yes|no");
+    expect(readSelection(env).consents).toEqual({});
+  });
+});
+
+// ── picker probes: concurrent, short-timeout, never a 30s CLI stall ─────────
+describe("detectAvailable probes fast even when Sourcebot is a dead non-loopback host", () => {
+  test("rows come back in recommendation order, well under the old 30s stall", async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-pick-bin-"));
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-pick-home-"));
+    // localEngineStatus writes its probe cache via process.env.GSTACK_HOME —
+    // point it at the temp home for the duration so nothing touches ~/.gstack.
+    const prevGstackHome = process.env.GSTACK_HOME;
+    process.env.GSTACK_HOME = homeDir;
+    try {
+      // PATH-scoped fake gbrain; graphify deliberately absent from that PATH.
+      fs.writeFileSync(
+        path.join(binDir, "gbrain"),
+        `#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "gbrain 0.42.0"; exit 0; fi
+if [ "$1" = "sources" ]; then echo '{"sources":[]}'; exit 0; fi
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      const env: NodeJS.ProcessEnv = { PATH: binDir, HOME: homeDir, GSTACK_HOME: homeDir };
+      // A hanging fetch that only settles on abort — the 3s probe cap must cut
+      // it off; with the adapters' 30s default this test would blow its budget.
+      const hangingFetch = ((_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          );
+        })) as unknown as typeof fetch;
+      const t0 = Date.now();
+      const rows = await detectAvailable({
+        env,
+        sourcebot: { baseUrl: "http://sb.internal.example:3000", fetch: hangingFetch },
+      });
+      expect(Date.now() - t0).toBeLessThan(5_000);
+      expect(rows.map((r) => r.id)).toEqual(["gbrain", "sourcebot", "graphify"]);
+      const gbrain = rows.find((r) => r.id === "gbrain")!;
+      expect(gbrain.detail).toContain("gbrain engine:");
+      const sourcebot = rows.find((r) => r.id === "sourcebot")!;
+      expect(sourcebot.available).toBe(false);
+      const graphify = rows.find((r) => r.id === "graphify")!;
+      expect(graphify.available).toBe(false); // not on the scoped PATH
+      expect(graphify.detail).toContain("not installed");
+    } finally {
+      if (prevGstackHome === undefined) delete process.env.GSTACK_HOME;
+      else process.env.GSTACK_HOME = prevGstackHome;
+      fs.rmSync(binDir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

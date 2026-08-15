@@ -1,6 +1,8 @@
 /**
  * Graphify adapter — real CLI integration (github.com/Graphify-Labs/graphify).
  *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * Graphify is a LOCAL tree-sitter knowledge graph. For CODE, `graphify <dir>`
  * and `graphify update <dir>` produce the SAME AST graph with NO LLM and NO
  * network (verified against graphify 0.9.23 — both emit `AST extraction on N
@@ -26,7 +28,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import {
   assertCapability,
@@ -47,6 +49,13 @@ const OUT_DIR = "graphify-out";
 const GRAPH_JSON = "graph.json";
 const DEFAULT_TIMEOUT_MS = 120_000; // indexing a repo can take a while
 const NEEDS_SHELL_ON_WINDOWS = process.platform === "win32"; // graphify is a shim on Windows
+/**
+ * status() only parses graph.json for a node count when the file is at most
+ * this big. On the 1000+-file repos this feature targets, graph.json can run
+ * to hundreds of MB — JSON.parsing that for a cosmetic count is a heap spike.
+ * Above the threshold the display reports the file size instead.
+ */
+const STATUS_PARSE_MAX_BYTES = 5 * 1024 * 1024;
 
 export interface GraphifyOptions {
   /** Directory whose `graphify-out/` search/status/export read. Defaults to cwd. */
@@ -127,13 +136,21 @@ export class GraphifyProvider implements CodeProvider {
     const graphPath = join(dir, OUT_DIR, GRAPH_JSON);
     if (!existsSync(graphPath)) return { id: dir, state: "absent" };
     let itemCount: number | undefined;
+    let detail = graphPath;
     try {
-      const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as { nodes?: unknown[] };
-      if (Array.isArray(graph.nodes)) itemCount = graph.nodes.length;
+      // stat first: parse the whole graph only when it's small (the node count
+      // is display-only, never worth a hundreds-of-MB JSON.parse heap spike).
+      const size = statSync(graphPath).size;
+      if (size <= STATUS_PARSE_MAX_BYTES) {
+        const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as { nodes?: unknown[] };
+        if (Array.isArray(graph.nodes)) itemCount = graph.nodes.length;
+      } else {
+        detail = `${graphPath} (${(size / (1024 * 1024)).toFixed(1)} MB graph; node count skipped)`;
+      }
     } catch {
-      // graph.json present but unparseable — still ready, just no count.
+      // graph.json present but unstatable/unparseable — still ready, just no count.
     }
-    return { id: dir, state: "ready", itemCount, detail: graphPath };
+    return { id: dir, state: "ready", itemCount, detail };
   }
 
   async export(source: SourceRef, _opts: OpOptions = {}): Promise<string> {

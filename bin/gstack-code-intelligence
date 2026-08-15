@@ -4,12 +4,14 @@
  * index and search this repo. OPTIONAL: with nothing selected, gstack works
  * fine and callers use grep / the file-only decision store.
  *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * Usage:
  *   gstack-code-intelligence suggest [repo] [--json] # should the one-time indexing offer be made here?
  *   gstack-code-intelligence options                 # list providers (GBrain first) + availability
  *   gstack-code-intelligence status                  # current selection + availability
+ *   gstack-code-intelligence consent [repo-path] <yes|no>  # record per-repo indexing consent (value REQUIRED)
  *   gstack-code-intelligence select <gbrain|sourcebot|graphify|none>
- *   gstack-code-intelligence consent [repo-path]     # allow indexing this repo (per-repo)
  *   gstack-code-intelligence index [repo-path]       # index the repo with the selected provider
  *   gstack-code-intelligence search <query...>       # search via the selected provider
  *
@@ -19,11 +21,15 @@
  * auto-installed.
  */
 
+import { createHash } from "crypto";
+import { realpathSync } from "fs";
+import { hostname } from "os";
 import { basename, resolve } from "path";
 import {
   CodeProviderError,
   RECOMMENDED_ORDER,
   detectAvailable,
+  getRoot,
   hasConsent,
   providerById,
   readSelection,
@@ -125,22 +131,73 @@ function cmdSelect(arg: string | undefined): void {
   if (!provider.local) out(`${LABEL[id]} sends repo content off this machine — run \`consent\` in a repo before indexing it.`);
 }
 
-function cmdConsent(pathArg: string | undefined): void {
-  const repoPath = resolve(pathArg ?? process.cwd());
-  setConsent(repoPath, true);
-  out(`indexing consent recorded for ${repoPath}`);
+/**
+ * Record per-repo indexing consent: `consent [repo-path] <yes|no>`.
+ *
+ * The yes|no value is REQUIRED (true/false also accepted). It is never
+ * defaulted: an agent recording a user's "no" must persist consent DENIED,
+ * and a missing/unknown value must record NOTHING — a consent gate that
+ * assumes "yes" is a consent gate that lies.
+ */
+function cmdConsent(rest: string[]): void {
+  const positional = rest.filter((a) => !a.startsWith("--"));
+  const CONSENT_USAGE = "Usage: consent [repo-path] <yes|no> — the yes/no value is required; consent is never assumed";
+  if (positional.length < 1 || positional.length > 2) fail(CONSENT_USAGE);
+  const value = positional[positional.length - 1].toLowerCase();
+  let consented: boolean;
+  if (value === "yes" || value === "true") consented = true;
+  else if (value === "no" || value === "false") consented = false;
+  else fail(CONSENT_USAGE);
+  const repoPath = resolve(positional.length === 2 ? positional[0] : process.cwd());
+  setConsent(repoPath, consented);
+  out(consented ? `indexing consent recorded for ${repoPath}` : `indexing consent DENIED for ${repoPath} (recorded)`);
+}
+
+/**
+ * Host+path-hashed source id for GBrain/Sourcebot — the same approach as
+ * deriveCodeSourceId in bin/gstack-gbrain-sync.ts. A bare basename collides:
+ * two repos both named "api" (or the same repo on two machines against a
+ * federated brain) would silently share one source. Suffix = first 8 hex of
+ * sha1(`${hostname}::${realpath}`); base sanitized to gbrain's source-id
+ * charset (lowercase alnum + interior hyphens) and capped so the whole id
+ * stays within gbrain's 32-char limit.
+ */
+function hashedSourceId(repoPath: string): string {
+  let real = repoPath;
+  try {
+    real = realpathSync(repoPath);
+  } catch {
+    // path may not exist yet at id-derivation time — hash the resolved form
+  }
+  const host = process.env.GSTACK_HOSTNAME || hostname();
+  const suffix = createHash("sha1").update(`${host}::${real}`).digest("hex").slice(0, 8);
+  const base =
+    basename(real)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 23)
+      .replace(/-+$/, "") || "repo";
+  return `${base}-${suffix}`;
 }
 
 async function cmdIndex(pathArg: string | undefined): Promise<void> {
   const provider = resolveSelectedProvider();
   if (!provider) fail("no provider selected; run `select <provider>` first");
   const repoPath = resolve(pathArg ?? process.cwd());
+  // Indexing is write-class: hasConsent's default op class applies, so a
+  // `deny` OR `read-only` repo trust policy vetoes it (code indexing writes
+  // pages — same semantics as gstack-gbrain-sync's runCodeImport).
   const consented = hasConsent(repoPath);
   if (!provider!.local && !consented) {
-    fail(`${provider!.label} would send this repo's content off the machine. Run \`gstack-code-intelligence consent ${repoPath}\` first.`);
+    const recorded = readSelection().consents[repoPath] === true;
+    fail(recorded
+      ? `${provider!.label} indexing is blocked by the repo trust policy (deny or read-only — code indexing writes pages). Change with: gstack-gbrain-repo-policy set <origin-url> read-write`
+      : `${provider!.label} would send this repo's content off the machine. Run \`gstack-code-intelligence consent ${repoPath} yes\` first.`);
   }
-  // Graphify keys sources on the repo path; GBrain/Sourcebot on a short id.
-  const sourceId = provider!.id === "graphify" ? repoPath : basename(repoPath);
+  // Graphify keys sources on the repo path; GBrain/Sourcebot on a short
+  // host+path-hashed id (bare basenames collide across same-named repos).
+  const sourceId = provider!.id === "graphify" ? repoPath : hashedSourceId(repoPath);
   const repo = { id: sourceId, path: repoPath };
   try {
     const registered = await provider!.registerSource(repo, { consented });
@@ -159,8 +216,16 @@ async function cmdSearch(terms: string[]): Promise<void> {
   if (!query) fail("Usage: search <query...>");
   const provider = resolveSelectedProvider();
   if (!provider) fail("no provider selected; run `select <provider>` first (or use grep)");
+  // Search is read-class: a read-only repo trust policy still allows it
+  // (mirrors gstack-gbrain-sync: search allowed, page writes never), but a
+  // deny tier — or no recorded consent at all — still refuses for non-local
+  // providers, because the query text itself is repo-derived content. The
+  // consent repo is the one this provider indexed (search reads that graph);
+  // loopback providers need no consent, so their path is unchanged.
+  const searchRoot = getRoot(provider!.id) ?? resolve(process.cwd());
+  const consented = hasConsent(searchRoot, undefined, "read");
   try {
-    const hits = await provider!.search(query, { limit: 10 });
+    const hits = await provider!.search(query, { limit: 10, consented });
     if (!hits.length) {
       out("(no results)");
       return;
@@ -175,6 +240,9 @@ function handleProviderError(err: unknown, label: string): never {
   if (err instanceof CodeProviderError) {
     if (err.code === "PROVIDER_UNAVAILABLE") {
       fail(`${label} is unavailable (${err.message}). gstack still works — fall back to grep / file-only.`);
+    }
+    if (err.code === "PROVIDER_NOT_CONSENTED") {
+      fail(`${label} ${err.code}: ${err.message} Run \`gstack-code-intelligence consent <repo-path> yes\` first (a deny repo trust policy overrides recorded consent).`);
     }
     fail(`${label} ${err.code}: ${err.message}`);
   }
@@ -193,13 +261,13 @@ async function main(): Promise<void> {
     case "select":
       return cmdSelect(rest[0]);
     case "consent":
-      return cmdConsent(rest[0]);
+      return cmdConsent(rest);
     case "index":
       return cmdIndex(rest[0]);
     case "search":
       return cmdSearch(rest);
     default:
-      fail("Usage: suggest [path] [--json] | options | status | select <provider> | consent [path] | index [path] | search <query...>");
+      fail("Usage: suggest [path] [--json] | options | status | select <provider> | consent [path] <yes|no> | index [path] | search <query...>");
   }
 }
 

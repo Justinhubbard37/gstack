@@ -1,5 +1,8 @@
 /**
  * code-intelligence — the OPTIONAL, repo-oriented provider contract.
+ *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * See docs/designs/CODE_INTELLIGENCE_PROVIDER_CONTRACT.md.
  */
 

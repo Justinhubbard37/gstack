@@ -1,6 +1,8 @@
 /**
  * suggest — should the session-start indexing offer be made for this repo?
  *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * The offer fires at most once per machine: never when a provider is already
  * selected, never after an explicit decline (`select none`), and never for
  * small repos where grep is already fast. Detection is cheap and local
@@ -11,7 +13,7 @@ import { spawnSync } from "child_process";
 import { resolve } from "path";
 import { readSelection } from "./selection";
 
-// ponytail: single tracked-file-count knob for "large"; add a LOC signal if it misfires
+// Single tracked-file-count knob for "large"; add a LOC signal if it misfires.
 /** Tracked-file count at which indexing starts paying for itself. */
 export const LARGE_REPO_FILE_THRESHOLD = 1000;
 

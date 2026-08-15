@@ -1,6 +1,8 @@
 /**
  * GBrain adapter — full contract fit over the existing gbrain CLI chokepoint.
  *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * Reuses lib/gbrain-exec.ts (spawnGbrain, seeded DATABASE_URL) and
  * lib/gbrain-sources.ts (ensureSourceRegistered, probeSource, sourcePageCount)
  * rather than re-issuing raw commands, so the DATABASE_URL / GBRAIN_HOME /
@@ -39,6 +41,23 @@ const CAPABILITIES: CodeProviderCapability[] = [
 ];
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * refresh() default. Full code indexing on the 1000+-tracked-file repos this
+ * feature targets routinely outruns the 30s op default; GraphifyProvider uses
+ * the same 120s ceiling for the same indexing work. Query/status stay at 30s.
+ */
+const REFRESH_TIMEOUT_MS = 120_000;
+
+/**
+ * Environmental (engine / DB / config) failure shapes, shared by #assertOk and
+ * #wrap so the two paths can never drift. These degrade to
+ * PROVIDER_UNAVAILABLE (caller falls back to grep / file-only), not a hard
+ * PROVIDER_ERROR with a raw dump. Covers the real case where gbrain's pglite
+ * engine fails to init its WASM runtime (garrytan/gbrain#223) as well as
+ * unreachable/unconfigured databases and a missing CLI.
+ */
+const ENVIRONMENTAL_ERROR_RE =
+  /not on PATH|command not found|PGLite|WASM|failed to initialize|Aborted|Cannot connect to database|not configured|config\.json|database (is )?un(reachable|available)/i;
 
 /**
  * Parse `gbrain search` text output (`[score] slug -- snippet`) into hits.
@@ -110,7 +129,7 @@ export class GbrainProvider implements CodeProvider {
   async refresh(source: SourceRef, opts: OpOptions = {}): Promise<SourceStatus> {
     assertEgressConsent(this, opts);
     this.#receipt("repo-code-index (sent by gbrain subprocess)", opts);
-    const timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
+    const timeout = opts.timeout ?? REFRESH_TIMEOUT_MS;
     // Two passes, verified end-to-end against real Postgres-backed gbrain 0.42.56:
     //  1. default sync (markdown strategy) — indexes docs.
     //  2. `sync --strategy code` — the ACTUAL code-indexing pass. Without it code
@@ -219,10 +238,8 @@ export class GbrainProvider implements CodeProvider {
       throw new CodeProviderError("PROVIDER_TIMEOUT", "gbrain timed out", this.id);
     }
     // Engine / DB / config problems are ENVIRONMENTAL — degrade to UNAVAILABLE
-    // (caller falls back to file-only), not a hard PROVIDER_ERROR with a raw dump.
-    // Covers the real case where gbrain's pglite engine fails to init its WASM
-    // runtime (garrytan/gbrain#223) as well as unreachable/unconfigured databases.
-    if (/PGLite|WASM|failed to initialize|Aborted|Cannot connect to database|not configured|config\.json|database (is )?un(reachable|available)/i.test(stderr)) {
+    // (caller falls back to file-only). Shapes hoisted to ENVIRONMENTAL_ERROR_RE.
+    if (ENVIRONMENTAL_ERROR_RE.test(stderr)) {
       throw new CodeProviderError("PROVIDER_UNAVAILABLE", firstLine(stderr) || "gbrain engine unavailable", this.id);
     }
     throw new CodeProviderError("PROVIDER_ERROR", firstLine(stderr) || `gbrain exited ${r.status}`, this.id);
@@ -231,9 +248,9 @@ export class GbrainProvider implements CodeProvider {
   #wrap(err: unknown): CodeProviderError {
     if (err instanceof CodeProviderError) return err;
     const message = err instanceof Error ? err.message : String(err);
-    // Same environmental-vs-real split as #assertOk: missing CLI, or engine/DB/
-    // config problems, degrade to UNAVAILABLE so callers fall back to file-only.
-    if (/not on PATH|command not found|PGLite|WASM|failed to initialize|Aborted|Cannot connect to database|not configured|config\.json/i.test(message)) {
+    // Same environmental-vs-real split as #assertOk — literally the same
+    // regex (ENVIRONMENTAL_ERROR_RE), so the two paths can never drift.
+    if (ENVIRONMENTAL_ERROR_RE.test(message)) {
       return new CodeProviderError("PROVIDER_UNAVAILABLE", firstLine(message), this.id);
     }
     return new CodeProviderError("PROVIDER_ERROR", firstLine(message), this.id);

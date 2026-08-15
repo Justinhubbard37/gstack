@@ -42,6 +42,7 @@ import { detectAutopilot, decideSourceRemove, decideCodeSync } from "../lib/gbra
 import { writeReceipt } from "../lib/egress-receipt";
 import { localEngineStatus, type LocalEngineStatus } from "../lib/gbrain-local-status";
 import { buildGbrainEnv, spawnGbrain, execGbrainJson, NEEDS_SHELL_ON_WINDOWS } from "../lib/gbrain-exec";
+import { repoPolicyTier as sharedRepoPolicyTier } from "../lib/gbrain-repo-policy-client";
 import { checkOwnedStagingDir } from "../lib/staging-guard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -793,21 +794,23 @@ function warnProbeTimeout(stage: "code" | "memory" | "dream"): void {
  * behavior as before for every non-policy user, and skips the subprocess).
  * Fail-closed ("error") when a store exists but can't be read: a policy the
  * user set must not be silently bypassed by a broken store or missing jq.
+ *
+ * Reads through the shared lib/gbrain-repo-policy-client.ts (same client as
+ * the code-intelligence consent veto — the two gates can never drift, and
+ * win32 gets the invoke-via-bash path). A spawn failure is still fail-closed
+ * but says so, instead of the misleading "store could not be read".
  */
 export function repoPolicyTier(url: string | null): "read-write" | "read-only" | "deny" | "unset" | "error" {
-  const policyFile = join(process.env.GSTACK_HOME || join(homedir(), ".gstack"), "gbrain-repo-policy.json");
-  if (!existsSync(policyFile)) return "unset";
-  if (!url) return "unset"; // policy is keyed by origin remote; no remote → nothing set for this repo
-  const res = spawnSync(join(import.meta.dir, "gstack-gbrain-repo-policy"), ["get", url], {
-    encoding: "utf-8",
-    timeout: 10_000,
-    // Explicit env: Bun's spawnSync default env snapshot misses runtime
-    // process.env mutations (e.g. tests redirecting GSTACK_HOME).
-    env: { ...process.env },
-  });
-  if (res.error || res.status !== 0) return "error";
-  const tier = (res.stdout || "").trim();
-  return tier === "deny" || tier === "read-only" || tier === "read-write" || tier === "unset" ? tier : "error";
+  const res = sharedRepoPolicyTier(url, process.env);
+  if (res.error === "spawn-failed") {
+    process.stderr.write(
+      "[gstack-gbrain-sync] the repo-policy helper could not be spawned (bash missing from PATH?) — " +
+        "refusing ingest rather than bypassing a possibly-set policy\n",
+    );
+    return "error";
+  }
+  if (res.error) return "error";
+  return res.tier === "none" ? "unset" : res.tier;
 }
 
 async function runCodeImport(args: CliArgs): Promise<StageResult> {

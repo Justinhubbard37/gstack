@@ -2,6 +2,8 @@
  * Sourcebot adapter — real HTTP + config integration
  * (github.com/sourcebot-dev/sourcebot, YC F2025).
  *
+ * Portions copyright (c) 2026 Sina Matian, time-attack/gstack (GStack 2), MIT.
+ *
  * Sourcebot is a self-hosted server that indexes repos declared in its
  * config.json and serves regex code search over `POST /api/search` (zoekt). So
  * the runtime drives it with plain HTTP + a config-file edit — no MCP:
@@ -128,32 +130,46 @@ export class SourcebotProvider implements CodeProvider {
     return { id: repo.id, state: "registered", detail: "Sourcebot re-indexes on config change" };
   }
 
-  /** Sourcebot re-indexes automatically; report current liveness. */
+  /**
+   * Sourcebot re-indexes automatically; report current liveness. Refresh is a
+   * write-class op (it represents indexing repo content into the server), so a
+   * non-loopback server requires per-repo consent even though the HTTP call
+   * below is only the liveness probe.
+   */
   async refresh(source: SourceRef, opts: OpOptions = {}): Promise<SourceStatus> {
+    assertEgressConsent(this, opts); // no-op when the server is loopback (local)
     const live = await this.status(source, opts);
     return { ...live, detail: "Sourcebot re-indexes automatically (config change + reindexIntervalMs)" };
   }
 
   async search(query: string, opts: SearchOptions = {}): Promise<CodeSearchHit[]> {
     if (!query.trim()) return [];
+    // Query text is repo-derived content (sensitive class): a non-loopback
+    // server needs per-repo consent BEFORE the query is sent. Fail-closed —
+    // the throw happens before any bytes (or any receipt) exist.
+    assertEgressConsent(this, opts); // no-op when the server is loopback (local)
     const body = {
       query: opts.source ? `repo:${opts.source} ${query}` : query,
       matches: opts.limit ?? 20,
       isRegexEnabled: true,
       isCaseSensitivityEnabled: false,
     };
-    const payload = await this.#post("/api/search", body, opts.timeout ?? DEFAULT_TIMEOUT_MS);
+    const payload = await this.#post("/api/search", body, opts);
     return parseSourcebotSearch(payload, opts.limit ?? 20);
   }
 
   async status(_source?: SourceRef, opts: OpOptions = {}): Promise<SourceStatus> {
     // `redirect: manual` so an auth-gated server (307 -> /login) reads as
     // not-usable instead of following to a 200 and falsely reporting "ready".
+    // The probe body is a FIXED literal (query "sourcebot") — no repo-derived
+    // content — so it is allowed without consent; the receipt records that
+    // consent was unchecked instead of pretending it was verified.
     try {
       const res = await this.#fetchWithTimeout(
         `${this.#baseUrl}/api/search`,
         { method: "POST", headers: { "Content-Type": "application/json", ...this.#authHeaders() }, body: JSON.stringify({ query: "sourcebot", matches: 1, isRegexEnabled: false }), redirect: "manual" },
         opts.timeout ?? DEFAULT_TIMEOUT_MS,
+        { payloadClass: "liveness-probe (fixed query, no repo-derived content)", consented: opts.consented === true, env: opts.env },
       );
       if (res.status === 401 || res.status === 403) {
         return { id: "*", state: "unknown", partial: true, detail: "reachable but login-gated (enable anonymous access with FORCE_ENABLE_ANONYMOUS_ACCESS=true for local use, or set SOURCEBOT_API_KEY)" };
@@ -164,15 +180,20 @@ export class SourcebotProvider implements CodeProvider {
     }
   }
 
-  async #post(path: string, body: unknown, timeout: number): Promise<unknown> {
+  async #post(path: string, body: unknown, opts: OpOptions): Promise<unknown> {
     let res: Response;
     try {
       res = await this.#fetchWithTimeout(`${this.#baseUrl}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json", ...this.#authHeaders() },
         body: JSON.stringify(body),
-      }, timeout);
+      }, opts.timeout ?? DEFAULT_TIMEOUT_MS, {
+        payloadClass: "code-search-request",
+        consented: opts.consented === true,
+        env: opts.env,
+      });
     } catch (err) {
+      if (err instanceof CodeProviderError) throw err;
       throw new CodeProviderError("PROVIDER_UNAVAILABLE", `Sourcebot unreachable at ${this.#baseUrl}: ${(err as Error).message}`, this.id);
     }
     if (res.status === 401 || res.status === 403) {
@@ -186,19 +207,32 @@ export class SourcebotProvider implements CodeProvider {
     }
   }
 
-  async #fetchWithTimeout(url: string, init: RequestInit, timeout: number): Promise<Response> {
+  async #fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeout: number,
+    receipt: { payloadClass: string; consented: boolean; env?: NodeJS.ProcessEnv },
+  ): Promise<Response> {
     // Every Sourcebot HTTP call routes through here. A loopback server keeps
     // content on this machine (no egress, no receipt); a non-loopback server
     // is an off-machine send and gets a fail-closed receipt BEFORE the fetch.
+    // The receipt's consent field records the ACTUAL consent state passed by
+    // the op (opts.consented) — the tamper-evident ledger must never attest
+    // "consented=true" for a send where nothing checked consent. Content-
+    // bearing ops (search/refresh) assert consent before reaching here; the
+    // status liveness probe is allowed unconsented and its receipt says so.
     if (!this.local) {
       const body = typeof init.body === "string" ? init.body : "";
       writeReceipt({
+        env: receipt.env,
         sink: "sourcebot",
         host: new URL(url).host,
-        payloadClass: "code-search-request",
+        payloadClass: receipt.payloadClass,
         bytes: Buffer.byteLength(body),
         sha256: sha256Hex(body),
-        consent: "code-intelligence provider=sourcebot (non-loopback SOURCEBOT_URL) + per-repo consented=true",
+        consent: receipt.consented
+          ? "code-intelligence provider=sourcebot (non-loopback SOURCEBOT_URL) + per-repo consented=true"
+          : "code-intelligence provider=sourcebot (non-loopback SOURCEBOT_URL) + consent=unchecked (liveness probe only; content-bearing ops assert consent before sending)",
       });
     }
     const controller = new AbortController();

@@ -344,6 +344,7 @@ describe('gstack-gbrain-sync code stage honors the repo policy (#2140 sync path)
   });
 
   test('store exists but unreadable → fail-closed refusal, never bypassed', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod semantics differ
     makeRepo();
     expect(run(['set', REPO_URL, 'deny']).status).toBe(0);
     fs.chmodSync(policyFile(), 0o000);
