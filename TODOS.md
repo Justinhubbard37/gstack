@@ -67,6 +67,23 @@ touchfiles and re-offer pending ones on the next interactive run.
 false) permanently misses the artifacts-rename migration unless they paste the
 manual command. **Effort:** M. **Priority:** P2.
 
+### P2: periodic tier — three documented-red tests need structural repair
+
+**What:** (1) The sidebar E2E trio (navigate, url-accuracy, css-interaction)
+POSTs to /sidebar-command and /sidebar-chat — endpoints removed on every tree
+when the PTY terminal replaced the chat queue (server.ts tombstone ~2671);
+rewrite them against the PTY surface or delete them. (2)
+skill-e2e-ship-idempotency: the PTY child sits at the Claude Code welcome
+screen in plan mode for the full budget — the typed /ship never lands
+(readiness/typing race vs CLI v2.1.233's welcome screen); never green since
+it was born in v1.63. (3) skill-e2e-brain-privacy-gate: never green anywhere;
+the artifacts-sync stop-gate preconditions don't survive the hermetic env
+even with per-test HOME/GSTACK_HOME injection — needs a transcript-level
+debug of what the child's preamble actually echoes.
+
+**Why:** every red periodic run costs triage time; two of these have burned
+three triage passes across two releases. **Effort:** M. **Priority:** P2.
+
 ### P3: gbrain-adapter add/delete/export behavioral coverage
 
 **What:** Extend test/code-intelligence.test.ts's fake-gbrain shim to pin the
