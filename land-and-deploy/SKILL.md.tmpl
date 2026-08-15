@@ -598,13 +598,25 @@ Record the start timestamp for timing data. Also record which merge path is take
 Try auto-merge first (respects repo merge settings and merge queues):
 
 ```bash
-gh pr merge --auto --delete-branch
+gh pr merge --squash --auto --delete-branch
 ```
 
 If `--auto` succeeds: record `MERGE_PATH=auto`. This means the repo has auto-merge enabled
 and may use merge queues.
 
-If `--auto` is not available (repo doesn't have auto-merge enabled), merge directly:
+`--auto` fails for two unrelated reasons. Both fall through to the direct merge below, so
+the flow is unaffected — but do not report the second one as "auto-merge is disabled":
+
+1. **Auto-merge is disabled for the repo** — `Auto-merge is not allowed for this repository`.
+2. **The PR is not waiting on anything.** `--auto` only *queues* a merge behind pending
+   required checks. When every required check has already settled — or the repo declares
+   no required status checks at all — GitHub treats the PR as immediately mergeable and
+   rejects the mutation:
+   `Pull request is in clean status` (everything green) or
+   `Pull request is in unstable status` (something red, but nothing required).
+   A repo with zero required status checks therefore takes the direct path 100% of the
+   time no matter how auto-merge is configured, and so does any repo whose CI finishes
+   before this step runs.
 
 ```bash
 gh pr merge --squash --delete-branch
