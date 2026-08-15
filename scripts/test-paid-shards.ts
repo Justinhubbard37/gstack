@@ -64,6 +64,7 @@ import {
 } from './test-strict-output';
 import { PAID_TEST_GLOBS, isPaidTestFile } from '../test/helpers/paid-test-set';
 import { getProjectEvalDir } from '../test/helpers/eval-store';
+import { preflightAnthropicApi } from '../test/helpers/anthropic-preflight';
 
 export { PAID_TEST_GLOBS, isPaidTestFile };
 
@@ -463,13 +464,19 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // One preflight ping in the parent; children skip theirs via the env flag.
+  // Before this, every shard's e2e-helpers module load re-pinged the API —
+  // ~30 paid claude -p calls (30s timeout each) per full run for one bit of
+  // information. A dead API now fails here, before any shard spawns.
+  preflightAnthropicApi(process.env);
+
   const summary = await runPaidShards(shards, {
     // Tier reaches the children only via EVALS_TIER below; the runtime
     // E2E_TIERS filter inside each child is the real selection mechanism.
     timeoutMs: options.timeoutMs,
     jobs: options.jobs,
     withinShardConcurrency: options.withinShardConcurrency,
-    env: { ...process.env, EVALS: '1', EVALS_TIER: options.tier },
+    env: { ...process.env, EVALS: '1', EVALS_TIER: options.tier, EVALS_PREFLIGHT_OK: '1' },
     evalDirBase: process.env.GSTACK_EVAL_DIR || getProjectEvalDir(),
   });
   for (const line of formatSummary(summary)) console.log(line);
