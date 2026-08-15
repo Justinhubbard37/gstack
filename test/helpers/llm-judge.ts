@@ -56,7 +56,11 @@ export interface RecommendationScore {
  * existing callers; pass a model id (e.g. claude-haiku-4-5-20251001)
  * for cheaper bounded judgments like judgeRecommendation.
  */
-export async function callJudge<T>(prompt: string, model: string = 'claude-sonnet-4-6'): Promise<T> {
+// Default judge model is Haiku 4.5 (D1a, 2026-08): these are rubric-scoring
+// calls, a duty Haiku is already proven at in this repo (claude-pty-runner's
+// hung/working classifier, first-task-scaffold, hermetic-canary). Tests that
+// need a stronger judge pass a model explicitly.
+export async function callJudge<T>(prompt: string, model: string = 'claude-haiku-4-5-20251001'): Promise<T> {
   const client = new Anthropic();
 
   const makeRequest = () => client.messages.create({
