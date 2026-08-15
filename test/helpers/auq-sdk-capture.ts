@@ -191,7 +191,7 @@ This is a capture test, not an interactive session. Skip any system-audit / envi
     timeout: 240_000,
     testName: opts.testName,
     runId: opts.runId,
-    model: opts.model ?? 'claude-opus-4-7',
+    model: opts.model ?? 'claude-sonnet-4-6', // D1a: align with session-runner default; Opus is opt-in
   });
 
   try {
@@ -253,7 +253,7 @@ Rules for this run:
     timeout: opts.timeout ?? 300_000,
     testName: opts.testName,
     runId: opts.runId,
-    model: opts.model ?? 'claude-opus-4-7',
+    model: opts.model ?? 'claude-sonnet-4-6', // D1a: align with session-runner default; Opus is opt-in
   });
 
   const readSections = new Set<string>();
@@ -334,7 +334,7 @@ Write the verbatim text of that AskUserQuestion (the full decision brief: title,
     timeout: 240_000,
     testName: opts.testName,
     runId: opts.runId,
-    model: opts.model ?? 'claude-opus-4-7',
+    model: opts.model ?? 'claude-sonnet-4-6', // D1a: align with session-runner default; Opus is opt-in
   });
 
   try {
