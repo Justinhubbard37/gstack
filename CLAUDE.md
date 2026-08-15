@@ -96,9 +96,10 @@ bun run test         # run before every commit — free, ~90-100s for the full ~
 bun run test:evals   # run before shipping — paid, diff-based (~$4/run max)
 ```
 
-`bun run test` routes through `scripts/test-free-shards.ts` (one `bun test
---parallel` invocation with strict-output classification: a run without bun's
-terminal summary line, or with a crashed worker, FAILS — silent truncation
+`bun run test` routes through `scripts/test-free-shards.ts` (N concurrent
+shard processes, serial within each, plus a trailing serial tree-mutating
+shard — with strict-output classification per shard: a shard without bun's
+terminal summary line FAILS — silent truncation
 cannot report green). Never type bare `bun test` for the suite: it walks the
 whole repo, loading paid eval files and missing the strict classifier.
 It covers skill validation, gen-skill-docs quality checks, and browse
