@@ -1529,8 +1529,18 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
     process.env.GSTACK_AGENT_WATCHDOG_TICK_MS || '60000',
     10,
   );
-  const RESPAWN_GUARD_WINDOW_MS = 60_000;
   const RESPAWN_GUARD_MAX = 3;
+  // The guard window MUST span enough ticks for RESPAWN_GUARD_MAX respawns to
+  // land inside it. This was a fixed 60_000 against a 60_000 tick, so at most
+  // ONE respawn could ever be in the window and `respawnHistory.length >= 3`
+  // was unreachable — the guard could not fire at the default tick rate, and a
+  // steady one-per-tick leak ran unbounded instead of stopping after 3. Scale
+  // with the tick so the intent ("3 crashes in quick succession → stop") holds
+  // at any tick value: 3 respawns within 5 ticks trips it.
+  const RESPAWN_GUARD_WINDOW_MS = Math.max(
+    60_000,
+    AGENT_WATCHDOG_TICK_MS * (RESPAWN_GUARD_MAX + 2),
+  );
   let agentRespawnGuardTripped = false;
 
   if (ownsTerminalAgent) {
