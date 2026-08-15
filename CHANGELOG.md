@@ -71,7 +71,8 @@ before it claims success.
 - **Supply-chain CI**: a quality gate that runs `bin/gstack-redact` over every
   PR diff (HIGH findings fail, MEDIUM annotates), dependency review on
   lockfile changes, weekly OSV scans, grouped dependabot updates, and an
-  evidence-bar PR template. All third-party actions pinned to commit SHAs.
+  evidence-bar PR template. Every third-party action in the new workflows is
+  pinned to a commit SHA.
 - **Third-party web-actions contract** in tier-2+ skills: when a workflow needs
   a vendor-site step (API key signup, OAuth app), gstack offers to drive the
   browser itself, hands credentials and CAPTCHAs to you, stores secrets
@@ -115,10 +116,10 @@ before it claims success.
 - **`browse stop` restarted the daemon it was told to stop**: the CLI now gets
   an acknowledgment before shutdown, and the shutdown snapshot has a hard
   deadline so a wedged page can never hold the port.
-- **Session cookies from internal networks stay out of snapshots**: the hygiene
-  filter drops loopback and link-local IP literals (127.0.0.1, ::1, 169.254.*)
-  alongside localhost and *.internal, shared by both the persistence path and
-  `state load`.
+- **Session cookies from internal networks never reach a restored browser**:
+  the restore-time hygiene filter drops loopback and link-local IP literals
+  (127.0.0.1, ::1, 169.254.*) alongside localhost and *.internal, shared by
+  both the persistence path and `state load`.
 - **ios-qa stopped handing out raw bearer tokens**: `/auth/sessions` returns
   salted-hash token ids with revoke-by-id support, the boot token left os_log
   entirely, and the IPv4 listener pins to loopback at the socket.
@@ -172,11 +173,11 @@ before it claims success.
 
 #### For contributors
 
-- 22 new test files (+4,666 test lines): behavioral suites for session
+- 23 new test files (+5,499 test lines): behavioral suites for session
   persistence, the poisoned-bundle probe, both migrations, the consent CLI,
   verify-gate trust, telemetry opt-out, the offline-gate bypass corpus, the
   secret-scan exit contract, and lock-acquisition edge branches. The ios-qa
-  daemon suite (5 files) is now wired into `bun test` and the sharded runner;
+  daemon suite (10 files) is now wired into `bun test` and the sharded runner;
   it had never run in CI.
 - `lib/gbrain-repo-policy-client.ts` is the one place repo-policy tiers are
   read; both enforcement points route through it.
