@@ -136,7 +136,7 @@ export function planPaidShards(
 }
 
 export function buildPaidShardArgs(files: string[], timeoutMs: number): string[] {
-  return ['test', ...files, '--retry', '2', `--timeout=${timeoutMs}`];
+  return ['test', ...files, '--retry', '1', `--timeout=${timeoutMs}`];
 }
 
 /**
