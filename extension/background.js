@@ -87,8 +87,7 @@ async function checkHealth() {
       // already flips to disconnected on a 403.
       const gotToken = await loadAuthToken();
       if (!gotToken && !authToken) return;
-      // Forward chatEnabled so sidepanel can show/hide chat tab
-      setConnected({ ...data, chatEnabled: !!data.chatEnabled });
+      setConnected(data);
     } else {
       setDisconnected();
     }
@@ -303,7 +302,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   const ALLOWED_TYPES = new Set([
     'getPort', 'setPort', 'getServerUrl', 'getToken', 'fetchRefs',
-    'openSidePanel', 'sidebarOpened', 'command', 'sidebar-command',
+    'openSidePanel', 'sidebarOpened', 'command',
     'getTabState',
     // Inspector message types
     'startInspector', 'stopInspector', 'elementPicked', 'pickerCancelled',
@@ -462,41 +461,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Sidebar → Claude Code (file-based message queue)
-  if (msg.type === 'sidebar-command') {
-    const base = getBaseUrl();
-    if (!base || !authToken) {
-      sendResponse({ error: 'Not connected' });
-      return true;
-    }
-    // Capture the active tab's URL so the sidebar agent knows what page
-    // the user is actually looking at (Playwright's page.url() can be stale
-    // if the user navigated manually in headed mode).
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeTabUrl = tabs?.[0]?.url || null;
-      fetch(`${base}/sidebar-command`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ message: msg.message, activeTabUrl }),
-      })
-        .then(r => {
-          if (!r.ok) {
-            console.error(`[gstack bg] sidebar-command failed: ${r.status} ${r.statusText}`);
-            return r.json().catch(() => ({ error: `Server returned ${r.status}` }));
-          }
-          return r.json();
-        })
-        .then(data => sendResponse(data))
-        .catch(err => {
-          console.error('[gstack bg] sidebar-command error:', err.message);
-          sendResponse({ error: err.message });
-        });
-    });
-    return true;
-  }
 });
 
 // ─── Side Panel ─────────────────────────────────────────────────

@@ -11,7 +11,8 @@
 //
 // See setup-gbrain/SKILL.md.tmpl Step 4 (Path 4) for the contract under test.
 
-import { describe, test, expect } from 'bun:test';
+import { test, expect } from 'bun:test';
+import { describeE2ETier } from './helpers/e2e-gate';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -22,8 +23,7 @@ import { runAgentSdkTest, passThroughNonAskUserQuestion, resolveClaudeBinary } f
 // non-deterministic (it sometimes skips Step 8 CLAUDE.md write, sometimes
 // shortcuts past the verify helper). The deterministic gate coverage for
 // Path 4 lives in test/setup-gbrain-path4-structure.test.ts (free, <200ms).
-const shouldRun = !!process.env.EVALS && process.env.EVALS_TIER === 'periodic';
-const describeE2E = shouldRun ? describe : describe.skip;
+const describeE2E = describeE2ETier('periodic');
 
 // Spin up a stub MCP server that responds to initialize + tools/list.
 function startStubMcpServer(opts: { failWithStatus?: number; failBody?: string } = {}): Promise<{ url: string; close: () => Promise<void> }> {

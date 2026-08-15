@@ -41,10 +41,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   statSync,
-  writeFileSync,
 } from "fs";
+import { atomicWriteSync } from "./fs-atomic";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { buildGbrainEnv, NEEDS_SHELL_ON_WINDOWS } from "./gbrain-exec";
@@ -254,9 +253,7 @@ function writeCache(status: LocalEngineStatus, key: CacheEntry["key"]): void {
   };
   try {
     mkdirSync(dirname(cacheFilePath()), { recursive: true });
-    const tmp = cacheFilePath() + ".tmp." + process.pid;
-    writeFileSync(tmp, JSON.stringify(entry, null, 2), "utf-8");
-    renameSync(tmp, cacheFilePath());
+    atomicWriteSync(cacheFilePath(), JSON.stringify(entry, null, 2));
   } catch {
     // Cache write failure is non-fatal — we re-probe next call.
   }

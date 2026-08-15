@@ -1763,13 +1763,6 @@ describe('Codex skill validation', () => {
     expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-codex', 'SKILL.md'))).toBe(false);
   });
 
-  test('/claude skill is external-host-only — no Claude-host variant', () => {
-    // Claude host should not get an outside-voice skill that shells into Claude.
-    expect(fs.existsSync(path.join(ROOT, 'claude', 'SKILL.md'))).toBe(false);
-    // Codex/external hosts should get the generated wrapper.
-    expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-claude', 'SKILL.md'))).toBe(true);
-  });
-
   test('Codex skill names follow gstack-{name} convention', () => {
     const codexDirs = fs.readdirSync(AGENTS_DIR);
     for (const dir of codexDirs) {
@@ -1902,10 +1895,9 @@ describe('no compiled binaries in git', () => {
     // repository size without blocking those fixtures from living in git.
     // Known-good fixtures are exempted from the warning to keep CI logs clean.
     const MAX_BYTES = 2 * 1024 * 1024;
-    const knownLargeFixtures = new Set([
-      // Deterministic replay fixture for BrowseSafe-Bench. The live bench is
-      // expensive; this file is intentionally committed so the gate is free.
-      'browse/test/fixtures/security-bench-haiku-responses.json',
+    const knownLargeFixtures = new Set<string>([
+      // Currently empty — add repo-relative paths of intentionally-committed
+      // large fixtures here with a reason.
     ]);
     const oversized = trackedFiles.flatMap((f: string) => {
       if (knownLargeFixtures.has(f)) return [];
@@ -1932,11 +1924,6 @@ describe('no compiled binaries in git', () => {
   });
 });
 
-// `sidebar agent (#584)` describe block was here. sidebar-agent.ts and
-// the entire chat-queue path were ripped in favor of the interactive
-// claude PTY (terminal-agent.ts); these assertions had no target file.
-// Terminal-pane invariants are covered by browse/test/sidebar-tabs.test.ts
-// and browse/test/terminal-agent.test.ts.
 
 // ─── Browser-skills validation ──────────────────────────────────
 //

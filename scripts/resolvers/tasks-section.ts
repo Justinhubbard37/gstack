@@ -4,7 +4,9 @@
  *   {{TASKS_SECTION_EMIT:<phase>}}     — per-skill task emission + JSONL write
  *   {{TASKS_SECTION_AGGREGATE}}        — autoplan aggregation across all phases
  *
- * Schema for the JSONL artifact lives in scripts/task-emission-schema.ts.
+ * JSONL artifact fields: phase, run_id, branch, commit, id, priority,
+ * component, files, effort_human, effort_cc, title, source_finding
+ * (consumed by /autoplan's aggregator).
  */
 
 import type { TemplateContext, ResolverFn } from './types';

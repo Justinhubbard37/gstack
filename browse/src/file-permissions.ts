@@ -4,8 +4,8 @@
  * Why this exists
  * ----------------
  * POSIX mode bits (`0o600` for files, `0o700` for dirs) are how gstack marks
- * sensitive state files — auth tokens, canary tokens, chat history, agent
- * queue, device salt, per-tab security decisions. On Linux and macOS,
+ * sensitive state files — auth tokens, PTY session state, tab context. On
+ * Linux and macOS,
  * `fs.chmodSync(path, 0o600)` and `fs.writeFileSync(path, data, { mode: 0o600 })`
  * do exactly what you'd hope: the file ends up readable and writable only
  * by the owning user, no access for group / other.

@@ -194,9 +194,14 @@ describe("gstack-decision-search --recent / --scope / datamark", () => {
     expect(out).toContain("alpha"); // NaN slice is a no-op → returns all
   });
   test("--scope filters by scope", () => {
+    // Explicit branch on both sides: CI checks out a detached HEAD, where
+    // gitBranch() returns undefined on log AND search, so an implicit
+    // branch-scoped decision can never surface (filterByScope requires a
+    // matching non-empty ctx.branch). The filter logic is what's under test,
+    // not git branch detection.
     log('{"decision":"repo-call","scope":"repo","source":"user"}');
-    log('{"decision":"branch-call","scope":"branch","source":"user"}');
-    const out = search("--scope branch");
+    log('{"decision":"branch-call","scope":"branch","branch":"feature-x","source":"user"}');
+    const out = search("--scope branch --branch feature-x");
     expect(out).toContain("branch-call");
     expect(out).not.toContain("repo-call");
   });

@@ -17,7 +17,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { safeUnlink, safeKill, isProcessAlive } from './error-handling';
-import { writeSecureFile, mkdirSecure } from './file-permissions';
+import { restrictFilePermissions, mkdirSecure } from './file-permissions';
+import { atomicWriteSync } from '../../lib/fs-atomic';
 
 /**
  * Locate the terminal-agent script on disk. In dev (cli.ts running via
@@ -114,13 +115,13 @@ export function readAgentRecord(stateDir: string): AgentRecord | null {
   }
 }
 
-/** Atomic write. Caller must ensure stateDir exists; agent does this at boot. */
+/** Atomic write (throws on failure — boot must not proceed on a bad record). */
 export function writeAgentRecord(stateDir: string, record: AgentRecord): void {
   try { mkdirSecure(stateDir); } catch {}
   const target = agentRecordPath(stateDir);
-  const tmp = `${target}.tmp-${process.pid}`;
-  writeSecureFile(tmp, JSON.stringify(record));
-  fs.renameSync(tmp, target);
+  atomicWriteSync(target, JSON.stringify(record), { mode: 0o600 });
+  // Windows ACL hardening (POSIX chmod is redundant with mode above).
+  restrictFilePermissions(target);
 }
 
 export function clearAgentRecord(stateDir: string): void {

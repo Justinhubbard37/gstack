@@ -514,8 +514,8 @@ async function ensureServer(flags?: GlobalFlags): Promise<ServerState> {
     return state;
   }
 
-  // BROWSE_NO_AUTOSTART: sidebar agent sets this so the child claude never
-  // spawns an invisible headless browser. If the headed server is down,
+  // BROWSE_NO_AUTOSTART: agent-spawned children (e.g. the terminal-agent PTY
+  // claude) set this so a child never spawns an invisible headless browser. If the headed server is down,
   // fail fast with a clear error instead of silently starting a new one.
   if (process.env.BROWSE_NO_AUTOSTART === '1') {
     console.error('[browse] Server not available and BROWSE_NO_AUTOSTART is set.');
@@ -599,7 +599,7 @@ export function extractTabId(args: string[]): { tabId: number | undefined; args:
 async function sendCommand(state: ServerState, command: string, args: string[], retries = 0): Promise<void> {
   // Precedence: CLI --tab-id flag > BROWSE_TAB env var.
   // make-pdf always passes --tab-id; human users typically rely on BROWSE_TAB
-  // (set by sidebar-agent per-tab) or the active tab.
+  // or the active tab.
   const extracted = extractTabId(args);
   args = extracted.args;
   const envTab = process.env.BROWSE_TAB;
@@ -1167,7 +1167,6 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       const serverEnv: Record<string, string> = {
         BROWSE_HEADED: '1',
         BROWSE_PORT: '34567',
-        BROWSE_SIDEBAR_CHAT: '1',
         // Disable parent-process watchdog: the user controls the headed browser
         // window lifecycle. The CLI exits immediately after connect, so watching
         // it would kill the server ~15s later. Cleanup happens via browser
@@ -1198,10 +1197,6 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       if (process.platform === 'darwin') {
         console.log('(If you still don\'t see it, check Mission Control / other Spaces.)');
       }
-
-      // sidebar-agent.ts spawn was here. Ripped alongside the chat queue —
-      // the Terminal pane runs an interactive PTY now, no more one-shot
-      // claude -p subprocesses to multiplex.
 
       // Auto-start terminal agent (non-compiled bun process). Owns the PTY
       // WebSocket for the sidebar Terminal pane. Routes through the shared

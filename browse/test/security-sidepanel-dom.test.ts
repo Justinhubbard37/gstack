@@ -144,7 +144,7 @@ describe('sidepanel security DOM', () => {
     await installStubsBeforeLoad(page, {
       healthSecurity: {
         status: 'protected',
-        layers: { testsavant: 'ok', transcript: 'ok', canary: 'ok' },
+        layers: { testsavant: 'ok', canary: 'ok' },
       },
     });
     await page.goto(SIDEPANEL_URL);
@@ -168,7 +168,7 @@ describe('sidepanel security DOM', () => {
     await installStubsBeforeLoad(page, {
       healthSecurity: {
         status: 'degraded',
-        layers: { testsavant: 'off', transcript: 'ok', canary: 'ok' },
+        layers: { testsavant: 'off', canary: 'ok' },
       },
     });
     await page.goto(SIDEPANEL_URL);
@@ -204,7 +204,7 @@ describe('sidepanel security DOM', () => {
     await installStubsBeforeLoad(page, {
       healthSecurity: {
         status: 'protected',
-        layers: { testsavant: 'ok', transcript: 'ok', canary: 'ok' },
+        layers: { testsavant: 'ok', canary: 'ok' },
       },
       securityEntries: [securityEntry],
     });
@@ -254,7 +254,7 @@ describe('sidepanel security DOM', () => {
     const context = await browser!.newContext();
     const page = await context.newPage();
     await installStubsBeforeLoad(page, {
-      healthSecurity: { status: 'protected', layers: { testsavant: 'ok', transcript: 'ok', canary: 'ok' } },
+      healthSecurity: { status: 'protected', layers: { testsavant: 'ok', canary: 'ok' } },
       securityEntries: [entry],
     });
     await page.goto(SIDEPANEL_URL);
@@ -299,7 +299,7 @@ describe('sidepanel security DOM', () => {
     const context = await browser!.newContext();
     const page = await context.newPage();
     await installStubsBeforeLoad(page, {
-      healthSecurity: { status: 'protected', layers: { testsavant: 'ok', transcript: 'ok', canary: 'ok' } },
+      healthSecurity: { status: 'protected', layers: { testsavant: 'ok', canary: 'ok' } },
       securityEntries: [entry],
     });
     await page.goto(SIDEPANEL_URL);
@@ -337,7 +337,7 @@ describe('sidepanel security DOM', () => {
     const context = await browser!.newContext();
     const page = await context.newPage();
     await installStubsBeforeLoad(page, {
-      healthSecurity: { status: 'protected', layers: { testsavant: 'ok', transcript: 'ok', canary: 'ok' } },
+      healthSecurity: { status: 'protected', layers: { testsavant: 'ok', canary: 'ok' } },
       securityEntries: [entry],
     });
     await page.goto(SIDEPANEL_URL);

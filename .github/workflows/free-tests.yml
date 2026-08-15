@@ -63,6 +63,9 @@ jobs:
           git config --global user.email "free-tests-ci@gstack.test"
           git config --global user.name "Free Tests CI"
           git config --global init.defaultBranch main
+          # Some tests run git against the checkout itself; CI checkouts can be
+          # owned by a different uid than the runner user.
+          git config --global --add safe.directory '*'
 
       - name: Generate host SKILL.md outputs (.agents, .factory)
         # Golden-file tests read generated host outputs that are gitignored.

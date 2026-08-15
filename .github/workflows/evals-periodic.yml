@@ -91,11 +91,6 @@ jobs:
           # here; an all-skip shard would just burn a container boot weekly.
           - name: e2e-workflow
             file: test/skill-e2e-workflow.test.ts
-          # Rehomed from the deleted pre-split monolith: the SDK-harness
-          # ship-idempotency check (periodic; the real-PTY variant runs via
-          # the periodic sharded runner).
-          - name: e2e-ship-idempotency-sdk
-            file: test/skill-e2e-ship-idempotency-sdk.test.ts
           - name: e2e-routing
             file: test/skill-routing-e2e.test.ts
           - name: e2e-codex

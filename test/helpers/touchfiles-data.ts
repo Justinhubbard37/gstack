@@ -284,7 +284,6 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Plan completion audit + verification
   'ship-plan-completion': ['ship/**', 'scripts/gen-skill-docs.ts'],
   'ship-plan-verification': ['ship/**', 'qa-only/**', 'scripts/gen-skill-docs.ts'],
-  'ship-idempotency':       ['ship/**', 'scripts/resolvers/utility.ts'],
   'review-plan-completion': ['review/**', 'scripts/gen-skill-docs.ts'],
 
   // Design
@@ -316,10 +315,6 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'benchmark-workflow':            ['benchmark/**', 'browse/src/**'],
   'setup-deploy-workflow':         ['setup-deploy/**', 'scripts/gen-skill-docs.ts'],
 
-  // Sidebar agent
-  'sidebar-navigate':              ['browse/src/server.ts', 'browse/src/sidebar-agent.ts', 'browse/src/sidebar-utils.ts', 'extension/**'],
-  'sidebar-url-accuracy':          ['browse/src/server.ts', 'browse/src/sidebar-agent.ts', 'browse/src/sidebar-utils.ts', 'extension/background.js'],
-  'sidebar-css-interaction':       ['browse/src/server.ts', 'browse/src/sidebar-agent.ts', 'browse/src/write-commands.ts', 'browse/src/read-commands.ts', 'browse/src/cdp-inspector.ts', 'extension/**'],
 
   // Autoplan
   'autoplan-core':  ['autoplan/**', 'plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**'],
@@ -648,7 +643,6 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'ship-triage': 'gate',
   'ship-plan-completion': 'gate',
   'ship-plan-verification': 'gate',
-  'ship-idempotency': 'periodic',
 
   // Retro — gate for cheap branch detection, periodic for full Opus retro
   'retro': 'periodic',
@@ -702,10 +696,6 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'benchmark-workflow': 'gate',
   'setup-deploy-workflow': 'gate',
 
-  // Sidebar agent
-  'sidebar-navigate': 'periodic',
-  'sidebar-url-accuracy': 'periodic',
-  'sidebar-css-interaction': 'periodic',
 
   // Autoplan — periodic (not yet implemented)
   'autoplan-core': 'periodic',
@@ -776,7 +766,6 @@ export const LLM_JUDGE_TOUCHFILES: Record<string, string[]> = {
   'plan-eng-review/SKILL.md sections':    ['plan-eng-review/SKILL.md', 'plan-eng-review/SKILL.md.tmpl'],
 
   // /spec authored-spec quality (paid LLM-judge — periodic-tier).
-  'spec authored quality':                ['spec/SKILL.md', 'spec/SKILL.md.tmpl', 'test/fixtures/spec/**'],
   'plan-design-review/SKILL.md passes':   ['plan-design-review/SKILL.md', 'plan-design-review/SKILL.md.tmpl'],
 
   // Design skills

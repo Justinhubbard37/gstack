@@ -297,48 +297,15 @@ Original body content here.
   });
 });
 
-describe('proactive-suggestions.json determinism (regression for v1.45.0.0 CI freshness fail)', () => {
-  test('committed JSON keys are alphabetically sorted', () => {
-    // Reads the actual committed file at scripts/proactive-suggestions.json
-    // and verifies sort order. Catches regressions to non-sorted output.
+describe('proactive-suggestions.json stays retired', () => {
+  test('the generator no longer emits scripts/proactive-suggestions.json', () => {
+    // The aggregated routing registry was removed (no consumer ever read it).
+    // If someone re-adds the emitter, this pins the decision to delete it —
+    // reintroduce only with an actual consumer, and restore the determinism
+    // tests (sorted keys, root keyed as "gstack", no timestamp fields) that
+    // lived here before.
     const fs = require('fs');
     const path = require('path');
-    const json = JSON.parse(
-      fs.readFileSync(path.join(__dirname, '..', 'scripts', 'proactive-suggestions.json'), 'utf-8'),
-    );
-    const keys = Object.keys(json.skills);
-    const sorted = [...keys].sort();
-    expect(keys).toEqual(sorted);
-  });
-
-  test('root skill is keyed as "gstack" (not the checkout directory name)', () => {
-    // Catches the bug where the root SKILL.md.tmpl's catalog parts get
-    // registered under the directory basename ("seville-v3" in a Conductor
-    // worktree, "gstack" on CI).
-    const fs = require('fs');
-    const path = require('path');
-    const json = JSON.parse(
-      fs.readFileSync(path.join(__dirname, '..', 'scripts', 'proactive-suggestions.json'), 'utf-8'),
-    );
-    expect(json.skills).toHaveProperty('gstack');
-    // The directory the test runs in must NOT appear as a key.
-    const repoDir = path.basename(path.resolve(__dirname, '..'));
-    if (repoDir !== 'gstack') {
-      expect(json.skills).not.toHaveProperty(repoDir);
-    }
-  });
-
-  test('schema + catalog_mode + note fields are stable', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const json = JSON.parse(
-      fs.readFileSync(path.join(__dirname, '..', 'scripts', 'proactive-suggestions.json'), 'utf-8'),
-    );
-    expect(json).toHaveProperty('$schema');
-    expect(json.catalog_mode).toBe('trim');
-    expect(typeof json.note).toBe('string');
-    // No timestamp field — those cause flapping CI freshness checks.
-    expect(json).not.toHaveProperty('generated_at');
-    expect(json).not.toHaveProperty('timestamp');
+    expect(fs.existsSync(path.join(__dirname, '..', 'scripts', 'proactive-suggestions.json'))).toBe(false);
   });
 });

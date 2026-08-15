@@ -22,7 +22,8 @@
  *
  * Run a subset in the foreground with AUQ_MATRIX_ONLY="plan-eng-review,cso".
  */
-import { describe, test } from 'bun:test';
+import { test } from 'bun:test';
+import { describeE2ETier } from './helpers/e2e-gate';
 import * as fs from 'node:fs';
 import {
   setupSkillDir,
@@ -32,8 +33,7 @@ import {
   gradeAuqRecommendation,
 } from './helpers/auq-sdk-capture';
 
-const shouldRun = !!process.env.EVALS && process.env.EVALS_TIER === 'periodic';
-const describeE2E = shouldRun ? describe : describe.skip;
+const describeE2E = describeE2ETier('periodic');
 const runId = `auq-matrix-${process.env.EVALS_RUN_ID ?? 'local'}`;
 const ONLY = (process.env.AUQ_MATRIX_ONLY ?? '').split(',').map(s => s.trim()).filter(Boolean);
 

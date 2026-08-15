@@ -11,12 +11,11 @@
  *   4. Does NOT append a duplicate CHANGELOG [0.0.2] entry
  *   5. Does NOT create a new "chore: bump version" commit
  *
- * Why real-PTY: the ship-idempotency test in
- * test/skill-e2e-ship-idempotency-sdk.test.ts uses the SDK harness with a
- * synthetic prompt asking the agent to "run
- * ONLY the idempotency checks." This test exercises the actual /ship
- * skill end-to-end against a real git fixture so a regression that
- * silently re-bumps despite the check passing would be caught.
+ * Why real-PTY: the old SDK-harness ship-idempotency variant (removed in
+ * v1.64.1.0 as redundant with this test) used a synthetic prompt asking
+ * the agent to "run ONLY the idempotency checks." This test exercises the
+ * actual /ship skill end-to-end against a real git fixture so a regression
+ * that silently re-bumps despite the check passing would be caught.
  *
  * Plan-mode framing: we run /ship in plan mode so the agent cannot push,
  * commit, or open PRs. The Step 12 idempotency check is read-only
@@ -31,7 +30,8 @@
  * Cost: ~$2-4/run. Periodic tier — long, runs weekly.
  */
 
-import { describe, test, expect } from 'bun:test';
+import { test, expect } from 'bun:test';
+import { describeE2ETier } from './helpers/e2e-gate';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -42,8 +42,7 @@ import {
   isNumberedOptionListVisible,
 } from './helpers/claude-pty-runner';
 
-const shouldRun = !!process.env.EVALS && process.env.EVALS_TIER === 'periodic';
-const describeE2E = shouldRun ? describe : describe.skip;
+const describeE2E = describeE2ETier('periodic');
 
 interface ShipFixture {
   workTree: string;

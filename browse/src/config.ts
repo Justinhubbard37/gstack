@@ -191,7 +191,8 @@ export function resolveGstackHome(): string {
  * Resolve the Chromium profile directory.
  *
  * Resolution order:
- *   1. `explicit` arg (passed via ServerConfig.chromiumProfile by embedders)
+ *   1. `explicit` arg (no production caller passes one today; kept for
+ *      direct programmatic use)
  *   2. CHROMIUM_PROFILE env (used by gbrowser's gbd per-workspace)
  *   3. <resolveGstackHome()>/chromium-profile (default)
  */

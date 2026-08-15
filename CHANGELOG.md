@@ -1,5 +1,142 @@
 # Changelog
 
+## [1.64.1.0] - 2026-08-15
+
+**Every guard in the pipeline now provably fires.**
+**And the codebase stopped describing features it doesn't have.**
+
+This release is a fix wave over the parts of gstack that earlier-generation
+models wrote and later rips left behind. The free test suite now runs in CI
+with per-file isolation, all ten host outputs are gated on every push, the
+tunnel security allowlist matches the endpoints that exist, and the security
+documentation describes the defenses that actually run. One template bug fix
+alone cut 46KB from /spec's skill file, and eight utility skills stopped
+carrying onboarding prose written for a different tier. Net: 24,943 lines
+lighter across 183 files.
+
+### The numbers that matter
+
+Source: this branch's verification runs (`bun test` per-file, `bun run
+gen:skill-docs --host all`, the JSON config dump-diff) and `git diff
+origin/main...HEAD --stat`.
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| Free test files running in CI | 0 | 358, one process per file | truncation impossible by construction |
+| Host doc-freshness gates that can fail | 1 of 10 | 10 of 10 | two gates diffed gitignored paths |
+| spec/SKILL.md | 127,462 bytes | 80,924 bytes | one preamble, not two |
+| hosts/*.ts config code | 595 lines | 285 lines | defineHost() factory, byte-identical output |
+| Eval tier-gate implementations | ~40 drifted copies, 6 predicates | 1 | the unset-tier trap is pinned forever |
+| Net repo size | baseline | -24,943 lines | 24 files deleted outright |
+
+The tier table is the one to feel: `/scrape`, `/diagram`, and the browser
+launchers each shed 271 lines of preamble they inherited from a silent
+default. Skills now declare their tier or the generator refuses to build.
+
+### What this means for gstack users
+
+Skill invocations for the trimmed utilities load less prose into your context
+window, /spec loads 46KB lighter, and a red test in this repo now means a red
+check on the PR that caused it, every time, on every host. If you maintain a
+fork or embed the browse daemon: two ServerConfig fields that never worked
+(idleTimeoutMs, chromiumProfile) are gone rather than lying, and
+GSTACK_SECURITY_ENSEMBLE no longer exists as a knob. Upgrade normally; no
+migration needed.
+
+### Itemized changes
+
+#### Fixed
+- CI: the skill-docs freshness gate covers all 10 hosts through one
+  `gen:skill-docs --host all` pass plus a tracked-drift diff and an
+  untracked-strays check. The Codex and Factory gates previously diffed
+  gitignored paths, which always pass.
+- CI: new Free Tests workflow runs the whole free suite (358 files) with one
+  bun process per file on the prebaked toolchain image. Per-file isolation
+  sidesteps two observed silent-truncation modes (a process.exit race in
+  server-lifecycle tests, and co-run module-state bleed) and the historical
+  Bun exit-0-on-module-load-error behavior.
+- Security: removed the deleted /sidebar-chat endpoint from TUNNEL_PATHS,
+  the audited tunnel attack surface. The set is now exactly /connect and
+  /command, and the closed-set pin test enforces that.
+- Security: deleted chain's unreachable direct-dispatch fallback, which
+  routed commands without scope, domain, tab-ownership, rate-limit, or
+  JS-origin checks. The JS-origin assertion in read commands is now
+  unconditional.
+- Security: page-content logs (console, network, dialog, command audit) go
+  through appendSecureFile, gaining owner-only permissions from creation on
+  every platform.
+- Stealth: the headless-to-headed handoff path uses the shared Chromium
+  profile resolution and singleton-lock cleanup instead of a hardcoded path
+  that ignored CHROMIUM_PROFILE and GSTACK_HOME.
+- Generator: /spec's skill file rendered its entire preamble twice because
+  template prose mentioned a placeholder literally. Fixed; 46,538 bytes
+  removed from the generated file.
+- Generator: preamble tiers are declared per skill and a missing declaration
+  is a build error. Eight skills that silently defaulted to the heaviest
+  tier now carry the right one (scrape, diagram, the browser launchers at
+  tier 1; landing-report, pair-agent, skillify at tier 2; spec at tier 3).
+- Generator: learningsMode is read from host config instead of a hardcoded
+  host check, so the seven basic-mode hosts get the project-scoped learnings
+  flow their runtimes can execute.
+- Test selection: touchfile dependency paths are validated against disk (the
+  guard caught four rotted entries on its first run), and the eval-watch
+  dashboard reads partial results from the directory the collector writes.
+- Eval gating: one describeE2ETier implementation replaces ~40 drifted
+  copies. The sharded paid runner's pre-spawn classifier understands the new
+  shape, so gate runs no longer pay for periodic shard startup.
+
+#### Changed
+- hosts/*.ts declare only what differs per host; defineHost() derives the
+  rest. Proven byte-identical via a JSON dump-diff of all ten configs and a
+  zero-diff regeneration.
+- pty-session-cookie and sse-session-cookie share one session-registry
+  implementation with separate token spaces; the terminal agent uses the
+  shared cookie parser.
+- One lone-surrogate sanitizer and one sanitizeReplacer live in sanitize.ts;
+  one startTunnel() owns the ngrok start sequence that existed three times.
+- lib/fs-atomic.ts is the single atomic-write implementation (pid+random
+  tmp suffix, throw and quiet variants, mode-at-create). lib and browse
+  call sites migrated, including a latent deterministic-tmp collision race
+  in the worktree dedup index.
+- lib/jsonl-store.ts documents its real contract (callers screen for
+  injection patterns; the enforcing callers are named), gains a mode option,
+  and the lib-side bypass appenders now use it.
+
+#### Removed
+- The dead ML security layers: the Haiku transcript classifier and the
+  DeBERTa ensemble (GSTACK_SECURITY_ENSEMBLE), which had no production
+  callers, plus their paid benchmark suite and fixtures. The live path is
+  the testsavant content scan in the security sidecar. CLAUDE.md and
+  BROWSER.md now document exactly that.
+- Five HostConfig fields nothing read (metadataFormat, sidecar, prefixable,
+  staticFiles, adapter) and the fully dead openclaw-adapter module.
+- Seven registered template placeholders no template used, the never-adopted
+  gated-resolver mechanism, and the codex-helpers shadow module whose stale
+  copy silently lost to a local redeclaration.
+- Two ServerConfig fields that were documented but never read (idleTimeoutMs,
+  chromiumProfile); BROWSE_IDLE_TIMEOUT and CHROMIUM_PROFILE env remain the
+  working knobs.
+- proactive-suggestions.json (31KB regenerated on every build, read by
+  nothing), two zero-caller bin
+  scripts (gstack-open-url, gstack-platform-detect), an orphaned schema
+  module, three orphaned test fixtures (including a 128KB golden that had
+  drifted 46KB from its live successor), and a superseded duplicate of the
+  ship-idempotency eval.
+- ~2,000 lines of tests that exercised deleted features: two files that
+  crashed at import reading a source file deleted 48 versions ago, a
+  whole dead-endpoint integration file, and 20 describes of chat-pipeline
+  UX pins inside sidebar-ux.test.ts (its live coverage remains, now green).
+
+#### For contributors
+- setup accepts --host cursor and --host slate (the hand-rolled allowlists
+  had drifted from hosts/index.ts).
+- The openclaw CLAUDE.md variants are real template files under
+  openclaw/templates/ instead of string literals inside the generator.
+- Ghost comments describing sidebar-agent.ts as a live process are scrubbed
+  from 10 files; server.ts tombstone blocks enumerating deleted identifiers
+  are gone.
+- docs/ADDING_A_HOST.md teaches the defineHost pattern.
+
 ## [1.64.0.0] - 2026-08-14
 
 **Ninety fixes in one wave. Every guard that said it was protecting you now actually does.**

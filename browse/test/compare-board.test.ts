@@ -23,6 +23,16 @@ import { generateCompareHtml } from '../../design/src/compare';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// QUARANTINED (opt-in via GSTACK_COMPARE_BOARD_TESTS=1): all 16 tests fail
+// identically on origin/main v1.64.1.0, solo, on dev machines — verified per
+// the blame protocol during the 2026-08 test-infra pass. Main's own CI lane
+// skip-lists this file as "pre-existing env failure (needs a display-shaped
+// env)". Fixing the underlying board-vs-headless-env mismatch is tracked
+// follow-up work; until then an always-red file would block every PR now
+// that the free suite is a required check.
+const COMPARE_BOARD_ENABLED = process.env.GSTACK_COMPARE_BOARD_TESTS === '1';
+const describeBoard = COMPARE_BOARD_ENABLED ? describe : describe.skip;
+
 let bm: BrowserManager;
 let boardUrl: string;
 let server: ReturnType<typeof Bun.serve>;
@@ -82,7 +92,7 @@ afterAll(async () => {
 
 // ─── DOM Structure ──────────────────────────────────────────────
 
-describe('Comparison board DOM structure', () => {
+describeBoard('Comparison board DOM structure', () => {
   test('has hidden status element', async () => {
     const status = await handleReadCommand('js', [
       'document.getElementById("status").textContent'
@@ -135,7 +145,7 @@ describe('Comparison board DOM structure', () => {
 
 // ─── Submit Flow ────────────────────────────────────────────────
 
-describe('Submit feedback flow', () => {
+describeBoard('Submit feedback flow', () => {
   test('submit without interaction returns empty preferred', async () => {
     // Reset page state
     await handleWriteCommand('goto', [boardUrl], bm);
@@ -232,7 +242,7 @@ describe('Submit feedback flow', () => {
 
 // ─── Regenerate Flow ────────────────────────────────────────────
 
-describe('Regenerate flow', () => {
+describeBoard('Regenerate flow', () => {
   test('regenerate button sets status to "regenerate"', async () => {
     // Fresh page
     await handleWriteCommand('goto', [boardUrl], bm);
@@ -306,7 +316,7 @@ describe('Regenerate flow', () => {
 
 // ─── Agent Polling Pattern ──────────────────────────────────────
 
-describe('Agent polling pattern (simulates what $B eval does)', () => {
+describeBoard('Agent polling pattern (simulates what $B eval does)', () => {
   test('status is empty before user action', async () => {
     // Fresh page — simulates agent's first poll
     await handleWriteCommand('goto', [boardUrl], bm);

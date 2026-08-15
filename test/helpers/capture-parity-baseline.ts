@@ -22,6 +22,14 @@ import { execSync } from 'child_process';
 
 export interface SkillBaselineEntry {
   skill: string;
+  /**
+   * SKILL.md file bytes as captured. NOTE for rebaselines: the parity harness
+   * compares UNION bytes (skeleton + sections/*.md) against this field, so a
+   * committed baseline fixture must have carved skills' entries normalized to
+   * union size (skeleton + sum of sections/*.md) or every carved skill reads
+   * as 1.2-1.4x over on day one. The v1.57.7.0 and v1.64.1.0 fixtures are
+   * union-normalized.
+   */
   skillMdBytes: number;
   skillMdLines: number;
   estTokens: number; // ~4 chars/token heuristic

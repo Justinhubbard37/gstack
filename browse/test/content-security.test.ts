@@ -124,6 +124,16 @@ describe('Content filter hooks', () => {
     clearContentFilters();
   });
 
+  // clearContentFilters() wipes MODULE state shared across every test file in
+  // the same bun process — without restoring the built-in registration,
+  // security-integration.test.ts (which asserts the auto-registered blocklist
+  // pipeline) fails whenever the two files co-run. Pre-existing co-run bug,
+  // invisible until the free suite got a CI job.
+  afterAll(() => {
+    clearContentFilters();
+    registerContentFilter(urlBlocklistFilter);
+  });
+
   test('URL blocklist detects requestbin', () => {
     const result = urlBlocklistFilter('', 'https://requestbin.com/r/abc', 'text');
     expect(result.safe).toBe(false);

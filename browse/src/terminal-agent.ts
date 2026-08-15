@@ -3,8 +3,8 @@
  * sidebar. Translates the phoenix gbrowser PTY (cmd/gbd/terminal.go) into
  * Bun, with a few changes informed by codex's outside-voice review:
  *
- *  - Lives in a separate non-compiled bun process from sidebar-agent.ts so
- *    a bug in WS framing or PTY cleanup can't take down the chat path.
+ *  - Lives in a separate non-compiled bun process from the browse daemon so
+ *    a bug in WS framing or PTY cleanup can't take down the command surface.
  *  - Binds 127.0.0.1 only — never on the dual-listener tunnel surface.
  *  - Origin validation on the WS upgrade is REQUIRED (not defense-in-depth)
  *    because a localhost shell WS is a real cross-site WebSocket-hijacking
@@ -23,9 +23,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { writeSecureFile, mkdirSecure } from './file-permissions';
+import { writeSecureFile, restrictFilePermissions, mkdirSecure } from './file-permissions';
+import { atomicWriteSync, atomicWriteQuiet } from '../../lib/fs-atomic';
 import { safeUnlink } from './error-handling';
 import { writeAgentRecord, clearAgentRecord } from './terminal-agent-control';
+import { extractPtyCookie } from './pty-session-cookie';
 
 const STATE_FILE = process.env.BROWSE_STATE_FILE || path.join(process.env.HOME || '/tmp', '.gstack', 'browse.json');
 const PORT_FILE = path.join(path.dirname(STATE_FILE), 'terminal-port');
@@ -271,12 +273,9 @@ function writeClaudeAvailable(): void {
     checked_at: new Date().toISOString(),
   };
   const target = path.join(stateDir, 'claude-available.json');
-  const tmp = path.join(stateDir, `.tmp-claude-${process.pid}`);
-  try {
-    writeSecureFile(tmp, JSON.stringify(status, null, 2));
-    fs.renameSync(tmp, target);
-  } catch {
-    safeUnlink(tmp);
+  // Fire-and-forget state file: a failed write must not break boot.
+  if (atomicWriteQuiet(target, JSON.stringify(status, null, 2), { mode: 0o600 })) {
+    restrictFilePermissions(target); // Windows ACL hardening
   }
 }
 
@@ -612,17 +611,13 @@ function buildServer() {
         }
 
         // Fallback: Cookie gstack_pty (legacy / non-browser callers).
+        // Parsing is shared with the server via extractPtyCookie; VALIDATION
+        // deliberately stays against the agent's own validTokens map — the
+        // server's registry lives in a different process.
         if (!token) {
-          const cookieHeader = req.headers.get('cookie') || '';
-          for (const part of cookieHeader.split(';')) {
-            const [name, ...rest] = part.trim().split('=');
-            if (name === 'gstack_pty') {
-              const candidate = rest.join('=') || null;
-              if (candidate && validTokens.has(candidate)) {
-                token = candidate;
-              }
-              break;
-            }
+          const candidate = extractPtyCookie(req);
+          if (candidate && validTokens.has(candidate)) {
+            token = candidate;
           }
         }
 
@@ -887,12 +882,10 @@ function handleTabState(msg: {
       })),
     };
     const target = path.join(stateDir, 'tabs.json');
-    const tmp = path.join(stateDir, `.tmp-tabs-${process.pid}`);
-    try {
-      writeSecureFile(tmp, JSON.stringify(payload, null, 2));
-      fs.renameSync(tmp, target);
-    } catch {
-      safeUnlink(tmp);
+    // Fire-and-forget state file: atomic write (via lib/fs-atomic) so
+    // claude never reads a half-written JSON document; failures swallowed.
+    if (atomicWriteQuiet(target, JSON.stringify(payload, null, 2), { mode: 0o600 })) {
+      restrictFilePermissions(target); // Windows ACL hardening
     }
   }
 
@@ -902,17 +895,12 @@ function handleTabState(msg: {
   const active = msg.active;
   if (active && active.url && !active.url.startsWith('chrome://') && !active.url.startsWith('chrome-extension://')) {
     const ctxFile = path.join(stateDir, 'active-tab.json');
-    const tmp = path.join(stateDir, `.tmp-tab-${process.pid}`);
-    try {
-      writeSecureFile(tmp, JSON.stringify({
-        tabId: active.tabId ?? null,
-        url: active.url,
-        title: active.title ?? '',
-      }));
-      fs.renameSync(tmp, ctxFile);
-    } catch {
-      safeUnlink(tmp);
-    }
+    const ok = atomicWriteQuiet(ctxFile, JSON.stringify({
+      tabId: active.tabId ?? null,
+      url: active.url,
+      title: active.title ?? '',
+    }), { mode: 0o600 });
+    if (ok) restrictFilePermissions(ctxFile); // Windows ACL hardening
   }
 }
 
@@ -922,17 +910,13 @@ function handleTabSwitch(msg: { tabId?: number; url?: string; title?: string }):
 
   const stateDir = path.dirname(STATE_FILE);
   const ctxFile = path.join(stateDir, 'active-tab.json');
-  const tmp = path.join(stateDir, `.tmp-tab-${process.pid}`);
-  try {
-    writeSecureFile(tmp, JSON.stringify({
-      tabId: msg.tabId ?? null,
-      url,
-      title: msg.title ?? '',
-    }));
-    fs.renameSync(tmp, ctxFile);
-  } catch {
-    safeUnlink(tmp);
-  }
+  // Fire-and-forget: atomic write via lib/fs-atomic, failures swallowed.
+  const ok = atomicWriteQuiet(ctxFile, JSON.stringify({
+    tabId: msg.tabId ?? null,
+    url,
+    title: msg.title ?? '',
+  }), { mode: 0o600 });
+  if (ok) restrictFilePermissions(ctxFile); // Windows ACL hardening
 
   // Best-effort sync to parent server so its activeTabId tracking matches.
   // No await; this is fire-and-forget.
@@ -970,11 +954,11 @@ function main() {
   }
 
   // Write port file atomically so the parent server can pick it up.
+  // Throws on failure — a boot without a discoverable port file is broken.
   const dir = path.dirname(PORT_FILE);
   try { mkdirSecure(dir); } catch {}
-  const tmp = `${PORT_FILE}.tmp-${process.pid}`;
-  writeSecureFile(tmp, String(port));
-  fs.renameSync(tmp, PORT_FILE);
+  atomicWriteSync(PORT_FILE, String(port), { mode: 0o600 });
+  restrictFilePermissions(PORT_FILE); // Windows ACL hardening
 
   // Write identity-based agent record (pid + per-boot gen). Replaces the
   // v1.43- `pkill -f terminal-agent\.ts` regex teardown that could kill
