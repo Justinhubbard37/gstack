@@ -50,7 +50,7 @@
  *   bun run scripts/test-paid-shards.ts --timeout 600 --jobs 2
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { normalizeRelativePath } from './test-free-shards';
@@ -430,8 +430,8 @@ export async function runPaidShard(
   let exitCode: number | null = null;
   try {
     const streams: Array<Promise<void>> = [];
-    if (child.stdout) streams.push(forwardAndClassify(child.stdout, sink(process.stdout), classifier));
-    if (child.stderr) streams.push(forwardAndClassify(child.stderr, sink(process.stderr), classifier));
+    if (child.stdout) streams.push(forwardAndClassify(child.stdout, sink(process.stdout), classifier, 'stdout'));
+    if (child.stderr) streams.push(forwardAndClassify(child.stderr, sink(process.stderr), classifier, 'stderr'));
     exitCode = await new Promise<number | null>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code) => resolve(code));

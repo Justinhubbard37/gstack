@@ -58,4 +58,28 @@ describe('BunTestOutputClassifier', () => {
     // passes: 1 file ran, which is what was expected
     expect(strictTestExitCode(0, summary, 1)).toBe(0);
   });
+
+  // stdout and stderr are independent pipes: a chunk from one can land
+  // between two halves of a line from the other. A single shared buffer
+  // glues the fragments into garbled lines — a sheared (fail) line goes
+  // uncounted (defeating the exit-0-with-failures backstop) and a sheared
+  // summary reads as truncation. Per-origin buffers keep each stream whole.
+  it('a stderr chunk arriving mid-stdout-line does not shear either line', () => {
+    const c = new BunTestOutputClassifier();
+    c.write('some stdout noise without a newline yet', 'stdout');
+    c.write('[31m(fail) planted [0.10ms][0m\n', 'stderr');
+    c.write(' ...rest of the stdout line\n', 'stdout');
+    const summary = c.end();
+    expect(summary.failedTests).toBe(1);
+  });
+
+  it('a terminal summary split around a cross-stream chunk still counts', () => {
+    const c = new BunTestOutputClassifier();
+    c.write('Ran 4 tests acr', 'stdout');
+    c.write('stderr diagnostics line\n', 'stderr');
+    c.write('oss 2 files. [1.00s]\n', 'stdout');
+    const summary = c.end();
+    expect(summary.terminalFileCounts).toEqual([2]);
+    expect(strictTestExitCode(0, summary, 2)).toBe(0);
+  });
 });

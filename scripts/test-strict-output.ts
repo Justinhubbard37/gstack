@@ -155,25 +155,39 @@ export function parseBunTerminalSummaryLine(rawLine: string): number | null {
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
-/** Incrementally classifies output without assuming process chunks align to lines. */
+/**
+ * Incrementally classifies output without assuming process chunks align to
+ * lines. Buffers are PER ORIGIN: stdout and stderr are independent pipes, so
+ * a chunk from one can arrive between two halves of a line from the other.
+ * A single shared buffer would glue those fragments into garbled lines — a
+ * sheared `(fail)` line goes uncounted and a sheared terminal summary reads
+ * as truncation. Counters are shared; only line assembly is per-stream.
+ */
+export type ClassifierOrigin = 'stdout' | 'stderr';
+
 export class BunTestOutputClassifier {
-  private readonly decoder = new StringDecoder('utf8');
-  private pending = '';
+  private readonly decoders: Record<ClassifierOrigin, StringDecoder> = {
+    stdout: new StringDecoder('utf8'),
+    stderr: new StringDecoder('utf8'),
+  };
+  private pending: Record<ClassifierOrigin, string> = { stdout: '', stderr: '' };
   private failedTests = 0;
   private unhandledBetweenTests = 0;
   private terminalFileCounts: number[] = [];
 
-  write(chunk: Uint8Array | string): void {
-    this.pending += typeof chunk === 'string'
+  write(chunk: Uint8Array | string, origin: ClassifierOrigin = 'stdout'): void {
+    this.pending[origin] += typeof chunk === 'string'
       ? chunk
-      : this.decoder.write(Buffer.from(chunk));
-    this.consumeCompleteLines();
+      : this.decoders[origin].write(Buffer.from(chunk));
+    this.consumeCompleteLines(origin);
   }
 
   end(): BunTestOutputSummary {
-    this.pending += this.decoder.end();
-    if (this.pending.length > 0) this.classify(this.pending);
-    this.pending = '';
+    for (const origin of ['stdout', 'stderr'] as const) {
+      this.pending[origin] += this.decoders[origin].end();
+      if (this.pending[origin].length > 0) this.classify(this.pending[origin]);
+      this.pending[origin] = '';
+    }
     return this.summary();
   }
 
@@ -185,12 +199,12 @@ export class BunTestOutputClassifier {
     };
   }
 
-  private consumeCompleteLines(): void {
-    let newline = this.pending.indexOf('\n');
+  private consumeCompleteLines(origin: ClassifierOrigin): void {
+    let newline = this.pending[origin].indexOf('\n');
     while (newline !== -1) {
-      this.classify(this.pending.slice(0, newline));
-      this.pending = this.pending.slice(newline + 1);
-      newline = this.pending.indexOf('\n');
+      this.classify(this.pending[origin].slice(0, newline));
+      this.pending[origin] = this.pending[origin].slice(newline + 1);
+      newline = this.pending[origin].indexOf('\n');
     }
   }
 
@@ -227,10 +241,11 @@ export function forwardAndClassify(
   stream: NodeJS.ReadableStream,
   destination: NodeJS.WriteStream,
   classifier: BunTestOutputClassifier,
+  origin: ClassifierOrigin = 'stdout',
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     stream.on('data', (chunk: Buffer | string) => {
-      classifier.write(chunk);
+      classifier.write(chunk, origin);
       destination.write(chunk);
     });
     stream.on('end', resolve);
