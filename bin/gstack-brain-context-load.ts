@@ -34,9 +34,9 @@
  *   gstack-brain-context-load --quiet
  */
 
-import { existsSync, readFileSync, statSync, readdirSync } from "fs";
-import { join, dirname, basename, resolve } from "path";
-import { execFileSync, spawnSync } from "child_process";
+import { existsSync, readFileSync, statSync, readdirSync, accessSync, constants } from "fs";
+import { join, dirname, basename, resolve, delimiter } from "path";
+import { spawnSync } from "child_process";
 import { homedir } from "os";
 
 import { parseSkillManifest, type GbrainManifest, type GbrainManifestQuery, withErrorContext } from "../lib/gstack-memory-helpers";
@@ -68,7 +68,9 @@ interface QueryResult {
 
 const HOME = homedir();
 const GSTACK_HOME = process.env.GSTACK_HOME || join(HOME, ".gstack");
-const MCP_TIMEOUT_MS = 500;
+// 500ms hard cap per Section 1C; overridable for slow/loaded environments
+// (test harnesses under CI load, cold CLI starts).
+const MCP_TIMEOUT_MS = Math.max(1, parseInt(process.env.GSTACK_BRAIN_TIMEOUT_MS || "", 10) || 500);
 const PAGE_SIZE_CAP = 10 * 1024; // 10KB per query result before truncation
 
 // ── CLI ────────────────────────────────────────────────────────────────────
@@ -190,26 +192,28 @@ function resolveSkillFile(args: CliArgs): string | null {
 
 // ── Dispatchers ────────────────────────────────────────────────────────────
 
-// Memoized: availability can't change mid-invocation, and the per-query
-// re-probe was both wasteful (N probes per run) and load-flaky — a cold
-// `gbrain --version` on a saturated box can exceed the 500ms budget, branding
-// gbrain "missing" for one query while its siblings succeed (observed under
-// the parallel free-suite runner: SKIP at dur=505ms with two OKs after it).
-let _gbrainAvailable: boolean | null = null;
+let gbrainOnPath: boolean | null = null;
+
 function gbrainAvailable(): boolean {
-  if (_gbrainAvailable !== null) return _gbrainAvailable;
-  try {
-    execFileSync("gbrain", ["--version"], {
-      stdio: "ignore",
-      // Generous first-probe budget: this runs ONCE, and a slow-to-start CLI
-      // is not a missing CLI. Query calls keep the tight MCP_TIMEOUT_MS.
-      timeout: 5_000,
-    });
-    _gbrainAvailable = true;
-  } catch {
-    _gbrainAvailable = false;
-  }
-  return _gbrainAvailable;
+  // Stat-based PATH scan, memoized. Spawning `gbrain --version` under the
+  // 500ms budget misreported gbrain as missing whenever a cold process spawn
+  // exceeded the timeout (loaded machine, node-based CLI cold start), and
+  // re-probing per query burned 3x the budget before any real work.
+  if (gbrainOnPath !== null) return gbrainOnPath;
+  const exts = process.platform === "win32"
+    ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";")
+    : [""];
+  gbrainOnPath = (process.env.PATH || "").split(delimiter).some((dir) =>
+    dir !== "" && exts.some((ext) => {
+      try {
+        accessSync(join(dir, `gbrain${ext}`), constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  );
+  return gbrainOnPath;
 }
 
 function dispatchVector(q: GbrainManifestQuery, args: CliArgs): QueryResult {

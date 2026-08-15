@@ -405,7 +405,32 @@ function parseArgs(argv: string[]): { base: string; bump: Bump; current: string;
     else if (a === "-h" || a === "--help") help = true;
   }
   if (help) return { base: "", bump: "micro", current: "", excludePR: null, help: true };
-  if (!base) base = "main";
+  if (!base) {
+    // Detect the default branch instead of assuming main (local-only repos
+    // on trunk/master work like GitHub repos on main). Same probe order as
+    // the canonical chain in bin/gstack-diff-scope and {{BASE_BRANCH_DETECT}}
+    // (scripts/resolvers/utility.ts): origin/HEAD -> origin/main ->
+    // origin/master -> literal "main". origin/HEAD is unset on plain clones
+    // that never ran `git remote set-head`, so the rev-parse probes matter.
+    try {
+      const head = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      base = head.replace("refs/remotes/origin/", "");
+    } catch {
+      // fall through to the rev-parse probes
+    }
+    if (!base) {
+      for (const candidate of ["main", "master"]) {
+        try {
+          execFileSync("git", ["rev-parse", "--verify", "-q", `origin/${candidate}`], { stdio: ["ignore", "ignore", "ignore"] });
+          base = candidate;
+          break;
+        } catch {
+          // probe failed; try the next candidate
+        }
+      }
+    }
+    if (!base) base = "main";
+  }
   if (!bump) {
     console.error("Error: --bump is required (major|minor|patch|micro)");
     process.exit(2);

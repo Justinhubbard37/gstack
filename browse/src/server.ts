@@ -35,7 +35,11 @@ import {
   isRootToken, checkConnectRateLimit, type TokenInfo,
 } from './token-registry';
 import { validateTempPath } from './path-security';
-import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks } from './config';
+import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks, isPairAgentEnabled } from './config';
+import {
+  isSessionPersistEnabled, persistSessionState, restoreSessionState,
+  sessionPersistIntervalMs, SESSION_STATE_FILE,
+} from './session-persist';
 import { emitActivity, subscribe, getActivityAfter, getActivityHistory, getSubscriberCount } from './activity';
 import { createSseEndpoint } from './sse-helpers';
 import { initAuditLog, writeAuditEntry } from './audit';
@@ -728,6 +732,12 @@ const idleCheckInterval = setInterval(idleCheckTick, 60_000);
 // dual-instance fix` describe block for usage.
 export const __testInternals__ = {
   idleCheckTick,
+  // Watchdog seams (watchdog.test.ts): drive the 15s poll against an
+  // arbitrary (dead) PID, trigger the handoff-promotion suppression exactly
+  // as onHeadedPromotion does, and reset the latches between tests.
+  parentWatchdogTick,
+  suppressHeadedParentShutdown,
+  resetParentWatchdogState: () => { headedParentShutdownSuppressed = false; parentGone = false; },
   setTunnelActive: (v: boolean) => { tunnelActive = v; },
   setLastActivity: (t: number) => { lastActivity = t; },
   formatExplicitPortUnavailableError,
@@ -757,45 +767,81 @@ const BROWSE_PARENT_PID = parseInt(process.env.BROWSE_PARENT_PID || '0', 10);
 // the closure every 15s. The CLI's connect path sets BROWSE_HEADED=1 + PID=0,
 // so this branch is the normal path for /open-gstack-browser.
 const IS_HEADED_WATCHDOG = process.env.BROWSE_HEADED === '1';
-// Poll interval is env-tunable so the watchdog E2E test can use a ~250ms tick
-// instead of waiting out the production 15s interval (was a 20s blind sleep).
-// Floor of 50ms guards against a typo'd 0 busy-looping the server.
-const WATCHDOG_INTERVAL_MS = (() => {
-  const raw = parseInt(process.env.BROWSE_WATCHDOG_INTERVAL_MS || '', 10);
-  return Number.isFinite(raw) && raw >= 50 ? raw : 15_000;
-})();
-if (BROWSE_PARENT_PID > 0 && !IS_HEADED_WATCHDOG) {
-  let parentGone = false;
-  setInterval(() => {
-    try {
-      process.kill(BROWSE_PARENT_PID, 0); // signal 0 = existence check only, no signal sent
-    } catch {
-      // Parent exited. Resolution order:
-      // 1. Active cookie picker (one-time code or session live)? Stay alive
-      //    regardless of mode — tearing down the server mid-import leaves the
-      //    picker UI with a stale "Failed to fetch" error.
-      // 2. Headed / tunnel mode? Shutdown. The idle timeout doesn't apply in
-      //    these modes (see idleCheckInterval above — both early-return), so
-      //    ignoring parent death here would leak orphan daemons after
-      //    /pair-agent or /open-gstack-browser sessions.
-      // 3. Normal (headless) mode? Stay alive. Claude Code's Bash tool kills
-      //    the parent shell between invocations. The idle timeout (30 min)
-      //    handles eventual cleanup.
-      if (hasActivePicker()) return;
-      const headed = activeBrowserManager.getConnectionMode() === 'headed';
-      if (headed || tunnelActive) {
-        console.log(`[browse] Parent process ${BROWSE_PARENT_PID} exited in ${headed ? 'headed' : 'tunnel'} mode, shutting down`);
-        activeShutdown?.();
-      } else if (!parentGone) {
-        parentGone = true;
-        console.log(`[browse] Parent process ${BROWSE_PARENT_PID} exited (server stays alive, idle timeout will clean up)`);
-      }
+// Runtime promotion to headed (`handoff`) must NOT clear this interval — the
+// same tick is the tunnel-orphan reaper, and idle timeout is disabled in
+// tunnel mode, so parent death is the ONLY thing that reaps an
+// internet-exposed daemon after handoff → resume → /pair-agent. Promotion
+// sets this suppress flag instead; the tick re-reads it (and tunnelActive)
+// every pass. See suppressHeadedParentShutdown() below.
+let headedParentShutdownSuppressed = false;
+// Latch for the one-time "parent exited, staying alive" log line.
+let parentGone = false;
+// Named + parameterized (default: the boot-time env PID) so watchdog.test.ts
+// can drive the tick deterministically via __testInternals__, mirroring
+// idleCheckTick above. setInterval invokes it with no args in production.
+function parentWatchdogTick(parentPid: number = BROWSE_PARENT_PID): void {
+  try {
+    process.kill(parentPid, 0); // signal 0 = existence check only, no signal sent
+  } catch {
+    // Parent exited. Resolution order:
+    // 1. Active cookie picker (one-time code or session live)? Stay alive
+    //    regardless of mode — tearing down the server mid-import leaves the
+    //    picker UI with a stale "Failed to fetch" error.
+    // 2. Headed (unless suppressed by a runtime promotion) / tunnel mode?
+    //    Shutdown. The idle timeout doesn't apply in these modes (see
+    //    idleCheckInterval above — both early-return), so ignoring parent
+    //    death here would leak orphan daemons after /pair-agent or
+    //    /open-gstack-browser sessions.
+    // 3. Normal (headless) mode, or headed-by-promotion? Stay alive. Claude
+    //    Code's Bash tool kills the parent shell between invocations, and a
+    //    promoted daemon's user owns the window lifecycle. The idle timeout
+    //    (30 min) handles eventual cleanup.
+    if (hasActivePicker()) return;
+    const headed = activeBrowserManager.getConnectionMode() === 'headed'
+      && !headedParentShutdownSuppressed;
+    if (headed || tunnelActive) {
+      console.log(`[browse] Parent process ${parentPid} exited in ${headed ? 'headed' : 'tunnel'} mode, shutting down`);
+      activeShutdown?.();
+    } else if (!parentGone) {
+      parentGone = true;
+      console.log(`[browse] Parent process ${parentPid} exited (server stays alive, idle timeout will clean up)`);
     }
-  }, WATCHDOG_INTERVAL_MS);
+  }
+}
+if (BROWSE_PARENT_PID > 0 && !IS_HEADED_WATCHDOG) {
+  setInterval(parentWatchdogTick, 15_000);
 } else if (IS_HEADED_WATCHDOG) {
   console.log('[browse] Parent-process watchdog disabled (headed mode)');
 } else if (BROWSE_PARENT_PID === 0) {
   console.log('[browse] Parent-process watchdog disabled (BROWSE_PARENT_PID=0)');
+}
+
+/**
+ * Suppress the headed-mode parent-death shutdown after a runtime promotion.
+ *
+ * The watchdog's contract is "headless daemons outlive their parent, headed ones
+ * do not" — reasonable at boot, when mode is fixed by env. `handoff` breaks that
+ * assumption: it swaps in a headed context on a RUNNING daemon
+ * (browser-manager.ts, connectionMode = 'headed') without a restart, so a daemon
+ * that legitimately registered a watchdog is suddenly on the fatal side of the
+ * branch. The parent is typically a short-lived shell — Claude Code's Bash tool
+ * kills one after every invocation — so the next 15s poll shuts the daemon down,
+ * discarding whatever the user was handed off to do, such as a login.
+ *
+ * Once promoted, the user owns the window lifecycle exactly as if the daemon had
+ * been started headed, which is the case the env guards already exempt.
+ *
+ * A flag, NOT clearInterval: the tick doubles as the tunnel-orphan reaper
+ * (its `tunnelActive` branch), and idle timeout is disabled in tunnel mode —
+ * clearing the whole interval here left handoff → resume → /pair-agent with
+ * an internet-exposed daemon nothing could ever reap. After promotion, parent
+ * death no longer kills the daemon for BEING HEADED, but still kills it when
+ * a tunnel is active.
+ */
+function suppressHeadedParentShutdown(): void {
+  if (headedParentShutdownSuppressed) return;
+  headedParentShutdownSuppressed = true;
+  console.log('[browse] Parent-death headed shutdown suppressed (promoted to headed at runtime); watchdog stays armed as the tunnel-orphan reaper');
 }
 
 // ─── Command Sets (from commands.ts — single source of truth) ───
@@ -840,6 +886,11 @@ function emitInspectorEvent(event: any): void {
 
 // ─── Server ────────────────────────────────────────────────────
 const browserManager = new BrowserManager();
+// Declared here rather than beside suppressHeadedParentShutdown: that function
+// sits with the watchdog it gates, which is above this line, and binding it up
+// there would touch `browserManager` in its temporal dead zone — aborting
+// module evaluation and leaving every later const uninitialized.
+browserManager.onHeadedPromotion = suppressHeadedParentShutdown;
 // Indirection for embedders. Module-level handlers (idleCheckTick, parent
 // watchdog, SIGTERM) read activeBrowserManager so that buildFetchHandler can
 // retarget them at a caller-supplied BrowserManager. Symmetric with the
@@ -858,6 +909,11 @@ let activeBrowserManager: BrowserManager = browserManager;
 // any buildFetchHandler call rebinds onDisconnect onto the cfg instance.
 browserManager.onDisconnect = (code) => activeShutdown?.(code ?? 2);
 let isShuttingDown = false;
+// Session-persist ticker handle. Registered in start() (module scope so the
+// factory's shutdown() can reach it), cleared by shutdown() BEFORE the final
+// snapshot — a tick landing during browser teardown would otherwise overwrite
+// the good final snapshot with a degraded one (zero tabs).
+let sessionPersistInterval: ReturnType<typeof setInterval> | null = null;
 
 type PortCheckResult =
   | { available: true }
@@ -1699,7 +1755,32 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
     clearInterval(flushInterval);
     clearInterval(idleCheckInterval);
     if (agentWatchdogInterval) clearInterval(agentWatchdogInterval);
+    // Stop the session-persist ticker BEFORE the final snapshot below —
+    // paired with the isShuttingDown gate inside the tick, this guarantees
+    // no interval snapshot can race the final one during teardown.
+    if (sessionPersistInterval) {
+      clearInterval(sessionPersistInterval);
+      sessionPersistInterval = null;
+    }
     await flushBuffers();
+
+    // Final session snapshot before the browser goes away (#778). Best
+    // effort with a hard 2s deadline: shutdown must never hang on a wedged
+    // page.evaluate — after the deadline we proceed to browser close and let
+    // the previous interval snapshot stand (atomic writes guarantee it's
+    // intact). The .catch is attached to the persist promise itself so a
+    // late rejection after losing the race can't become an unhandled
+    // rejection.
+    if (isSessionPersistEnabled()) {
+      const finalSnapshot = persistSessionState(cfgBrowserManager, path.join(config.stateDir, SESSION_STATE_FILE))
+        .catch((err: any) => {
+          console.warn(`[browse] SESSION_PERSIST_FAILED at shutdown: ${err?.message ?? err}`);
+        });
+      await Promise.race([
+        finalSnapshot,
+        new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+    }
 
     await cfgBrowserManager.close();
 
@@ -1730,6 +1811,12 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
   // after 30 min of HTTP idle because the dead module-level instance still
   // reports connectionMode === 'launched'.
   activeBrowserManager = cfgBrowserManager;
+  // Same reason as above: the watchdog reads activeBrowserManager, so the
+  // instance that can promote itself to headed must be the one that can
+  // suppress the headed parent-death branch. An embedder-supplied manager
+  // otherwise promotes silently and the watchdog keeps shutting down on a
+  // promotion it can no longer see.
+  cfgBrowserManager.onHeadedPromotion = suppressHeadedParentShutdown;
 
   // Wire the cfg-instance's onDisconnect to run shutdown when the user
   // closes the headed browser window. CHAIN any caller-provided handler
@@ -2442,6 +2529,14 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             status: 403, headers: { 'Content-Type': 'application/json' },
           });
         }
+        if (!isPairAgentEnabled()) {
+          // Consent-on-first-use: the /pair-agent skill asks once and sets the
+          // key; a direct API caller gets the same hint instead of a tunnel.
+          return new Response(JSON.stringify({
+            error: 'pair-agent is off (tunnel exposes this browser beyond the machine)',
+            hint: 'enable once with: gstack-config set pair_agent on — or run /pair-agent, which asks for consent and sets it',
+          }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
         if (tunnelActive && tunnelUrl && tunnelServer) {
           // Verify tunnel is still alive before returning cached URL.
           // Probe GET /connect (the only unauth-reachable path on the tunnel
@@ -2478,7 +2573,7 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
         const started = await startTunnel({
           fetchHandler: makeFetchHandler('tunnel'),
           authtoken,
-          consent: 'pair_agent=on',
+          consent: 'pair_agent=on (isPairAgentEnabled gate at /tunnel/start)',
         });
         if (!started.ok) {
           return new Response(JSON.stringify({
@@ -3096,6 +3191,58 @@ export async function start() {
 
   browserManager.serverPort = port;
 
+  // ─── Opt-in session persistence (#778 class) ─────────────────
+  // BROWSE_PERSIST_STATE=1: restore cookies/storage/tabs from the last
+  // snapshot, then keep snapshotting on an interval. Launched mode only —
+  // the headed persistent profile owns its own state. The final snapshot at
+  // clean shutdown lives in buildFetchHandler's shutdown().
+  //
+  // Runs AFTER Bun.serve() + the state-file write, in the BACKGROUND:
+  // restore re-creates tabs sequentially with up-to-15s goto timeouts while
+  // the CLI's readiness probe gives up at 8s — one slow/unreachable saved
+  // URL must never make every `$B` command report "Server failed to start".
+  // Fire-and-forget: a restore failure is logged and never affects the
+  // daemon.
+  if (!skipBrowser && isSessionPersistEnabled() && browserManager.getConnectionMode() === 'launched') {
+    const sessionStatePath = path.join(config.stateDir, SESSION_STATE_FILE);
+    restoreSessionState(browserManager, sessionStatePath)
+      .then((restored) => {
+        if (restored) {
+          // Counts come from the deserialized snapshot itself — no extra
+          // saveState() round-trip against pages that may still be loading.
+          console.log(`[browse] Session state restored: ${restored.cookies.length} cookies / ${restored.pages.length} tabs (BROWSE_PERSIST_STATE=1)`);
+        } else {
+          console.log('[browse] Session persistence on; no prior state — fresh session (BROWSE_PERSIST_STATE=1)');
+        }
+      })
+      .catch((err: any) => {
+        console.warn(`[browse] SESSION_RESTORE_FAILED: ${err?.message ?? err}`);
+      });
+    let persistWarned = false;
+    // In-flight guard: never start a new snapshot while the previous one is
+    // still pending (a slow page.evaluate would otherwise pile up ticks).
+    let persistInFlight = false;
+    sessionPersistInterval = setInterval(() => {
+      // Shutdown gate (belt; shutdown()'s clearInterval is the suspenders):
+      // a tick that fires during browser teardown snapshots a degraded state
+      // (zero tabs) over the good final snapshot.
+      if (isShuttingDown) return;
+      if (persistInFlight) return; // skip the tick
+      persistInFlight = true;
+      persistSessionState(browserManager, sessionStatePath)
+        .catch((err: any) => {
+          // Warn once — a full disk must not spam the log every 30s, and a
+          // snapshot failure must never kill the daemon (R3).
+          if (!persistWarned) {
+            persistWarned = true;
+            console.warn(`[browse] SESSION_PERSIST_FAILED: ${err?.message ?? err} (further failures suppressed)`);
+          }
+        })
+        .finally(() => { persistInFlight = false; });
+    }, sessionPersistIntervalMs());
+    (sessionPersistInterval as any)?.unref?.();
+  }
+
   // Navigate to welcome page if in headed mode and still on about:blank
   if (browserManager.getConnectionMode() === 'headed') {
     try {
@@ -3137,7 +3284,9 @@ export async function start() {
   // Start ngrok tunnel if BROWSE_TUNNEL=1 is set.  Uses the dual-listener
   // pattern: bind a dedicated tunnel listener on an ephemeral port and
   // point ngrok.forward() at IT, not the local daemon port.
-  if (process.env.BROWSE_TUNNEL === '1') {
+  if (process.env.BROWSE_TUNNEL === '1' && !isPairAgentEnabled()) {
+    console.error('[browse] BROWSE_TUNNEL=1 ignored: pair-agent is off. Enable once with: gstack-config set pair_agent on');
+  } else if (process.env.BROWSE_TUNNEL === '1') {
     const authtoken = resolveNgrokAuthtoken();
     if (!authtoken) {
       console.error('[browse] BROWSE_TUNNEL=1 but no NGROK_AUTHTOKEN found. Set it via env var or ~/.gstack/ngrok.env');
@@ -3149,7 +3298,7 @@ export async function start() {
       const started = await startTunnel({
         fetchHandler: handle.fetchTunnel,
         authtoken,
-        consent: 'pair_agent=on (BROWSE_TUNNEL=1)',
+        consent: 'pair_agent=on (isPairAgentEnabled gate, BROWSE_TUNNEL=1)',
       });
       if (!started.ok) {
         console.error(`[browse] Failed to start tunnel: ${started.error.message}`);

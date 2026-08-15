@@ -676,6 +676,10 @@ When options differ in coverage, include `Completeness: X/10` (10 = all edge cas
 
 For high-stakes ambiguity (architecture, data model, destructive scope, missing context), STOP. Name it in one sentence, present 2-3 options with tradeoffs, and ask. Do not use for routine coding or obvious changes.
 
+## Claimed Limitations Need Evidence
+
+A claimed limitation or requirement ("the API can't do this", "X requires a credential", "that's impossible on this platform") is a material claim. State one only with the verbatim error, the documented statement, or a live probe in hand — pattern-matching a failure to a familiar story is not evidence. When a cheap probe settles the question, run it BEFORE asking the user anything or declaring a step blocked.
+
 ## Continuous Checkpoint Mode
 
 If `CHECKPOINT_MODE` is `"continuous"`: auto-commit completed logical units with `WIP:` prefix.
@@ -921,7 +925,27 @@ using the generic remote flow instead.
 
 ### If different machine (option B):
 
-First, detect ngrok status:
+**Consent gate (once per machine).** The tunnel exposes this browser beyond
+the machine, so it is OFF until the user opts in — the daemon refuses
+`/tunnel/start` and `BROWSE_TUNNEL=1` otherwise. Check the standing consent:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-config get pair_agent 2>/dev/null || echo "unset"
+```
+
+If the value is not `on`, ask via AskUserQuestion (one-way-door posture —
+this opens a path from the internet to the local browser):
+
+> "Remote pairing runs an ngrok tunnel from the internet to this machine's
+> browser (locked to a 26-command allowlist + scoped token, but still an
+> exposure). Enable pair-agent on this machine?"
+
+Options: A) Enable — run `~/.claude/skills/gstack/bin/gstack-config set pair_agent on`, confirm it reads back `on`, and continue. B) No — stop here; local pairing (option A above) still works.
+
+If the value is already `on`, say nothing and continue — consent stands until
+`gstack-config set pair_agent off`.
+
+Then detect ngrok status:
 
 ```bash
 which ngrok 2>/dev/null && echo "NGROK_INSTALLED" || echo "NGROK_NOT_INSTALLED"

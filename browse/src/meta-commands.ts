@@ -20,6 +20,7 @@ import * as path from 'path';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
 import { TEMP_DIR } from './platform';
 import { resolveConfig } from './config';
+import { filterSessionCookies } from './session-persist';
 import type { Frame } from 'playwright';
 
 /** Tokenize a pipe segment respecting double-quoted strings. */
@@ -421,25 +422,18 @@ export async function handleMetaCommand(
     }
 
     case 'stop': {
-      // Defer shutdown so the response flushes before process.exit() (same
-      // reason as 'restart' below). Otherwise the CLI sees a dropped socket;
-      // and now that connection-loss triggers the crash-retry path, that would
-      // resurrect a fresh daemon only to stop it again. Send the 200, then exit.
-      setTimeout(() => { void shutdown(); }, 100);
+      // Return the acknowledgement before closing the listener. Shutting down
+      // inline resets the CLI's fetch, which it reasonably interprets as a
+      // crash and then restarts the daemon it was asked to stop.
+      setTimeout(() => { void shutdown(); }, 25).unref?.();
       return 'Server stopped';
     }
 
     case 'restart': {
-      // Signal that we want a restart — the CLI will detect exit and restart.
+      // Signal that we want a restart — the CLI will detect exit and restart
       console.log('[browse] Restart requested. Exiting for CLI to restart.');
-      // Defer shutdown one tick so this HTTP response actually flushes before
-      // process.exit(). shutdown() exits inline (server.ts), so the old
-      // `await shutdown(); return 'Restarting...'` never sent a response — the
-      // CLI saw a dropped socket and `browse restart` errored out. The daemon
-      // now exits ~100ms after the CLI gets its 200; the next browse command
-      // lazily cold-starts a fresh one.
-      setTimeout(() => { void shutdown(); }, 100);
-      return 'Restarting... (daemon exiting; next browse command starts a fresh one)';
+      setTimeout(() => { void shutdown(); }, 25).unref?.();
+      return 'Restarting...';
     }
 
     // ─── Visual ────────────────────────────────────────
@@ -939,15 +933,13 @@ export async function handleMetaCommand(
         if (!Array.isArray(data.cookies) || !Array.isArray(data.pages)) {
           throw new Error('Invalid state file: expected cookies and pages arrays');
         }
-        // Validate and filter cookies — reject malformed or internal-network cookies
-        const validatedCookies = data.cookies.filter((c: any) => {
-          if (typeof c !== 'object' || !c) return false;
-          if (typeof c.name !== 'string' || typeof c.value !== 'string') return false;
-          if (typeof c.domain !== 'string' || !c.domain) return false;
-          const d = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-          if (d === 'localhost' || d.endsWith('.internal') || d === '169.254.169.254') return false;
-          return true;
-        });
+        // Validate and filter cookies via the shared hygiene filter in
+        // session-persist.ts (isInternalCookieDomain): rejects malformed
+        // cookies and internal-network domains — localhost, *.internal,
+        // loopback literals (127.x, ::1), and link-local/cloud-metadata
+        // (169.254.x) — that a tampered state file could use to reach local
+        // services or the metadata endpoint.
+        const validatedCookies = filterSessionCookies(data.cookies);
         if (validatedCookies.length < data.cookies.length) {
           console.warn(`[browse] Filtered ${data.cookies.length - validatedCookies.length} invalid cookies from state file`);
         }

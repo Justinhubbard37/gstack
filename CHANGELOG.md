@@ -1,5 +1,195 @@
 # Changelog
 
+## [1.65.0.0] - 2026-08-14
+
+**/autoplan, /codex on macOS, and memory ingest work again.**
+**And every consent gate now means what it says.**
+
+This is the second and final wave of the GStack 2 fork port. Wave one (v1.63.0.0)
+took the audit infrastructure; this wave takes the fixes and the features. Three
+skills that failed silently on every run now work: /autoplan's task aggregation
+emits real tasks instead of zero, /codex creates its temp files on macOS instead
+of dying on BSD mktemp, and memory ingest actually imports pages on current
+gbrain builds, and prints the count so you can see it. On top of that: your
+browser auth can now survive a daemon restart, /ship can take an iOS app from
+working tree to Submit for Review, and four supply-chain gates now run on every
+PR. Nearly all of it traces back to Sina Matian's time-attack/gstack fork, ported
+with tests and attribution.
+
+### The numbers that matter
+
+Source: this branch (`git log 1.63.0.0..HEAD`, `git diff main...HEAD --stat`,
+`bun test`), plus the GitHub issues the release closes.
+
+| What | Before | After |
+|------|--------|-------|
+| /autoplan Phase 4 task output (#2018) | 0 tasks, every run | every task |
+| /codex on macOS (#2091) | broken on every install | works |
+| Memory ingest on gbrain 0.42+ (#2144) | 0 pages, reported success | full corpus, count printed |
+| Headed browse on macOS 26 (#2242) | GPU crash, poisoned cache | launches, heals old caches |
+| Auth after a browse daemon restart (#778) | logged out | restored (opt-in) |
+| CI secret scanning on PR diffs | none | every PR, fail-closed |
+| GitHub issues closed | | 24 |
+| Community PRs landed with authorship | | 4 |
+
+The stark one is the first three rows: those aren't degraded features, they were
+features returning empty results with a green checkmark. If you ran /autoplan in
+the last two months, the task list it handed off was empty and nothing told you.
+
+### What this means for gstack users
+
+Run /autoplan and the pipeline hands real tasks to the executor. Run /codex on a
+Mac and it just works. Set `BROWSE_PERSIST_STATE=1` and a daemon restart no
+longer logs you out of every site. If you ship an iOS app, `/ship` now knows the
+whole App Store journey, session-minted upload keys, the price-schedule API that
+replaced the broken fastlane path, error -22938 triage, one authorization moment
+instead of five. Upgrade with `/gstack-upgrade`; the migration cleans any
+Chromium bundle an older gstack broke and verifies the replacement download
+before it claims success.
+
+### Itemized changes
+
+#### Added
+
+- **Opt-in browser session persistence** (#778, #2193): `BROWSE_PERSIST_STATE=1`
+  snapshots cookies and tabs (atomic writes, 0600, never page HTML or
+  ownership), restores them off the boot path on the next start, and quarantines
+  a corrupt snapshot instead of crashing. Portions from time-attack/gstack.
+- **Apple App Store release journey for /ship**: `ship/sections/apple-release.md`
+  loads before the repo-landing gates when the target is an Apple app. Encodes
+  session-minted App Store Connect keys, `appPriceSchedules` over the broken
+  fastlane `price_tier`, expanded age-rating attributes, -22938 classification,
+  and a one-authorization-moment flow. Refined across 21 live releases on the
+  fork. Portions copyright Sina Matian, MIT.
+- **Code-intelligence provider contract, Phase 1**: `gstack-code-intelligence`
+  wraps GBrain, Sourcebot, and Graphify behind one interface with an ask-once
+  indexing offer for large repos (1,000+ tracked files, decline persisted).
+  Consent is explicit per repo (`consent <repo> yes|no`), the per-repo trust
+  policy's deny and read-only tiers veto write-class operations no matter what
+  consent was recorded, and every off-machine send writes an egress receipt that
+  records the consent state actually checked. Portions from time-attack/gstack.
+- **Supply-chain CI**: a quality gate that runs `bin/gstack-redact` over every
+  PR diff (HIGH findings fail, MEDIUM annotates), dependency review on
+  lockfile changes, weekly OSV scans, grouped dependabot updates, and an
+  evidence-bar PR template. Every third-party action in the new workflows is
+  pinned to a commit SHA.
+- **Third-party web-actions contract** in tier-2+ skills: when a workflow needs
+  a vendor-site step (API key signup, OAuth app), gstack offers to drive the
+  browser itself, hands credentials and CAPTCHAs to you, stores secrets
+  owner-only, and verifies with a read-only call before claiming success.
+- **Design docs land in your repo** (#703, #2000): office-hours writes
+  `docs/designs/<topic>.md` as a concise decision record (one bullet per
+  decision with its why), redaction-scanned before anything touches your git
+  history. Plan reviews prefer the repo-local doc when both exist.
+- **`gstack-verify-gate`** (opt-in Stop hook): blocks turn-end until the
+  CLAUDE.md-declared verify command passes. A command runs only after you trust
+  it once per repo (`--trust`), re-trust is required when it changes, every
+  grant is audit-logged, and re-entries re-run the check instead of waving it
+  through.
+- **"Never show me these again"** for the founder-resources pitch (#538): the
+  opt-out verifies its own config write before promising anything. Re-enable
+  with `gstack-config set founder_resources true`.
+- **Claimed limitations need evidence**: every tier-2+ skill now treats "the
+  API can't do this" as a material claim requiring the verbatim error, the
+  documented statement, or a live probe, and runs the ten-second check before
+  declaring anything blocked.
+
+#### Fixed
+
+- **/autoplan Phase 4 emitted zero tasks on every run** (#2018): a jq context
+  rebind dropped every aggregated task; the error was hidden by stderr
+  suppression. Six-fixture regression suite pins it.
+- **/codex was broken on every macOS install** (#2091): BSD mktemp rejects
+  suffixed templates; all temp files now use portable templates and a static
+  test bans the pattern repo-wide.
+- **Memory ingest imported nothing on gbrain 0.42+** (#2144): the staging dir
+  sits under a gitignored tree, so git-aware collectors saw zero files. Fixed
+  with `--include-gitignored` (community PR #2560) plus a `GIT_CEILING_DIRECTORIES`
+  second layer, Windows-safe, and a loud ingested-page count.
+- **Headed mode on macOS 26** (#2242, #2138, #2139): gstack no longer rewrites
+  the signed Chrome-for-Testing bundle (the rebrand broke its code signature;
+  GPU processes refused to start). Launch self-heals poisoned caches, on both
+  headed entry points, by removing the whole revision directory so the re-fetch
+  actually re-downloads, and the upgrade migration does the same for existing
+  installs, verifying a working Chromium exists before recording success.
+  Branding stays on the GStack Browser wrapper app.
+- **`browse stop` restarted the daemon it was told to stop**: the CLI now gets
+  an acknowledgment before shutdown, and the shutdown snapshot has a hard
+  deadline so a wedged page can never hold the port.
+- **Session cookies from internal networks never reach a restored browser**:
+  the restore-time hygiene filter drops loopback and link-local IP literals
+  (127.0.0.1, ::1, 169.254.*) alongside localhost and *.internal, shared by
+  both the persistence path and `state load`.
+- **ios-qa stopped handing out raw bearer tokens**: `/auth/sessions` returns
+  salted-hash token ids with revoke-by-id support, the boot token left os_log
+  entirely, and the IPv4 listener pins to loopback at the socket.
+- **make-pdf's no-network promise holds against obfuscation**: `<style>`
+  @import, inline style URLs (quoted, unquoted, CSS-escaped, and
+  HTML-entity-encoded), srcset, and media sources are all neutralized when
+  rendering untrusted HTML without `--allow-network`.
+- **pair-agent tunnels are consent-gated** (`gstack-config set pair_agent on`):
+  the tunnel cannot start without the recorded opt-in, the receipts that always
+  claimed consent now reflect a check that exists, and a disabled gate tells
+  you the real remedy instead of ngrok install instructions.
+- **The per-repo gbrain trust policy is enforced at the code-import chokepoint**
+  (#2140, sync path): deny refuses, read-only skips code ingest, an unreadable
+  policy store fails closed, and the egress receipt names the decision.
+- **Handoff no longer disarms the tunnel-orphan reaper** (community PR #2565
+  plus hardening): promoting a daemon to headed suppresses only the
+  headed-shutdown branch; a daemon with an active tunnel still dies with its
+  parent.
+- **Windows**: broken DACLs on state dirs self-repair (#1605), every
+  Windows-reachable spawn passes windowsHide (#1835, community PRs #2523 and
+  #2539), and decision files no longer land under a project named "unknown".
+- **Setup no longer hangs on first run** (#2136): the Chromium probe gets a
+  90-second deadline that reaps the whole wedged process tree, installs are
+  single-flight across concurrent setups, and EXIT cleanup traps chain instead
+  of clobbering each other.
+- **Paper cuts**: `gh pr edit` falls back to the REST API when the
+  Projects-classic GraphQL deprecation bites (#1079); the v1.27 migration never
+  auto-proceeds without a TTY and never records a failed rename as done
+  (#1383); model benchmarks recognize macOS Keychain auth (#1890); voyage
+  embedding flags survive zsh (#1798); `--supersede` keeps the replacement
+  decision it was given; brain context no longer disables itself after one slow
+  cold-start probe; lock acquisition reports the real error instead of phantom
+  contention (#1084); plan verification probes the dev server your project
+  declares instead of a hardcoded port list.
+
+#### Changed
+
+- **Telemetry defaults to off everywhere**: the browse daemon now reads the
+  same persistent consent the rest of gstack does; an absent key means
+  disabled, matching `gstack-config get telemetry`.
+- **Test-command detection covers Django and config-less projects**: a working
+  `manage.py test` or `*_test.go` suite is recognized instead of being offered
+  a bootstrap it doesn't need.
+- **Base-branch detection everywhere**: the bins that hardcoded `main` now
+  probe origin/HEAD, origin/main, and origin/master in order.
+- **Eval model resolution is host-neutral**: `GSTACK_EVAL_MODEL` (and per-kind
+  variants) override the hardcoded model ids at all six call sites.
+- Dead bins removed (`chrome-cdp`, `gstack-open-url`, `gstack-platform-detect`);
+  the stale-reference scan now covers docs/ so removals like these fail CI when
+  documentation still cites them.
+
+#### For contributors
+
+- 23 new test files (+5,499 test lines): behavioral suites for session
+  persistence, the poisoned-bundle probe, both migrations, the consent CLI,
+  verify-gate trust, telemetry opt-out, the offline-gate bypass corpus, the
+  secret-scan exit contract, and lock-acquisition edge branches. The ios-qa
+  daemon suite (10 files) is now wired into `bun test` and the sharded runner;
+  it had never run in CI.
+- `lib/gbrain-repo-policy-client.ts` is the one place repo-policy tiers are
+  read; both enforcement points route through it.
+- `lib/context-bill.ts` no longer double-counts nested skills in totalMd, and
+  `gstack-context-bill` works under Conductor env-shims.
+- Egress receipts: `bin/gstack-egress verify` passes with the chain intact;
+  code-intelligence adapters registered as fail-closed sinks.
+- Credits: this release ports work by **Sina Matian** (time-attack/gstack, MIT)
+  across nearly every cluster. Community PRs absorbed with authorship:
+  **Gawie van Blerk** (#2560), **Shawn Reddy** (#2565), **Jake Wilk** (#2523),
+  **Jerry Nichols** (#2539). Thank you all.
+
 ## [1.64.1.0] - 2026-08-15
 
 **Every guard in the pipeline now provably fires.**

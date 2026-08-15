@@ -67,6 +67,13 @@ const MODULE_SINKS = [
   'bin/gstack-gbrain-sync.ts',
   'bin/gstack-memory-ingest.ts',
   'browse/src/server.ts',
+  // Code-intelligence adapters (fork port wave 2): the gbrain adapter shells
+  // repo content to the user's gbrain DB and the Sourcebot adapter POSTs
+  // queries to a self-hosted HTTP endpoint — both sensitive-class
+  // (repo-content) sinks, fail-closed. Registered so a refactor that drops
+  // their writeReceipt calls fails CI, not just the tree-sweep scanner.
+  'lib/code-intelligence/gbrain-adapter.ts',
+  'lib/code-intelligence/sourcebot-adapter.ts',
   // Unconditional: context-bill ships in the same tree as this tripwire. A
   // missing file must fail loudly (a rename/move that drops its receipt wiring
   // is exactly what this pins), not silently soften the assertion.

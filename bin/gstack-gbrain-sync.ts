@@ -42,6 +42,7 @@ import { detectAutopilot, decideSourceRemove, decideCodeSync } from "../lib/gbra
 import { writeReceipt } from "../lib/egress-receipt";
 import { localEngineStatus, type LocalEngineStatus } from "../lib/gbrain-local-status";
 import { buildGbrainEnv, spawnGbrain, execGbrainJson, NEEDS_SHELL_ON_WINDOWS } from "../lib/gbrain-exec";
+import { repoPolicyTier as sharedRepoPolicyTier } from "../lib/gbrain-repo-policy-client";
 import { checkOwnedStagingDir } from "../lib/staging-guard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -778,6 +779,40 @@ function warnProbeTimeout(stage: "code" | "memory" | "dream"): void {
 }
 
 
+/**
+ * Per-repo trust tier from ~/.gstack/gbrain-repo-policy.json, read through
+ * the bin/gstack-gbrain-repo-policy CLI (which owns URL normalization and
+ * schema migration — do not reimplement either here).
+ *
+ * The tier was previously enforced only in /sync-gbrain skill prose, so a
+ * direct or cron invocation of this script ingested repo code regardless of
+ * a `deny`/`read-only` setting — and the egress receipt below cited this
+ * chokepoint as consent before it existed (#2140 sync path). This check
+ * closes both gaps.
+ *
+ * Fail-open ONLY when no policy store exists (nothing was ever set — same
+ * behavior as before for every non-policy user, and skips the subprocess).
+ * Fail-closed ("error") when a store exists but can't be read: a policy the
+ * user set must not be silently bypassed by a broken store or missing jq.
+ *
+ * Reads through the shared lib/gbrain-repo-policy-client.ts (same client as
+ * the code-intelligence consent veto — the two gates can never drift, and
+ * win32 gets the invoke-via-bash path). A spawn failure is still fail-closed
+ * but says so, instead of the misleading "store could not be read".
+ */
+export function repoPolicyTier(url: string | null): "read-write" | "read-only" | "deny" | "unset" | "error" {
+  const res = sharedRepoPolicyTier(url, process.env);
+  if (res.error === "spawn-failed") {
+    process.stderr.write(
+      "[gstack-gbrain-sync] the repo-policy helper could not be spawned (bash missing from PATH?) — " +
+        "refusing ingest rather than bypassing a possibly-set policy\n",
+    );
+    return "error";
+  }
+  if (res.error) return "error";
+  return res.tier === "none" ? "unset" : res.tier;
+}
+
 async function runCodeImport(args: CliArgs): Promise<StageResult> {
   const t0 = Date.now();
   const root = repoRoot();
@@ -786,6 +821,36 @@ async function runCodeImport(args: CliArgs): Promise<StageResult> {
   }
 
   const sourceId = deriveCodeSourceId(root);
+
+  // Per-repo trust tier — checked BEFORE the dry-run branch so previews report
+  // the refusal honestly instead of claiming they would sync.
+  const policyUrl = originUrl();
+  const tier = repoPolicyTier(policyUrl);
+  if (tier === "read-only") {
+    // Honoring an explicit user setting (search allowed, page writes never) is
+    // a clean skip, not a stage failure — code ingest writes pages.
+    return {
+      name: "code",
+      ran: false,
+      ok: true,
+      duration_ms: Date.now() - t0,
+      summary: `skipped — repo policy is read-only for ${policyUrl} (code ingest writes pages). Change with: gstack-gbrain-repo-policy set ${policyUrl} read-write`,
+      detail: { source_id: sourceId, source_path: root, status: "skipped-policy-read-only" },
+    };
+  }
+  if (tier === "deny" || tier === "error") {
+    const why = tier === "deny"
+      ? `repo policy is deny for ${policyUrl} — no gbrain ingest for this repo. Change with: gstack-gbrain-repo-policy set ${policyUrl} read-write`
+      : "repo policy store exists but could not be read (gstack-gbrain-repo-policy get failed) — refusing ingest rather than bypassing a set policy";
+    return {
+      name: "code",
+      ran: true,
+      ok: false,
+      duration_ms: Date.now() - t0,
+      summary: `refused: ${why}`,
+      detail: { source_id: sourceId, source_path: root, status: tier === "deny" ? "refused-policy-deny" : "refused-policy-unreadable" },
+    };
+  }
 
   // dry-run preview always shows the would-do steps, regardless of local
   // engine state. Useful for "what would /sync-gbrain do" without probing

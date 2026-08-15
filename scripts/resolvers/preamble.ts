@@ -53,6 +53,7 @@ import { generateAskUserFormat } from './preamble/generate-ask-user-format';
 import { generateWritingStyle } from './preamble/generate-writing-style';
 import { generateCompletenessSection } from './preamble/generate-completeness-section';
 import { generateConfusionProtocol } from './preamble/generate-confusion-protocol';
+import { generateEvidenceDirective } from './preamble/generate-evidence-directive';
 import { generateContinuousCheckpoint } from './preamble/generate-continuous-checkpoint';
 import { generateContextHealth } from './preamble/generate-context-health';
 
@@ -117,6 +118,7 @@ export function generatePreamble(ctx: TemplateContext): string {
       generateWritingStyle(ctx),
       generateCompletenessSection(ctx),
       generateConfusionProtocol(ctx),
+      generateEvidenceDirective(ctx),
       generateContinuousCheckpoint(),
       generateContextHealth(ctx),
       generateQuestionTuning(ctx),

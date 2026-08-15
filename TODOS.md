@@ -2,6 +2,88 @@
 
 ## NEXT PRIORITY
 
+### P2: Persona-fleet hostile-user harness (fork port wave 2 deferral)
+
+**What:** Port the methodology behind time-attack/gstack's 87-hostile-user
+field run (418 findings): machine-written t0 in an append-only run.jsonl
+(elapsed time measured, never self-reported), every metric resolving to an
+artifact, and a mandatory-quit contract with machine-checkable caps (300s to
+first useful output, 900s total, 40K context tokens, 3 consecutive dead ends)
+so abandonment is a computable outcome. Specs: fork `evals/fleet/METRICS.md`
++ `evals/fleet/ABANDONMENT.md` (methodology only — no runner code exists to
+port; this is a build).
+
+**Why:** A periodic hostile-user round against OUR 44-skill tree would surface
+the same first-five-minutes failure class the fork closed 418 of. Fits the
+existing eval-store/e2e harness as a new runner.
+
+**Effort:** L (human ~2wk) → M with CC. **Priority:** P2.
+**Depends on:** decisions on cost ceilings + journal storage.
+
+### P3: Answer-key eval methodology (rides the persona-fleet work)
+
+**What:** Pre-registered answer keys (fork `evals/answer-keys/` —
+codex-decorrelation, health-trending) grading our /codex and /health surfaces
+against planted ground truth instead of judge vibes.
+
+**Why:** Deterministic scoring for surfaces where LLM-judge drift is the
+known failure mode. **Effort:** M → S with CC. **Priority:** P3.
+**Depends on:** persona-fleet harness (shared runner shape).
+
+### P3: Quarterly Apple-journey live re-verification
+
+**What:** Run the /ship Apple release adapter against a real (TestFlight-only)
+release once a quarter, or on first user bug report, and fix drift. Apple's
+APIs move (the fork caught fastlane price_tier breaking live); the adapter's
+claims are evidence-backed today and must stay that way per its own
+evidence-before-claimed-limitations rule.
+
+**Effort:** S per run. **Priority:** P3. **Depends on:** a paid ADP account.
+
+### P2: office-hours design-doc dual-write functional E2E (fork port wave 2 review shortfall)
+
+**What:** A paid E2E (claude -p) that runs the office-hours Phase 5 handoff in
+a tmp repo and asserts BOTH write paths (docs/designs/<topic>.md + the
+~/.gstack copy) land and that `bin/gstack-redact` was invoked at the sink.
+Today only a static prose pin exists (test/skill-validation.test.ts) — the
+plan's R9 asked for the functional shape.
+
+**Why:** The dual-write is an egress path into the user's repo; prose drift
+that skips the redact scan-at-sink would ship user PII into git history with
+nothing failing. **Effort:** M → S with CC. **Priority:** P2.
+**Tier:** periodic (quality, non-deterministic).
+
+### P2: migration runners honor per-migration skip state
+
+**What:** Both migration runners (setup's post-setup block and
+/gstack-upgrade Step 4.75) select migrations purely by version window, so a
+migration that exits via the non-interactive default-skip (v1.27's
+GSTACK_MIGRATE_ASSUME_YES gate) is never offered again — the version marker
+advances past it. The remediation text now prints the honest direct
+invocation, but the runners should track per-migration .done/.skipped
+touchfiles and re-offer pending ones on the next interactive run.
+
+**Why:** Every remaining pre-v1.27 user upgrading via an agent session ([ -t 0 ]
+false) permanently misses the artifacts-rename migration unless they paste the
+manual command. **Effort:** M. **Priority:** P2.
+
+### P2: periodic tier — three documented-red tests need structural repair
+
+**What:** (1) The sidebar E2E trio (navigate, url-accuracy, css-interaction)
+POSTs to /sidebar-command and /sidebar-chat — endpoints removed on every tree
+when the PTY terminal replaced the chat queue (server.ts tombstone ~2671);
+rewrite them against the PTY surface or delete them. (2)
+skill-e2e-ship-idempotency: the PTY child sits at the Claude Code welcome
+screen in plan mode for the full budget — the typed /ship never lands
+(readiness/typing race vs CLI v2.1.233's welcome screen); never green since
+it was born in v1.63. (3) skill-e2e-brain-privacy-gate: never green anywhere;
+the artifacts-sync stop-gate preconditions don't survive the hermetic env
+even with per-test HOME/GSTACK_HOME injection — needs a transcript-level
+debug of what the child's preamble actually echoes.
+
+**Why:** every red periodic run costs triage time; two of these have burned
+three triage passes across two releases. **Effort:** M. **Priority:** P2.
+
 ### P1: #1882 — portable skill-install prefix (non-`gstack` install dirs break silently)
 
 **What:** Every generated SKILL.md hardcodes the literal `~/.claude/skills/gstack/...`
@@ -25,6 +107,9 @@ So #1882 is now purely the body-preamble portability work.
 invocation-time failures.
 **Cons:** Touches the most load-bearing bash in the repo (every skill's preamble);
 a silent mistake breaks all 52 skills. High blast radius — needs its own focused PR.
+**Note (fork port wave 2):** the Apple release adapter (ship/sections/
+apple-release.md) added template surface with `~/.claude/skills/gstack/bin`
+references — include it in this fix's coverage list.
 
 **Context / where to start:**
 - Rewire `ctx.paths.binDir` (and browse/design dir paths) + the ~9 resolvers that

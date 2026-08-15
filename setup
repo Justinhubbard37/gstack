@@ -293,20 +293,62 @@ if [ "$INSTALL_CODEX" -eq 1 ]; then
   migrate_direct_codex_install "$SOURCE_GSTACK_DIR" "$CODEX_GSTACK"
 fi
 
-ensure_playwright_browser() {
-  if [ "$IS_WINDOWS" -eq 1 ]; then
-    # On Windows, Bun can't launch Chromium due to broken pipe handling
-    # (oven-sh/bun#4253). Use Node.js to verify Chromium works instead.
-    (
-      cd "$SOURCE_GSTACK_DIR"
-      node -e "const { chromium } = require('playwright'); (async () => { const b = await chromium.launch(); await b.close(); })()" 2>/dev/null
-    )
-  else
-    (
-      cd "$SOURCE_GSTACK_DIR"
-      bun --eval 'import { chromium } from "playwright"; const browser = await chromium.launch(); await browser.close();'
-    ) >/dev/null 2>&1
+# Kill an entire process tree rooted at $1, leaves first. Killing only the
+# backgrounded subshell orphans the wedged node/bun -> Chromium probe
+# processes underneath it — re-creating the #2136 stuck-process pile-up and
+# potentially leaving Playwright cache locks held. macOS ships no setsid
+# binary, so a portable group-kill isn't available; walk `pgrep -P` children
+# depth-first instead (pgrep exists on macOS and Linux). Falls back to a
+# plain kill of the root pid when pgrep is unavailable.
+_kill_tree() {
+  local pid="$1" child
+  if command -v pgrep >/dev/null 2>&1; then
+    for child in $(pgrep -P "$pid" 2>/dev/null); do
+      _kill_tree "$child"
+    done
   fi
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+# Deadline-bounded wait for a background probe. macOS ships no GNU timeout;
+# poll the PID and SIGKILL the whole probe tree past the deadline. Returns
+# the probe's exit code, or 124 on timeout.
+_wait_with_deadline() {
+  local pid="$1" deadline_s="$2" waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$deadline_s" ]; then
+      _kill_tree "$pid"
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
+ensure_playwright_browser() {
+  # #2136: fresh installs hung forever at this probe (macOS arm64) and
+  # re-runs stacked stuck process trees, so skills never got linked. Two
+  # fixes: prefer Node for the launch probe everywhere it exists (the
+  # bun --eval launch is the same pipe-bug family already worked around on
+  # Windows), and bound the probe with a 90s deadline — a wedged probe now
+  # reports failure (which routes to the install path) instead of hanging
+  # setup.
+  local probe_cmd
+  if command -v node >/dev/null 2>&1; then
+    probe_cmd='node -e "const { chromium } = require((process.cwd()) + \"/node_modules/playwright\"); (async () => { const b = await chromium.launch(); await b.close(); })().then(() => process.exit(0), () => process.exit(1))"'
+  elif [ "$IS_WINDOWS" -eq 1 ]; then
+    echo "gstack setup failed: Node.js is required on Windows" >&2
+    return 1
+  else
+    probe_cmd="bun --eval 'import { chromium } from \"playwright\"; const browser = await chromium.launch(); await browser.close();'"
+  fi
+  (
+    cd "$SOURCE_GSTACK_DIR"
+    eval "$probe_cmd"
+  ) >/dev/null 2>&1 &
+  _wait_with_deadline $! 90
 }
 
 # Ensure a color-emoji font is installed (Linux only).
@@ -568,14 +610,41 @@ fi
 
 if ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
-  (
-    cd "$SOURCE_GSTACK_DIR"
-    if [ -n "$_PLAYWRIGHT_PLATFORM_OVERRIDE" ]; then
-      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bunx playwright install chromium
-    else
-      bunx playwright install chromium
+  _PW_LOCK="${TMPDIR:-/tmp}/gstack-playwright-install.lock"
+  # Stale-lock self-heal: a SIGKILL'd prior setup leaves the lock dir behind
+  # forever (mkdir mutexes have no owner). If the recorded holder PID is dead,
+  # reclaim instead of telling the user to rmdir by hand.
+  if [ -d "$_PW_LOCK" ] && [ -f "$_PW_LOCK/pid" ]; then
+    _PW_HOLDER=$(cat "$_PW_LOCK/pid" 2>/dev/null || true)
+    if [ -n "$_PW_HOLDER" ] && ! kill -0 "$_PW_HOLDER" 2>/dev/null; then
+      echo "  reclaiming stale Chromium-install lock (holder pid $_PW_HOLDER is gone)" >&2
+      rm -rf "$_PW_LOCK" 2>/dev/null || true
     fi
-  )
+  fi
+  if mkdir "$_PW_LOCK" 2>/dev/null; then
+    echo "$$" > "$_PW_LOCK/pid" 2>/dev/null || true
+    # Chain the earlier cleanup_copied_bun EXIT trap: `trap ... EXIT` REPLACES
+    # the previous handler, so the lock trap must run both or any run taking
+    # this path leaves .tmp-bun-bin behind.
+    trap 'rm -rf "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun' EXIT
+    (
+      cd "$SOURCE_GSTACK_DIR"
+      if [ -n "$_PLAYWRIGHT_PLATFORM_OVERRIDE" ]; then
+        PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bunx playwright install chromium
+      else
+        bunx playwright install chromium
+      fi
+    )
+    rm -rf "$_PW_LOCK" 2>/dev/null || true
+    # Restore the original handler (never `trap - EXIT`, which would clear
+    # cleanup_copied_bun for the rest of the script).
+    trap cleanup_copied_bun EXIT
+  else
+    echo "  another gstack setup is already installing Chromium (lock: $_PW_LOCK)." >&2
+    echo "  Wait for it to finish, then re-run ./setup. If no other setup is running," >&2
+    echo "  remove the stale lock: rm -rf \"$_PW_LOCK\"" >&2
+    exit 1
+  fi
 
   if [ "$IS_WINDOWS" -eq 1 ]; then
     # On Windows, Node.js launches Chromium (not Bun — see oven-sh/bun#4253).

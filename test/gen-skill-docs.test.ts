@@ -1079,8 +1079,11 @@ describe('PLAN_VERIFICATION_EXEC placeholder', () => {
     expect(shipSkill).toContain('qa-only');
   });
 
-  test('contains localhost reachability check', () => {
-    expect(shipSkill).toContain('localhost:3000');
+  test('contains dev-server discovery (CLAUDE.md first, then a port probe)', () => {
+    // Fork port wave 2: the hardcoded 4-port list became read-CLAUDE.md-or-
+    // probe; the probe loops common ports instead of naming each once.
+    expect(shipSkill).toContain('CLAUDE.md first');
+    expect(shipSkill).toContain('http://localhost:$_p');
     expect(shipSkill).toContain('NO_SERVER');
   });
 

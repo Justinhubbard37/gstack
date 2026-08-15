@@ -22,7 +22,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { readFileSync } from "fs";
@@ -45,9 +45,68 @@ describe("gstack-memory-ingest: gbrain import must not be filtered by .gitignore
     const stripped = stripComments(readFileSync(SOURCE_PATH, "utf-8"));
     // Match the spawn call's argument array and assert both the subcommand
     // and the flag live in it, so the flag can't drift onto another call.
-    const call = stripped.match(/spawnGbrainAsync\(\s*\[[^\]]*"import"[^\]]*\]/s);
+    // [\s\S]*? bridges the conditional-spread's nested brackets (main's
+    // capability-probed --include-gitignored merged with our baseEnv defense).
+    const call = stripped.match(/spawnGbrainAsync\(\s*\[[\s\S]*?"import"[\s\S]*?\]/s);
     expect(call).not.toBeNull();
     expect(call![0]).toContain("--include-gitignored");
+  });
+
+  it("sets a realpath'd GIT_CEILING_DIRECTORIES on the import child (defense-in-depth)", () => {
+    const stripped = stripComments(readFileSync(SOURCE_PATH, "utf-8"));
+    // Second #2144 layer: the ceiling env must be built from the staging
+    // dir's REAL parent path and merged into the spawn's baseEnv, so a
+    // git-enumerating collector fails out of the git fast path even when
+    // the flag's semantics drift, and symlinked staging paths still match.
+    expect(stripped).toContain("GIT_CEILING_DIRECTORIES");
+    expect(stripped).toMatch(/realpathSync\(dirname\(stagingDir\)\)/);
+    const call = stripped.match(/spawnGbrainAsync\(\s*\[[\s\S]*?"import"[\s\S]*?\]\s*,\s*\{\s*baseEnv\s*\}/s);
+    expect(call).not.toBeNull();
+  });
+
+  it("proves the ceiling stops git discovery from the staging dir — including through a symlink", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gstack-ingest-ceiling-"));
+    try {
+      const git = (args: string[], cwd: string, env?: NodeJS.ProcessEnv) =>
+        execFileSync("git", args, {
+          cwd,
+          encoding: "utf-8",
+          env: { ...process.env, ...env },
+        });
+      // ~/.gstack shape: a git repo whose root ignores everything, with the
+      // staging dir as a direct child.
+      const home = join(dir, "gstack-home");
+      mkdirSync(home, { recursive: true });
+      git(["init", "-q", "."], home);
+      writeFileSync(join(home, ".gitignore"), "*\n", "utf-8");
+      const staging = join(home, ".staging-ingest-12345-1700000000000");
+      mkdirSync(staging, { recursive: true });
+
+      // Without a ceiling: discovery from the staging dir finds the repo —
+      // this is the git fast path that collects zero files.
+      const found = git(["rev-parse", "--show-toplevel"], staging).trim();
+      expect(realpathSync(found)).toBe(realpathSync(home));
+
+      // With the ceiling at the staging dir's REAL parent: discovery fails,
+      // which is exactly what pushes a collector onto its plain FS walk.
+      const ceiling = realpathSync(home);
+      expect(() =>
+        git(["rev-parse", "--show-toplevel"], staging, { GIT_CEILING_DIRECTORIES: ceiling }),
+      ).toThrow();
+
+      // Symlink variant (the OV4 trap): reach the same staging dir through a
+      // symlinked path. A realpath'd ceiling still stops discovery.
+      const linked = join(dir, "linked-home");
+      symlinkSync(home, linked);
+      const stagingViaLink = join(linked, ".staging-ingest-12345-1700000000000");
+      expect(() =>
+        git(["rev-parse", "--show-toplevel"], stagingViaLink, {
+          GIT_CEILING_DIRECTORIES: ceiling,
+        }),
+      ).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("demonstrates the collision: an ignore-everything root hides staged pages", () => {

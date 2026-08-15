@@ -28,6 +28,8 @@ triggers:
 
 {{PREAMBLE}}
 
+{{THIRD_PARTY_ACTIONS}}
+
 {{BASE_BRANCH_DETECT}}
 
 {{GBRAIN_CONTEXT_LOAD}}
@@ -74,6 +76,18 @@ Never skip a verification step because a prior `/ship` run already performed it.
 {{SECTION_INDEX:ship}}
 
 ---
+
+## Step 0.9: Apple target detection
+
+Shipping to the App Store is not landing a PR. If the repository contains an
+`.xcodeproj`, `.xcworkspace`, or a Swift package with an app product AND the
+user's ask is store distribution (App Store, TestFlight, "release my app"),
+**STOP and Read `~/.claude/skills/gstack/ship/sections/apple-release.md` FIRST**
+— before the branch gate and any preflight below. Store distribution proceeds
+from whatever branch the user is on (a clean tree on the base branch is the
+solo developer's normal case, not an error) and follows the adapter end to
+end. The branch gate and repository-landing pipeline below apply ONLY to
+repository-landing asks, including on Apple repos.
 
 ## Step 1: Pre-flight
 

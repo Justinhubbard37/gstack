@@ -14,7 +14,7 @@ import * as path from 'path';
 import { spawn as nodeSpawn } from 'child_process';
 import { safeUnlink, safeUnlinkQuiet, safeKill, isProcessAlive } from './error-handling';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
-import { resolveConfig, ensureStateDir, readVersionHash } from './config';
+import { resolveConfig, ensureStateDir, readVersionHash, isPairAgentEnabled } from './config';
 import { parseProxyConfig, computeConfigHash, ProxyConfigError } from './proxy-config';
 import { redactProxyUrl } from './proxy-redact';
 import { spawnTerminalAgent } from './terminal-agent-control';
@@ -168,7 +168,7 @@ async function killServer(pid: number): Promise<void> {
     try {
       Bun.spawnSync(
         ['taskkill', '/PID', String(pid), '/T', '/F'],
-        { stdout: 'pipe', stderr: 'pipe', timeout: 5000 }
+        { stdout: 'pipe', stderr: 'pipe', timeout: 5000, windowsHide: true }
       );
     } catch (err: any) {
       if (err?.code !== 'ENOENT') throw err;
@@ -348,9 +348,9 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
     const launcherCode =
       `const{spawn}=require('child_process');` +
       `spawn(process.execPath,[${JSON.stringify(NODE_SERVER_SCRIPT)}],` +
-      `{detached:true,stdio:['ignore','ignore','ignore'],env:Object.assign({},process.env,` +
+      `{detached:true,windowsHide:true,stdio:['ignore','ignore','ignore'],env:Object.assign({},process.env,` +
       `${extraEnvStr})}).unref()`;
-    Bun.spawnSync(['node', '-e', launcherCode], { stdio: ['ignore', 'ignore', 'ignore'] });
+    Bun.spawnSync(['node', '-e', launcherCode], { stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true });
   } else {
     // macOS/Linux: Bun.spawn().unref() only removes the child from Bun's event
     // loop — it does NOT call setsid(), so the spawned server stays in the
@@ -365,6 +365,7 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
     // the Windows path's rationale — same root cause, different OS API.
     nodeSpawn('bun', ['run', SERVER_SCRIPT], {
       detached: true,
+      windowsHide: true,
       stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...process.env, BROWSE_STATE_FILE: config.stateFile, BROWSE_PARENT_PID: parentPid, ...extraEnv },
     }).unref();
@@ -408,31 +409,29 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
   throw new Error(`Server failed to start within ${MAX_START_WAIT / 1000}s`);
 }
 
-function errorCode(err: unknown): string {
-  if (err && typeof err === 'object' && 'code' in err) {
-    const code = (err as { code?: unknown }).code;
-    if (typeof code === 'string' && code.length > 0) return code;
+export class ServerLockError extends Error {
+  code: string;
+  constructor(code: string, lockPath: string, cause: string) {
+    super(`E_SERVER_LOCK (${code}): cannot acquire ${lockPath} — ${cause}`);
+    this.name = 'ServerLockError';
+    this.code = code;
   }
-  return 'UNKNOWN';
-}
-
-function errorMessage(err: unknown): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === 'string' && message.length > 0) return message;
-  }
-  return String(err);
-}
-
-function logServerLockError(action: string, lockPath: string, err: unknown): void {
-  console.error(`[browse] acquireServerLock: unexpected ${errorCode(err)} while ${action} ${lockPath}: ${errorMessage(err)}`);
 }
 
 /**
  * Acquire an exclusive lockfile to prevent concurrent ensureServer() races (TOCTOU).
- * Returns a cleanup function that releases the lock.
+ * Returns a cleanup function that releases the lock, or null when another
+ * LIVE process genuinely holds the lock (real contention).
+ *
+ * Error honesty (#1084): only EEXIST is contention. ENOENT (state dir
+ * missing) self-heals with one mkdir retry; every other errno (EACCES,
+ * ENOSPC, ...) throws ServerLockError with the real errno instead of
+ * reporting phantom "another process holds the lock" contention forever.
  */
-export function acquireServerLock(lockPath: string = `${config.stateFile}.lock`): (() => void) | null {
+export function acquireServerLock(
+  lockPath: string = `${config.stateFile}.lock`,
+  depth = 0,
+): (() => void) | null {
   try {
     // 'wx' — create exclusively, fails if file already exists (atomic check-and-create)
     // Using string flag instead of numeric constants for Bun Windows compatibility
@@ -440,36 +439,35 @@ export function acquireServerLock(lockPath: string = `${config.stateFile}.lock`)
     fs.writeSync(fd, `${process.pid}\n`);
     fs.closeSync(fd);
     return () => { safeUnlink(lockPath); };
-  } catch (err) {
-    if (errorCode(err) !== 'EEXIST') {
-      logServerLockError('opening', lockPath, err);
-      return null;
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      // Lock dir missing — create it and retry once.
+      if (depth >= 1) throw new ServerLockError('ENOENT', lockPath, 'lock directory could not be created');
+      mkdirSecure(path.dirname(lockPath));
+      return acquireServerLock(lockPath, depth + 1);
     }
-
-    // Lock already held — check if the holder is still alive
-    let holderPid: number;
+    if (err?.code !== 'EEXIST') {
+      throw new ServerLockError(err?.code || 'UNKNOWN', lockPath, err?.message || String(err));
+    }
+    // EEXIST — real contention. Check if the holder is still alive.
+    // Depth cap 5 bounds the stale-lock unlink/retry livelock.
     try {
-      holderPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
-    } catch (readErr) {
-      if (errorCode(readErr) === 'ENOENT') {
-        return acquireServerLock(lockPath);
+      const holderPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
+      if (holderPid && isProcessAlive(holderPid)) {
+        return null; // Another live process holds the lock
       }
-      logServerLockError('reading holder PID from', lockPath, readErr);
-      return null;
-    }
-
-    if (holderPid && isProcessAlive(holderPid)) {
-      return null; // Another live process holds the lock
-    }
-
-    // Stale lock — remove and retry
-    try {
+      // Stale lock — remove and retry
       fs.unlinkSync(lockPath);
-    } catch (unlinkErr) {
-      logServerLockError('removing stale', lockPath, unlinkErr);
-      return null;
+      if (depth >= 5) return null;
+      return acquireServerLock(lockPath, depth + 1);
+    } catch (readErr: any) {
+      if (readErr?.code === 'ENOENT') {
+        // Lock vanished between open and read (holder released) — retry.
+        if (depth >= 5) return null;
+        return acquireServerLock(lockPath, depth + 1);
+      }
+      throw new ServerLockError(readErr?.code || 'UNKNOWN', lockPath, readErr?.message || String(readErr));
     }
-    return acquireServerLock(lockPath);
   }
 }
 
@@ -656,17 +654,7 @@ async function sendCommand(state: ServerState, command: string, args: string[], 
       process.exit(1);
     }
     // Connection error — server may have crashed, OR may just be busy.
-    // The compiled CLI runs on Bun, whose fetch reports a refused/dropped
-    // socket as err.code 'ConnectionRefused' / 'ConnectionClosed' (message
-    // "Unable to connect. Is the computer able to access the url?"), NOT Node's
-    // ECONNREFUSED/ECONNRESET. Match both, or daemon crashes leak the raw Bun
-    // error and exit 1 instead of triggering the busy-check/restart below.
-    const isConnError =
-      err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET' ||
-      err.code === 'ConnectionRefused' || err.code === 'ConnectionClosed' ||
-      err.message?.includes('fetch failed') ||
-      err.message?.includes('Unable to connect');
-    if (isConnError) {
+    if (err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET' || err.message?.includes('fetch failed')) {
       const oldState = readState();
       // #1781 busy-vs-dead: a single-threaded daemon under beacon/extension load
       // can briefly stop answering HTTP while still alive. Before declaring a
@@ -980,8 +968,12 @@ async function handlePairAgent(state: ServerState, args: string[]): Promise<void
   if (pairData.tunnel_url) {
     serverUrl = pairData.tunnel_url;
   } else if (!localHost) {
-    // No tunnel active. Check if ngrok is available and auto-start.
-    const ngrokAvailable = isNgrokAvailable();
+    // No tunnel active. Remote tunneling (pair-agent) is opt-in — never
+    // auto-start it unless the user explicitly enabled it, even if ngrok is
+    // installed and authed. First use goes through the /pair-agent skill's
+    // consent question, which sets the key.
+    const pairEnabled = isPairAgentEnabled();
+    const ngrokAvailable = pairEnabled && isNgrokAvailable();
     if (ngrokAvailable) {
       console.log('[browse] ngrok detected. Starting tunnel...');
       try {
@@ -1005,6 +997,14 @@ async function handlePairAgent(state: ServerState, args: string[]): Promise<void
         console.warn('[browse] Using localhost (same-machine only).\n');
         serverUrl = pairData.server_url;
       }
+    } else if (!pairEnabled) {
+      // Consent gate, not a tooling gap: when pair_agent is off, ngrok
+      // setup instructions can never fix it. Name the real remedy, with
+      // the same wording as the /tunnel/start 403 body in server.ts.
+      console.warn('[browse] No tunnel active: pair-agent is off (tunnel exposes this browser beyond the machine).');
+      console.warn('[browse] Instructions will use localhost (same-machine only).');
+      console.warn('[browse] For remote agents: enable once with `gstack-config set pair_agent on` — or run /pair-agent, which asks for consent and sets it.\n');
+      serverUrl = pairData.server_url;
     } else {
       console.warn('[browse] No tunnel active and ngrok is not installed/configured.');
       console.warn('[browse] Instructions will use localhost (same-machine only).');
@@ -1207,7 +1207,6 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
         const newPid = spawnTerminalAgent({
           stateFile: config.stateFile,
           serverPort: newState.port,
-          ownerPid: newState.pid,
           cwd: config.projectDir,
         });
         if (newPid) {
@@ -1300,7 +1299,6 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
           spawnTerminalAgent({
             stateFile: config.stateFile,
             serverPort: respawned.port,
-            ownerPid: respawned.pid,
             cwd: config.projectDir,
           });
         } catch (err: any) {

@@ -664,6 +664,10 @@ When options differ in coverage, include `Completeness: X/10` (10 = all edge cas
 
 For high-stakes ambiguity (architecture, data model, destructive scope, missing context), STOP. Name it in one sentence, present 2-3 options with tradeoffs, and ask. Do not use for routine coding or obvious changes.
 
+## Claimed Limitations Need Evidence
+
+A claimed limitation or requirement ("the API can't do this", "X requires a credential", "that's impossible on this platform") is a material claim. State one only with the verbatim error, the documented statement, or a live probe in hand — pattern-matching a failure to a familiar story is not evidence. When a cheap probe settles the question, run it BEFORE asking the user anything or declaring a step blocked.
+
 ## Continuous Checkpoint Mode
 
 If `CHECKPOINT_MODE` is `"continuous"`: auto-commit completed logical units with `WIP:` prefix.
@@ -794,6 +798,20 @@ the failure occurred (if outcome is error, otherwise use empty string "").
 
 Skills that run plan reviews (`/plan-*-review`, `/codex review`) include the EXIT PLAN MODE GATE blocking checklist at the end of the skill, which verifies the plan file ends with `## GSTACK REVIEW REPORT` before ExitPlanMode is called. Skills that don't run plan reviews (operational skills like `/ship`, `/qa`, `/review`) typically don't operate in plan mode and have no review report to verify; this footer is a no-op for them. Writing the plan file is the one edit allowed in plan mode.
 
+## Third-Party Web Actions
+
+A step sometimes requires action on an external website the user controls: registering an API key, creating a vendor or developer account, configuring a dashboard, webhook, OAuth app, billing plan, or domain verification. This contract governs that moment. It grants no new browsing authority — the AskUserQuestion format and one-way-door rules remain binding, including approval before anything that spends money.
+
+1. **Never hand the user a manual step list for a third-party site without first offering to drive it.** The driver is gstack's own browser stack: `$B` headed mode with handoff/resume for the human-only moments (see the /browse skill), or GStack Browser when installed. Never install new tooling to close the gap, and never treat tooling presence as consent to browse.
+
+2. **One explicit question before any browsing.** STOP and name the exact site and the exact actions (for example "create a test-mode API token in the Duffel dashboard"), then offer: A) I drive it now in a visible browser — you take over for sign-in and approvals, B) manual instructions, C) defer. The selection is per-task consent; never persist it as standing permission and never infer it from an earlier task.
+
+3. **When driving, touch only the named site and actions.** Password entry, new-account credential choice, payment, CAPTCHA, and identity verification are user-performed: hand off (`$B handoff`) and wait instead of acting. Prefer credential flows that never expose the secret to the agent, such as password-manager autofill or the dashboard's own copy button used by the human.
+
+4. **A captured secret never appears in chat output, logs, or shell history.** Write it to a user-approved local file with owner-only permissions (0600) or the user's secret store, and keep generated destinations out of version control. Dashboard fields are often masked placeholders — verify the captured credential with ONE non-mutating API call before claiming success; a 401 here has caught a placeholder masquerading as a key.
+
+5. **If the user declines or defers, or no browser is usable,** provide the manual steps and mark the step blocked on the user. Do not recommend or install new products to close the gap.
+
 ## Step 0: Detect platform and base branch
 
 First, detect the git hosting platform from the remote URL:
@@ -877,6 +895,18 @@ Never skip a verification step because a prior `/ship` run already performed it.
 
 
 ---
+
+## Step 0.9: Apple target detection
+
+Shipping to the App Store is not landing a PR. If the repository contains an
+`.xcodeproj`, `.xcworkspace`, or a Swift package with an app product AND the
+user's ask is store distribution (App Store, TestFlight, "release my app"),
+**STOP and Read `$GSTACK_ROOT/ship/sections/apple-release.md` FIRST**
+— before the branch gate and any preflight below. Store distribution proceeds
+from whatever branch the user is on (a clean tree on the base branch is the
+solo developer's normal case, not an error) and follows the adapter end to
+end. The branch gate and repository-landing pipeline below apply ONLY to
+repository-landing asks, including on Apple repos.
 
 ## Step 1: Pre-flight
 
@@ -999,41 +1029,70 @@ git fetch origin <base> && git merge origin/<base> --no-edit
 
 ## Test Framework Bootstrap
 
-**Detect existing test framework and project runtime:**
+**Read the project's AGENTS.md (and TESTING.md if present) FIRST.** If it documents a test command, the project already told you: no detection, no bootstrap. Skip the rest of bootstrap and use that command in Step 5.
+
+**Otherwise gather markers. Every marker below is EVIDENCE for the question you ask — never a command to run blind.** A marker tells you which ecosystem you're in and which command to OFFER. It does not tell you the command works. Do not execute a candidate test command to "check" it: a probe on a project that never had that runner fails loudly and teaches you nothing, and installing a second framework over a working one is worse.
 
 ```bash
 setopt +o nomatch 2>/dev/null || true  # zsh compat
-# Detect project runtime
-[ -f Gemfile ] && echo "RUNTIME:ruby"
+# Definitive ecosystem markers (presence = ecosystem, NOT a command to run)
+[ -f manage.py ] && echo "RUNTIME:python FRAMEWORK:django MARKER:manage.py"
+{ [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f tox.ini ] || [ -f setup.cfg ] || [ -f requirements.txt ]; } && echo "RUNTIME:python"
+[ -f Gemfile ] || [ -f Rakefile ] || [ -f .rspec ] && echo "RUNTIME:ruby"
 [ -f package.json ] && echo "RUNTIME:node"
-[ -f requirements.txt ] || [ -f pyproject.toml ] && echo "RUNTIME:python"
 [ -f go.mod ] && echo "RUNTIME:go"
 [ -f Cargo.toml ] && echo "RUNTIME:rust"
 [ -f composer.json ] && echo "RUNTIME:php"
 [ -f mix.exs ] && echo "RUNTIME:elixir"
+[ -f pom.xml ] && echo "RUNTIME:jvm BUILD:maven"
+{ [ -f build.gradle ] || [ -f build.gradle.kts ]; } && echo "RUNTIME:jvm BUILD:gradle"
 # Detect sub-frameworks
 [ -f Gemfile ] && grep -q "rails" Gemfile 2>/dev/null && echo "FRAMEWORK:rails"
 [ -f package.json ] && grep -q '"next"' package.json 2>/dev/null && echo "FRAMEWORK:nextjs"
-# Check for existing test infrastructure
-ls jest.config.* vitest.config.* playwright.config.* .rspec pytest.ini pyproject.toml phpunit.xml 2>/dev/null
-ls -d test/ tests/ spec/ __tests__/ cypress/ e2e/ 2>/dev/null
+# Existing test path — config files, declared scripts, AND test FILES.
+# A project with real tests and no config file is the common miss.
+ls jest.config.* vitest.config.* playwright.config.* .rspec pytest.ini tox.ini phpunit.xml* 2>/dev/null
+[ -f package.json ] && grep -q '"test"[[:space:]]*:' package.json && echo "SCRIPT:package.json test"
+[ -f Makefile ] && grep -qE '^(test|check):' Makefile && echo "TARGET:make test"
+[ -f pyproject.toml ] && grep -q "pytest" pyproject.toml && echo "CONFIG:pyproject pytest"
+git ls-files | grep -cE '(^|/)(tests?|spec|__tests__)/|(^|/)tests?\.py$|(^|/)test_[^/]+\.py$|_test\.(go|py|rb|ts|js|exs)$|\.(test|spec)\.[jt]sx?$|_spec\.rb$|Test\.(java|kt)$' | sed 's/^/TESTFILES:/'
+# Rust keeps unit tests inside src/, so file names alone miss them
+[ -f Cargo.toml ] && git grep -lF '#[test]' -- 'src' >/dev/null 2>&1 && echo "TESTS:rust in-source"
 # Check opt-out marker
 [ -f .gstack/no-test-bootstrap ] && echo "BOOTSTRAP_DECLINED"
 ```
 
-**If test framework detected** (config files or test directories found):
-Print "Test framework detected: {name} ({N} existing tests). Skipping bootstrap."
+Map the markers to the command you will OFFER — never to one you run on a guess:
+
+| Marker | Ecosystem | Candidate command to offer |
+|--------|-----------|----------------------------|
+| `manage.py` | Django | `python manage.py test` (or `pytest` when pytest-django is in the deps) |
+| `pytest.ini` / `tox.ini` / pytest in `pyproject.toml` / `test_*.py` | Python | `pytest` |
+| `go.mod` (+ any `*_test.go`) | Go | `go test ./...` |
+| `Cargo.toml` | Rust | `cargo test` |
+| `pom.xml` | JVM (Maven) | `mvn test` |
+| `build.gradle` / `build.gradle.kts` | JVM (Gradle) | `./gradlew test` |
+| `Gemfile` / `Rakefile` / `.rspec` | Ruby | `bundle exec rspec`, `bin/rails test`, or `rake test` |
+| `mix.exs` | Elixir | `mix test` |
+| `composer.json` | PHP | `composer test` or `./vendor/bin/phpunit` |
+| `package.json` with a `test` script | Node | that script, run with the package manager the lockfile names |
+| `Makefile` with a `test:` target | any | `make test` |
+
+**If ANY existing-test evidence appears** (a config file, a declared test script or make target, a nonzero `TESTFILES:` count, or `TESTS:rust in-source`): the project has tests. **Do NOT bootstrap.** Print "Existing tests detected: {the evidence}." Then get the command the same way Step 5 does — AGENTS.md/TESTING.md if documented, otherwise AskUserQuestion offering the candidates from the table above plus "Other", and persist the answer to AGENTS.md's `## Testing` section so it is never asked again. When the ecosystem ships a runner (Django, Go, Rust, Elixir, Maven/Gradle), that runner is the candidate — never install a second framework beside a working one.
 Read 2-3 existing test files to learn conventions (naming, imports, assertion style, setup patterns).
 Store conventions as prose context for use in Phase 8e.5 or Step 7. **Skip the rest of bootstrap.**
 
+Absent config files and absent `tests/` directories are NOT evidence of "no tests": Django keeps tests in `<app>/tests.py`, Go in `*_test.go` beside the source, Rust in `#[test]` blocks inside `src/`. A green `python manage.py test` with no `pytest.ini` is a tested project, not a bootstrap candidate.
+
 **If BOOTSTRAP_DECLINED** appears: Print "Test bootstrap previously declined — skipping." **Skip the rest of bootstrap.**
 
-**If NO runtime detected** (no config files found): Use AskUserQuestion:
+**If NO ecosystem marker matched:** Use AskUserQuestion:
 "I couldn't detect your project's language. What runtime are you using?"
 Options: A) Node.js/TypeScript B) Ruby/Rails C) Python D) Go E) Rust F) PHP G) Elixir H) This project doesn't need tests.
+If the runtime you need isn't listed, offer "Other" and take the runtime plus the test command as free text.
 If user picks H → write `.gstack/no-test-bootstrap` and continue without tests.
 
-**If runtime detected but no test framework — bootstrap:**
+**If an ecosystem matched but there is no existing-test evidence at all — bootstrap:**
 
 ### B2. Research best practices
 
@@ -1049,7 +1108,9 @@ If WebSearch is unavailable, use this built-in knowledge table:
 | Node.js | vitest + @testing-library | jest + @testing-library |
 | Next.js | vitest + @testing-library/react + playwright | jest + cypress |
 | Python | pytest + pytest-cov | unittest |
+| Django | pytest + pytest-django | Django's built-in `manage.py test` (unittest) |
 | Go | stdlib testing + testify | stdlib only |
+| JVM (Maven/Gradle) | JUnit 5 + AssertJ | JUnit 5 only |
 | Rust | cargo test (built-in) + mockall | — |
 | PHP | phpunit + mockery | pest |
 | Elixir | ExUnit (built-in) + ex_machina | — |
@@ -1378,15 +1439,20 @@ Before analyzing coverage, detect the project's test framework:
 
 ```bash
 setopt +o nomatch 2>/dev/null || true  # zsh compat
-# Detect project runtime
-[ -f Gemfile ] && echo "RUNTIME:ruby"
+# Detect project runtime (markers are evidence, not commands to run blind)
+[ -f manage.py ] && echo "RUNTIME:python FRAMEWORK:django"
+{ [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f tox.ini ] || [ -f setup.cfg ] || [ -f requirements.txt ]; } && echo "RUNTIME:python"
+[ -f Gemfile ] || [ -f Rakefile ] || [ -f .rspec ] && echo "RUNTIME:ruby"
 [ -f package.json ] && echo "RUNTIME:node"
-[ -f requirements.txt ] || [ -f pyproject.toml ] && echo "RUNTIME:python"
 [ -f go.mod ] && echo "RUNTIME:go"
 [ -f Cargo.toml ] && echo "RUNTIME:rust"
-# Check for existing test infrastructure
-ls jest.config.* vitest.config.* playwright.config.* cypress.config.* .rspec pytest.ini phpunit.xml 2>/dev/null
-ls -d test/ tests/ spec/ __tests__/ cypress/ e2e/ 2>/dev/null
+[ -f pom.xml ] && echo "RUNTIME:jvm BUILD:maven"
+{ [ -f build.gradle ] || [ -f build.gradle.kts ]; } && echo "RUNTIME:jvm BUILD:gradle"
+# Check for existing test infrastructure — config files, scripts, AND test files
+ls jest.config.* vitest.config.* playwright.config.* cypress.config.* .rspec pytest.ini tox.ini phpunit.xml 2>/dev/null
+[ -f package.json ] && grep -q '"test"[[:space:]]*:' package.json && echo "SCRIPT:package.json test"
+[ -f Makefile ] && grep -qE '^(test|check):' Makefile && echo "TARGET:make test"
+git ls-files | grep -cE '(^|/)(tests?|spec|__tests__)/|(^|/)tests?\.py$|(^|/)test_[^/]+\.py$|_test\.(go|py|rb|ts|js|exs)$|\.(test|spec)\.[jt]sx?$|_spec\.rb$|Test\.(java|kt)$' | sed 's/^/TESTFILES:/'
 ```
 
 3. **If no framework detected:** falls through to the Test Framework Bootstrap step (Step 4) which handles full setup.
@@ -1818,16 +1884,23 @@ Using the plan file already discovered in Step 8, look for a verification sectio
 
 ### 2. Check for running dev server
 
-Before invoking browse-based verification, check if a dev server is reachable:
+Before invoking browse-based verification, find the dev-server URL the way the
+project declares it — never trust a hardcoded port list alone:
+
+1. **AGENTS.md first:** look for a documented dev URL or dev command (a
+   `## Development`/`## Testing` section naming a port or URL). Use it.
+2. **The plan file:** if the plan's verification section names a URL, use it.
+3. **Fallback probe** (common ports, only when 1-2 found nothing):
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 2>/dev/null || \
-curl -s -o /dev/null -w '%{http_code}' http://localhost:8080 2>/dev/null || \
-curl -s -o /dev/null -w '%{http_code}' http://localhost:5173 2>/dev/null || \
-curl -s -o /dev/null -w '%{http_code}' http://localhost:4000 2>/dev/null || echo "NO_SERVER"
+for _p in 3000 8080 5173 4000 4321 8000; do
+  _code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$_p" 2>/dev/null)
+  [ -n "$_code" ] && [ "$_code" != "000" ] && { echo "DEV_SERVER: http://localhost:$_p ($_code)"; break; }
+done
+[ -z "${_code:-}" ] || [ "${_code:-000}" = "000" ] && echo "NO_SERVER"
 ```
 
-**If NO_SERVER:** Skip with "No dev server detected — skipping plan verification. Run /qa separately after deploying."
+**If NO_SERVER:** Skip with "No dev server detected (checked AGENTS.md, the plan, and common ports) — skipping plan verification. Run /qa separately after deploying, or document the dev URL in AGENTS.md so this step finds it next time."
 
 ### 3. Invoke /qa-only inline
 
@@ -2578,6 +2651,8 @@ glab mr view -F json 2>/dev/null | jq -r 'if .state == "opened" then "MR_EXISTS"
 ```
 
 If an **open** PR/MR already exists: **update** the PR body using `gh pr edit --body-file "$PR_BODY_FILE"` (GitHub) or `glab mr update -d ...` (GitLab). Always regenerate the PR body from scratch using this run's fresh results (test output, coverage audit, review findings, adversarial review, TODOS summary, documentation_section from Step 18). Never reuse stale PR body content from a prior run. **Run the same redaction scan-at-sink (PR body + title) as the create path (Step 19) before editing — scan the temp file, then `gh pr edit --body-file` from it.**
+
+**REST fallback (#1079):** on some repos `gh pr edit` hard-errors with a GraphQL deprecation mentioning `repository.pullRequest.projectCards` ("Projects (classic) is being deprecated..."). That is a `gh` GraphQL-path problem, not a permissions problem — do not re-ask for auth. Fall back to the REST endpoint, which never touches the deprecated field, using the SAME already-scanned temp file: `PR_NUMBER=$(gh pr view --json number -q .number)` then `gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER" -X PATCH -F body=@"$PR_BODY_FILE"` for the body, and `gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER" -X PATCH -f title="$NEW_TITLE"` when the title edit below hits the same error. Verify with the same self-checks as the primary path.
 
 **Always update the PR title to start with `v$NEW_VERSION`.** PR titles use the workspace-aware format `v<NEW_VERSION> <type>: <summary>` — version ALWAYS first, no exceptions, no "custom title kept intentionally" escape hatch. The shared helper `bin/gstack-pr-title-rewrite.sh` is the single source of truth for the rule.
 

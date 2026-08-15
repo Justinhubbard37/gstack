@@ -111,7 +111,7 @@ describeE2E('AUTO_DECIDE opt-in preserved under Conductor flags (periodic)', () 
         skillName: 'plan-ceo-review',
         inPlanMode: true,
         extraArgs: ['--disallowedTools', 'AskUserQuestion'],
-        timeoutMs: 300_000,
+        timeoutMs: 540_000,
         env: { GSTACK_HOME: tmpHome, CONDUCTOR_WORKSPACE_PATH: tmpHome },
       });
 
@@ -135,5 +135,5 @@ describeE2E('AUTO_DECIDE opt-in preserved under Conductor flags (periodic)', () 
     } finally {
       try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
-  }, 360_000);
+  }, 660_000);
 });

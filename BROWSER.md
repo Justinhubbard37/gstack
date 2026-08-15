@@ -1091,6 +1091,19 @@ $B state load my-session         # restore
 In-memory `load-html` content is intentionally NOT persisted (avoid leaking
 secrets to disk).
 
+Manual save/load is one-shot. For state that survives daemon restarts
+automatically, opt in with `BROWSE_PERSIST_STATE=1` in the daemon's
+environment: the headless daemon snapshots cookies + per-tab
+URL/localStorage/sessionStorage to `<stateDir>/session-state.json` (0600,
+atomic writes) every 30 seconds and at clean shutdown, then restores it off
+the boot path on the next launch. Default OFF — cookies on disk are a real
+cost, so the user opts in. Headless only (headed mode's persistent Chromium
+profile already owns its state). Loaded HTML and tab ownership are never
+persisted, cookies for localhost, `.internal`, loopback IP literals
+(127.0.0.0/8, `::1`), and link-local/cloud-metadata addresses
+(169.254.0.0/16) are dropped on restore, and a corrupt snapshot is quarantined to
+`session-state.json.corrupt` so persistence can never block a launch.
+
 ### Watch
 
 ```bash

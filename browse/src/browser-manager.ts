@@ -74,6 +74,82 @@ export function shouldEnableChromiumSandbox(): boolean {
 }
 
 /**
+ * Thrown by probePoisonedChromiumBundle() when it finds — and removes — a
+ * Chromium bundle poisoned by the pre-v1.64 in-place rebrand (#2242).
+ * Call sites rethrow on `instanceof` (never message-string sniffing) so the
+ * actionable remediation reaches the user instead of being swallowed by the
+ * probe's fall-through-on-failure catch.
+ */
+export class PoisonedBundleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PoisonedBundleError';
+  }
+}
+
+/**
+ * Self-heal probe for bundles the OLD (pre-v1.64) rebrand code already
+ * poisoned (#2242): the mutation lives in the SHARED Playwright cache, so
+ * deleting the rebrand code fixes fresh installs only, and the documented
+ * deploy paths never run upgrade migrations. Detect the mutated plist and
+ * remove the bundle so the next `playwright install chromium` (or the
+ * upgrade migration) re-fetches a clean one.
+ *
+ * Removal scope: when the .app sits in the standard Playwright cache layout
+ * (chromium-<rev>/chrome-mac/<name>.app), the WHOLE chromium-<rev> revision
+ * dir is removed — Playwright's INSTALLATION_COMPLETE marker lives there,
+ * and `playwright install chromium` treats its presence as "is already
+ * downloaded", so removing only the .app would turn our own remediation
+ * command into a no-op that leaves the user with no browser at all. Outside
+ * that layout, the .app plus any sibling INSTALLATION_COMPLETE /
+ * DEPENDENCIES_VALIDATED markers are removed.
+ *
+ * Caller contract: pass ONLY Playwright-cache executables
+ * (chromium.executablePath()). A bundle supplied via GSTACK_CHROMIUM_PATH
+ * belongs to the wrapper/embedder — its plist legitimately says "GStack
+ * Browser" — and must never be deleted. Both call sites (launchHeaded and
+ * handoff) honor this, and as a second belt the probe refuses to act on the
+ * GSTACK_CHROMIUM_PATH executable itself.
+ *
+ * @param chromiumExecutablePath the Chromium binary inside the .app
+ *   (…/<name>.app/Contents/MacOS/<name>), as returned by
+ *   chromium.executablePath().
+ * @throws PoisonedBundleError after removing a poisoned bundle — the
+ *   message carries the re-fetch command for the user.
+ */
+export function probePoisonedChromiumBundle(chromiumExecutablePath: string): void {
+  const fs = require('fs');
+  const path = require('path');
+
+  // Belt to the caller contract: never act on the custom/embedder bundle.
+  const customPath = process.env.GSTACK_CHROMIUM_PATH;
+  if (customPath && path.resolve(chromiumExecutablePath) === path.resolve(customPath)) {
+    return;
+  }
+
+  const chromeContentsDir = path.resolve(path.dirname(chromiumExecutablePath), '..');
+  const chromePlist = path.join(chromeContentsDir, 'Info.plist');
+  if (!fs.existsSync(chromePlist)) return;
+  if (!fs.readFileSync(chromePlist, 'utf-8').includes('GStack Browser')) return;
+
+  const appDir = path.resolve(chromeContentsDir, '..');
+  const revisionDir = path.resolve(appDir, '..', '..');
+  if (/^chromium-\d+$/.test(path.basename(revisionDir))) {
+    fs.rmSync(revisionDir, { recursive: true, force: true });
+  } else {
+    fs.rmSync(appDir, { recursive: true, force: true });
+    for (const marker of ['INSTALLATION_COMPLETE', 'DEPENDENCIES_VALIDATED']) {
+      fs.rmSync(path.join(path.dirname(appDir), marker), { force: true });
+    }
+  }
+  throw new PoisonedBundleError(
+    'Chromium bundle was mutated by a previous gstack version (broken codesign seal — ' +
+    'GPU exit_code=5 on macOS 26). The poisoned bundle has been removed. ' +
+    'Re-fetch a clean one with: bunx playwright install chromium — then retry.',
+  );
+}
+
+/**
  * Resolve why the underlying Chromium ChildProcess is going away.
  *
  * The 'disconnected' Playwright event fires before the child process emits
@@ -199,6 +275,15 @@ export class BrowserManager {
 
   // ─── Headed State ────────────────────────────────────────
   private connectionMode: 'launched' | 'headed' = 'launched';
+
+  /**
+   * Fired when a RUNNING daemon is promoted to headed mode (see handoff()),
+   * as opposed to starting headed. The server uses it to cancel the
+   * parent-process watchdog, which was registered on the assumption that mode
+   * is fixed at boot and would otherwise kill the freshly handed-off browser
+   * the next time the spawning shell exits.
+   */
+  onHeadedPromotion?: () => void;
   private intentionalDisconnect = false;
 
   // ─── Tab Count Guardrail (D5 + Codex single-tab flag) ───────
@@ -504,46 +589,32 @@ export class BrowserManager {
     // Used by GStack Browser.app to point at the bundled Chromium.
     const executablePath = process.env.GSTACK_CHROMIUM_PATH || undefined;
 
-    // Rebrand Chromium → GStack Browser in macOS menu bar / Dock / Cmd+Tab.
-    // Patch the Chromium .app's Info.plist so macOS shows our name.
-    // This works for both dev mode (system Playwright cache) and .app bundle.
-    const chromePath = executablePath || chromium.executablePath();
-    try {
-      // Walk up from binary to the .app's Info.plist
-      // e.g. .../Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
-      //   → .../Google Chrome for Testing.app/Contents/Info.plist
-      const chromeContentsDir = path.resolve(path.dirname(chromePath), '..');
-      const chromePlist = path.join(chromeContentsDir, 'Info.plist');
-      if (fs.existsSync(chromePlist)) {
-        const plistContent = fs.readFileSync(chromePlist, 'utf-8');
-        if (plistContent.includes('Google Chrome for Testing')) {
-          const patched = plistContent
-            .replace(/Google Chrome for Testing/g, 'GStack Browser');
-          fs.writeFileSync(chromePlist, patched);
-        }
-        // Replace Chromium's Dock icon with ours (Chromium's process owns the Dock icon)
-        const iconCandidates = [
-          path.join(__dirname, '..', '..', 'scripts', 'app', 'icon.icns'),       // repo dev mode
-          path.join(process.env.HOME || '', '.claude', 'skills', 'gstack', 'scripts', 'app', 'icon.icns'), // global install
-        ];
-        const iconSrc = iconCandidates.find(p => fs.existsSync(p));
-        if (iconSrc) {
-          const chromeResources = path.join(chromeContentsDir, 'Resources');
-          // Read original icon name from plist
-          const iconMatch = plistContent.match(/<key>CFBundleIconFile<\/key>\s*<string>([^<]+)<\/string>/);
-          let origIcon = iconMatch ? iconMatch[1] : 'app';
-          if (!origIcon.endsWith('.icns')) origIcon += '.icns';
-          const destIcon = path.join(chromeResources, origIcon);
-          try {
-            fs.copyFileSync(iconSrc, destIcon);
-          } catch (err: any) {
-            if (err?.code !== 'ENOENT' && err?.code !== 'EACCES') throw err;
-          }
-        }
+    // NOTE (#2242): the in-place "rebrand" that patched the Chromium .app's
+    // Info.plist (global "Google Chrome for Testing" → "GStack Browser"
+    // replace) and overwrote its Resources/*.icns is deliberately GONE.
+    // Chrome for Testing is a code-signed bundle: the global replace renamed
+    // CFBundleExecutable to a binary that doesn't exist and the plist/icon
+    // writes broke the codesign seal — GPU process exit_code=5, headed mode
+    // dead on macOS 26 (#2242, #2138, #2139). Branding belongs in the
+    // GStack Browser.app wrapper (GSTACK_CHROMIUM_PATH), never in a mutation
+    // of the signed bundle. Do not reintroduce writes into the Chromium
+    // bundle here — browse/test/rebrand-signed-bundle.test.ts fails CI if
+    // you do.
+    //
+    // Self-heal for bundles the OLD code already poisoned: probe the
+    // Playwright-cache bundle and remove it when the mutated plist is
+    // present (see probePoisonedChromiumBundle for the removal-scope
+    // rationale). Scoped to the Playwright cache copy — a
+    // GSTACK_CHROMIUM_PATH bundle belongs to the wrapper/embedder and is
+    // never probed.
+    if (!executablePath) {
+      try {
+        probePoisonedChromiumBundle(chromium.executablePath());
+      } catch (err: unknown) {
+        if (err instanceof PoisonedBundleError) throw err;
+        // Probe failures (no bundle yet, EACCES) fall through to launch,
+        // which produces its own actionable error.
       }
-    } catch (err: any) {
-      // Non-fatal: app name stays as Chrome for Testing (ENOENT/EACCES expected)
-      if (err?.code !== 'ENOENT' && err?.code !== 'EACCES') throw err;
     }
 
     // Build custom user agent: report as stock Chrome with the version
@@ -1607,6 +1678,20 @@ export class BrowserManager {
       fs.mkdirSync(userDataDir, { recursive: true });
       cleanSingletonLocks(userDataDir);
 
+      // Self-heal probe (#2242): handoff always launches the Playwright-cache
+      // bundle (this launchPersistentContext call passes no executablePath),
+      // so a bundle poisoned by the old in-place rebrand would GPU-crash here
+      // exactly like launchHeaded(). Same probe, same contract: a
+      // GSTACK_CHROMIUM_PATH bundle is never passed in. The rethrown typed
+      // error surfaces through the outer catch as the actionable
+      // "Cannot open headed browser" message, headless browser untouched.
+      try {
+        probePoisonedChromiumBundle(chromium.executablePath());
+      } catch (err: unknown) {
+        if (err instanceof PoisonedBundleError) throw err;
+        // Probe failures (no bundle yet, EACCES) fall through to launch.
+      }
+
       // T1: same automation-tell-stripping defaults as launchHeaded().
       // The handoff path (headless → headed re-launch) takes the same
       // anti-detection posture.
@@ -1638,6 +1723,14 @@ export class BrowserManager {
       this.pages.clear();
       this.tabSessions.clear();
       this.connectionMode = 'headed';
+
+      // Promotion, not a headed boot. The server registered a parent-process
+      // watchdog because this daemon started headless, and that watchdog kills
+      // headed daemons when their parent exits — which for a CLI-spawned daemon
+      // is immediately. Without this the handed-off browser dies ~15s later,
+      // taking whatever the user was mid-way through (a login, an MFA prompt)
+      // with it.
+      this.onHeadedPromotion?.();
 
       // Same Layer C stealth as launch()/launchHeaded(). Must run BEFORE
       // restoreState() navigates so the init scripts apply to the restored

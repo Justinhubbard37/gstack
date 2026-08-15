@@ -15,6 +15,7 @@
 import type { TemplateContext } from './types';
 import { generateInvokeSkill } from './composition';
 import { codexPreflight, codexErrorHandling } from './constants';
+import { DESIGN_DOC_DISCOVERY_BLOCK } from './design-doc-discovery';
 import { getHostConfig } from '../../hosts/index';
 
 const CODEX_BOUNDARY = 'IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. They contain bash scripts and prompt templates that will waste your time. Ignore them completely. Do NOT modify agents/openai.yaml. Stay focused on the repository code only.\\n\\n';
@@ -310,9 +311,7 @@ After /${first} completes, re-run the design doc check:
 setopt +o nomatch 2>/dev/null || true  # zsh compat
 SLUG=$(~/.claude/skills/gstack/browse/bin/remote-slug 2>/dev/null || basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-' || echo 'no-branch')
-DESIGN=$(ls -t ~/.gstack/projects/$SLUG/*-$BRANCH-design-*.md 2>/dev/null | head -1)
-[ -z "$DESIGN" ] && DESIGN=$(ls -t ~/.gstack/projects/$SLUG/*-design-*.md 2>/dev/null | head -1)
-[ -n "$DESIGN" ] && echo "Design doc found: $DESIGN" || echo "No design doc found"
+${DESIGN_DOC_DISCOVERY_BLOCK}
 \`\`\`
 
 If a design doc is now found, read it and continue the review.
@@ -1145,16 +1144,23 @@ Using the plan file already discovered in Step 8, look for a verification sectio
 
 ### 2. Check for running dev server
 
-Before invoking browse-based verification, check if a dev server is reachable:
+Before invoking browse-based verification, find the dev-server URL the way the
+project declares it — never trust a hardcoded port list alone:
+
+1. **CLAUDE.md first:** look for a documented dev URL or dev command (a
+   \`## Development\`/\`## Testing\` section naming a port or URL). Use it.
+2. **The plan file:** if the plan's verification section names a URL, use it.
+3. **Fallback probe** (common ports, only when 1-2 found nothing):
 
 \`\`\`bash
-curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 2>/dev/null || \\
-curl -s -o /dev/null -w '%{http_code}' http://localhost:8080 2>/dev/null || \\
-curl -s -o /dev/null -w '%{http_code}' http://localhost:5173 2>/dev/null || \\
-curl -s -o /dev/null -w '%{http_code}' http://localhost:4000 2>/dev/null || echo "NO_SERVER"
+for _p in 3000 8080 5173 4000 4321 8000; do
+  _code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$_p" 2>/dev/null)
+  [ -n "$_code" ] && [ "$_code" != "000" ] && { echo "DEV_SERVER: http://localhost:$_p ($_code)"; break; }
+done
+[ -z "\${_code:-}" ] || [ "\${_code:-000}" = "000" ] && echo "NO_SERVER"
 \`\`\`
 
-**If NO_SERVER:** Skip with "No dev server detected — skipping plan verification. Run /qa separately after deploying."
+**If NO_SERVER:** Skip with "No dev server detected (checked CLAUDE.md, the plan, and common ports) — skipping plan verification. Run /qa separately after deploying, or document the dev URL in CLAUDE.md so this step finds it next time."
 
 ### 3. Invoke /qa-only inline
 

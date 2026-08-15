@@ -1,8 +1,22 @@
+/**
+ * #1084 diagnostics — merged-design shape.
+ *
+ * Main's smell wave pinned a log-and-return-null acquireServerLock; this
+ * branch keeps the typed ServerLockError + bounded-retry design (fully pinned
+ * in server-lock-errors.test.ts). This file re-expresses the non-redundant
+ * assertion intents from the wave's test against the kept design:
+ *   - unexpected open failures surface the REAL errno + lock path (typed
+ *     throw), never phantom "another process holds the lock" contention;
+ *   - holder-PID read failures surface errno + lock path the same way;
+ *   - genuine live contention stays SILENT (null return, no stderr noise).
+ * Exact duplicates of server-lock-errors.test.ts coverage (stale-lock
+ * reacquire, ENOENT self-heal, EACCES throw) are deliberately not repeated.
+ */
 import { describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { acquireServerLock } from '../src/cli';
+import { acquireServerLock, ServerLockError } from '../src/cli';
 
 function withTempDir<T>(fn: (dir: string) => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-lock-'));
@@ -27,14 +41,27 @@ function captureErrors<T>(fn: () => T): { result: T; messages: string[] } {
 }
 
 describe('browse CLI server lock diagnostics (#1084)', () => {
-  test('logs non-EEXIST open failures instead of reporting phantom lock contention', () => {
+  test('unexpected open failures throw ServerLockError with the real errno — not phantom lock contention', () => {
+    if (process.platform === 'win32') return; // ENOTDIR errno mapping differs on Windows
     withTempDir((dir) => {
-      const lockPath = path.join(dir, 'missing-parent', 'browse.json.lock');
-      const { result, messages } = captureErrors(() => acquireServerLock(lockPath));
+      // A FILE where a directory is expected: open('wx') fails ENOTDIR — an
+      // errno that is neither contention (EEXIST) nor the self-healing
+      // missing-dir case (ENOENT). The old code's bare catch would have
+      // reported "another process holds the lock" forever.
+      const blocker = path.join(dir, 'blocker');
+      fs.writeFileSync(blocker, 'not a directory\n');
+      const lockPath = path.join(blocker, 'browse.json.lock');
 
-      expect(result).toBeNull();
-      expect(messages.join('\n')).toContain('unexpected ENOENT while opening');
-      expect(messages.join('\n')).toContain(lockPath);
+      let thrown: any = null;
+      try {
+        acquireServerLock(lockPath);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(ServerLockError);
+      expect(thrown.code).toBe('ENOTDIR');
+      expect(thrown.message).toContain('E_SERVER_LOCK (ENOTDIR)');
+      expect(thrown.message).toContain(lockPath);
     });
   });
 
@@ -50,30 +77,25 @@ describe('browse CLI server lock diagnostics (#1084)', () => {
     });
   });
 
-  test('logs holder PID read failures with code and lock path', () => {
+  test('holder PID read failures throw ServerLockError with code and lock path', () => {
     withTempDir((dir) => {
+      // Lock path exists but is a DIRECTORY: open('wx') → EEXIST (looks like
+      // contention), then the holder-PID read fails EISDIR. The kept design
+      // surfaces that errno + path in a typed error instead of retrying or
+      // reporting phantom contention.
       const lockPath = path.join(dir, 'browse.json.lock');
       fs.mkdirSync(lockPath);
 
-      const { result, messages } = captureErrors(() => acquireServerLock(lockPath));
-
-      expect(result).toBeNull();
-      expect(messages.join('\n')).toContain('unexpected EISDIR while reading holder PID from');
-      expect(messages.join('\n')).toContain(lockPath);
-    });
-  });
-
-  test('removes stale lock and reacquires it', () => {
-    withTempDir((dir) => {
-      const lockPath = path.join(dir, 'browse.json.lock');
-      fs.writeFileSync(lockPath, 'not-a-pid\n');
-
-      const release = acquireServerLock(lockPath);
-
-      expect(release).toBeFunction();
-      expect(fs.readFileSync(lockPath, 'utf-8').trim()).toBe(String(process.pid));
-      release?.();
-      expect(fs.existsSync(lockPath)).toBe(false);
+      let thrown: any = null;
+      try {
+        acquireServerLock(lockPath);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(ServerLockError);
+      expect(thrown.code).toBe('EISDIR');
+      expect(thrown.message).toContain('E_SERVER_LOCK (EISDIR)');
+      expect(thrown.message).toContain(lockPath);
     });
   });
 });

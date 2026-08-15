@@ -117,7 +117,7 @@ export function restrictFilePermissions(filePath: string): void {
       execFileSync(
         'icacls',
         [filePath, '/inheritance:r', '/grant:r', `${user}:(F)`],
-        { stdio: 'ignore' },
+        { stdio: 'ignore', windowsHide: true },
       );
     } catch (err) {
       warnIcaclsFailure(filePath, err);
@@ -147,7 +147,7 @@ export function restrictDirectoryPermissions(dirPath: string): void {
       execFileSync(
         'icacls',
         [dirPath, '/inheritance:r', '/grant:r', `${user}:(OI)(CI)(F)`],
-        { stdio: 'ignore' },
+        { stdio: 'ignore', windowsHide: true },
       );
     } catch (err) {
       warnIcaclsFailure(dirPath, err);
@@ -186,13 +186,53 @@ export function appendSecureFile(
 }
 
 /**
+ * Windows only: probe whether the current process can actually list the
+ * directory. `fs.accessSync` doesn't consult NTFS ACLs on Windows, so a
+ * real readdir is the only honest check.
+ */
+function canListDir(dirPath: string): boolean {
+  try { fs.readdirSync(dirPath); return true; } catch { return false; }
+}
+
+/**
+ * Windows only: repair a broken DACL on a state directory (#1605).
+ *
+ * `icacls /inheritance:r /grant:r <user>:(F)` is a single command, but the
+ * two halves can partially fail: inheritance gets stripped while the user
+ * grant doesn't resolve (localized account names, domain accounts, roaming
+ * profiles). The result is a DACL with no usable ACE — often just a machine
+ * SID — and the client can't read its own state files. `/reset` restores
+ * inherited ACLs from the parent, making the directory functional again.
+ * Functional-but-unhardened beats hardened-but-unusable.
+ */
+export function repairBrokenDacl(dirPath: string): void {
+  if (process.platform !== 'win32') return;
+  try {
+    execFileSync('icacls', [dirPath, '/reset', '/T', '/C', '/Q'], { stdio: 'ignore', windowsHide: true });
+  } catch (err) {
+    warnIcaclsFailure(dirPath, err);
+  }
+}
+
+/**
  * `mkdir -p` with owner-only directory permissions, cross-platform.
  * Replaces `fs.mkdirSync(path, { recursive: true, mode: 0o700 })` + Windows ACL.
  * Safe to call on an existing directory — re-applies the ACL idempotently.
+ *
+ * Windows: after applying the restricted ACL, verifies the directory is
+ * still listable by this process and repairs a broken DACL (#1605) if not.
  */
 export function mkdirSecure(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
   restrictDirectoryPermissions(dirPath);
+  if (process.platform === 'win32' && !canListDir(dirPath)) {
+    repairBrokenDacl(dirPath);
+    restrictDirectoryPermissions(dirPath);
+    // If re-hardening broke access again, reset once more and leave the
+    // directory with inherited ACLs — the client must be able to read
+    // its own state.
+    if (!canListDir(dirPath)) repairBrokenDacl(dirPath);
+  }
 }
 
 /**

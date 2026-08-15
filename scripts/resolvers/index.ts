@@ -33,11 +33,15 @@ import { generateGBrainContextLoad, generateGBrainSaveResults, generateBrainPref
 import { generateTasksSectionEmit, generateTasksSectionAggregate } from './tasks-section';
 import { SECTION, SECTION_INDEX } from './sections';
 import { generateRedactInvocationBlock } from './redact-doc';
+import { generateThirdPartyActions } from './third-party-actions';
+import { generateDesignDocDiscovery } from './design-doc-discovery';
 
 export const RESOLVERS: Record<string, ResolverFn> = {
   SLUG_EVAL: generateSlugEval,
   SLUG_SETUP: generateSlugSetup,
   REDACT_INVOCATION_BLOCK: generateRedactInvocationBlock,
+  THIRD_PARTY_ACTIONS: generateThirdPartyActions,
+  DESIGN_DOC_DISCOVERY: generateDesignDocDiscovery,
   COMMAND_REFERENCE: generateCommandReference,
   SNAPSHOT_FLAGS: generateSnapshotFlags,
   PREAMBLE: generatePreamble,
