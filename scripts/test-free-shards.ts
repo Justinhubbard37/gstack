@@ -22,7 +22,13 @@
  * Execution strategy (decision ledger V3/D6 — evaluate the Bun built-in
  * first; probed 2026-08 on Bun 1.3.13):
  *   - Full-suite runs (`bun test` via package.json, `bun run test:free`) use
- *     ONE child invocation with `--parallel`. Probes on real test files
+ *     N CONCURRENT SHARD PROCESSES, serial within each (the paid runner's
+ *     model). A single `--parallel` invocation was probed and initially
+ *     adopted, then abandoned: three distinct Bun 1.3.13 worker pathologies
+ *     (segfault + crash-retry wedge, skipped-file hooks stalling a worker,
+ *     spawn-heavy files hanging under load) each stalled the whole
+ *     invocation, while process shards isolate any wedge to its own shard.
+ *     Original --parallel probe results, kept for the record: it
  *     showed --parallel (a) prints the standard `Ran N tests across M files`
  *     terminal summary, (b) exits non-zero when any file fails, (c) runs each
  *     file in its own worker process (distinct pids, no shared globals), and
@@ -59,7 +65,7 @@
  * Exit codes: 0 pass, 1 fail, 124 wall-clock timeout.
  *
  * Usage:
- *   bun run scripts/test-free-shards.ts                            # full suite, one --parallel child
+ *   bun run scripts/test-free-shards.ts                            # full suite, N concurrent shard processes
  *   bun run scripts/test-free-shards.ts --list                     # show all
  *   bun run scripts/test-free-shards.ts --windows-only --list      # show curated
  *   bun run scripts/test-free-shards.ts --windows-only             # run curated
@@ -203,11 +209,10 @@ export const DEFAULT_WALL_TIMEOUT_MS = 6 * 60_000;
 
 /**
  * Files that crash or wedge Bun's --parallel WORKERS but run fine in a plain
- * serial process. Full-suite mode excludes them from the parallel invocation
- * and runs them in their own serial child afterward (strict-classified like
- * everything else — this is an execution-placement list, not a skip list).
- * Each entry carries its reason; remove the entry when the underlying bug is
- * fixed and a full parallel run stays green.
+ * serial process. Full-suite mode now uses shard PROCESSES (no workers), so
+ * this list is inert placement-wise — retained as the paper trail of why the
+ * one-invocation --parallel strategy was abandoned, and as the exclusion list
+ * should anyone re-attempt it on a newer Bun.
  */
 export const WORKER_HOSTILE: Record<string, string> = {
   'browse/test/security-live-playwright.test.ts':
@@ -980,27 +985,27 @@ async function main(): Promise<number> {
     return exitCodeFor(outcome.status);
   }
 
-  // Full-suite mode: one bun invocation, files parallelized across per-file
-  // worker processes. See the header for the probe results that picked this
-  // over N spawned shard processes. Worker-hostile files are pulled out and
-  // run in their own serial child afterward.
-  const hostile = files.filter((f) => f in WORKER_HOSTILE);
-  const parallelFiles = files.filter((f) => !(f in WORKER_HOSTILE));
-  const outcome = await runFreeShard(parallelFiles, 1, hostile.length > 0 ? 2 : 1, {
-    parallel: true,
-    wallTimeoutMs: options.wallTimeoutMs,
-    verbose: options.verbose,
-  });
-  let worst = exitCodeFor(outcome.status);
-  if (hostile.length > 0) {
-    for (const f of hostile) console.log(`[test:free] serial (worker-hostile): ${f} — ${WORKER_HOSTILE[f]}`);
-    const serialOutcome = await runFreeShard(hostile, 2, 2, {
+  // Full-suite mode: N concurrent shard PROCESSES, serial within each — the
+  // paid runner's proven model. One `bun test --parallel` invocation was
+  // tried first (decision V3) and abandoned after three distinct
+  // worker-runtime pathologies in a single day on Bun 1.3.13: a segfault
+  // whose crashed-worker retry wedged the run (security-live-playwright), a
+  // gated file's still-running file-level hooks stalling a worker
+  // (compare-board), and spawn-heavy files hanging workers under load
+  // (session-runner-timeout). Plain child processes have none of these:
+  // proven spawn semantics, per-shard group-kill, per-shard logs, and a
+  // wedge only ever costs its own shard. WORKER_HOSTILE files are moot in
+  // process shards (no workers) and fold back into normal assignment.
+  const jobs = Math.max(1, Math.min(6, os.cpus().length - 2));
+  const shards = assignFilesToShards(files, jobs);
+  console.log(`[test:free] full suite: ${files.length} files across ${jobs} shard processes`);
+  const outcomes = await Promise.all(
+    shards.map((shardFiles, index) => runFreeShard(shardFiles, index + 1, jobs, {
       wallTimeoutMs: options.wallTimeoutMs,
       verbose: options.verbose,
-    });
-    worst = Math.max(worst, exitCodeFor(serialOutcome.status));
-  }
-  return worst;
+    })),
+  );
+  return Math.max(...outcomes.map((o) => exitCodeFor(o.status)));
 }
 
 if (import.meta.main) {
