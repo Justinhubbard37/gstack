@@ -52,4 +52,13 @@ describe('windowsHide on Windows-reachable spawns (#1835)', () => {
     expect((perms.match(/'icacls'/g) || []).length).toBeGreaterThanOrEqual(3);
     expectHideNearEvery(perms, "'icacls'");
   });
+
+  test('terminal-agent respawn in terminal-agent-control.ts passes windowsHide', () => {
+    // The CLI cold-start + v1.44 watchdog respawn path. On Windows it runs
+    // through the Node polyfill (dist/bun-polyfill.cjs) whose host default is
+    // the opposite of Bun's — a visible console window on every watchdog
+    // respawn is the symptom when the flag is dropped. Wider window: the
+    // spawn's options object carries the full env wiring before the flag.
+    expectHideNearEvery(SRC('terminal-agent-control.ts'), '(Bun as any).spawn(', 700);
+  });
 });

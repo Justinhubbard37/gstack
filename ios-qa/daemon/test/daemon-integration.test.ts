@@ -158,6 +158,32 @@ describe('daemon — loopback listener', () => {
     expect(daemon.tokenStore.list().some(s => s.identity === 'revoke-by-id@example.com')).toBe(false);
   });
 
+  test('revoke with an unknown token_id revokes nothing and leaves live sessions untouched', async () => {
+    const minted = daemon.tokenStore.mint({
+      identity: 'unknown-id-survivor@example.com',
+      capability: 'observe',
+      origin: 'owner_granted',
+    });
+    if ('error' in minted) throw new Error(minted.error);
+    try {
+      // Well-formed (16 hex chars) but matches no session's salted hash.
+      const revoke = await fetchWith('POST', `http://127.0.0.1:${daemon.loopbackPort}/auth/revoke`, {
+        body: JSON.stringify({ token_id: '0'.repeat(16) }),
+      });
+      expect(revoke.status).toBe(200);
+      expect(JSON.parse(revoke.bodyText).revoked).toBe(0);
+
+      // The minted session must survive: still in the token store...
+      expect(daemon.tokenStore.list().some(s => s.identity === 'unknown-id-survivor@example.com')).toBe(true);
+      // ...and still visible on the list endpoint.
+      const list = await fetchWith('GET', `http://127.0.0.1:${daemon.loopbackPort}/auth/sessions`);
+      const { sessions } = JSON.parse(list.bodyText) as { sessions: Array<Record<string, unknown>> };
+      expect(sessions.some(s => s.identity === 'unknown-id-survivor@example.com')).toBe(true);
+    } finally {
+      daemon.tokenStore.revoke(minted.token);
+    }
+  });
+
   test('healthz returns 200 with mode=loopback', async () => {
     const r = await fetchWith('GET', `http://127.0.0.1:${daemon.loopbackPort}/healthz`);
     expect(r.status).toBe(200);
