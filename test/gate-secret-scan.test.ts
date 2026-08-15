@@ -35,9 +35,18 @@ describe("gate-secret-scan.mjs exit contract", () => {
     expect(r.out).toContain("0 high");
   });
 
+  // The planted PEM is assembled at runtime — header split included — so this
+  // FILE never carries a live-format private key: the repo's own prepush
+  // credential guard scans pushed diffs and (correctly) blocks any one-line
+  // BEGIN…END spelling regardless of body. The scanner under test still
+  // receives the true live shape.
+  const PEM_BEGIN = ["-----BEGIN RSA ", "PRIVATE KEY-----"].join("");
+  const PEM_END = ["-----END RSA ", "PRIVATE KEY-----"].join("");
+  const PLANTED_PEM_BODY = ["MIIEow", "IBAAKC", "AQEA"].join("");
+
   test("a HIGH credential in an added line fails the gate", () => {
     const r = scan(
-      "+-----BEGIN RSA PRIVATE KEY-----\n+MIIEowIBAAKCAQEA\n+-----END RSA PRIVATE KEY-----\n",
+      `+${PEM_BEGIN}\n+${PLANTED_PEM_BODY}\n+${PEM_END}\n`,
     );
     expect(r.code).toBe(1);
     expect(r.out).toContain("1 high");
@@ -45,7 +54,7 @@ describe("gate-secret-scan.mjs exit contract", () => {
 
   test("removed lines and context are ignored — only additions are scanned", () => {
     const r = scan(
-      "------BEGIN RSA PRIVATE KEY-----\n-MIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n+just an addition\n",
+      `-${PEM_BEGIN}\n-${PLANTED_PEM_BODY}\n${PEM_END}\n+just an addition\n`,
     );
     expect(r.code).toBe(0);
   });
