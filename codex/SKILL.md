@@ -996,16 +996,23 @@ instructions get their own path (below).
 TMPERR=$(mktemp "$TMP_ROOT/codex-err-XXXXXX")
 ```
 
-2. Run the review (5-minute timeout). No prompt argument — scope comes from `--base`
-(or `--commit <sha>` when reviewing a single commit, or `--uncommitted` for the
-working tree):
+2. Run the review. No prompt argument — scope comes from `--base` (or `--commit <sha>`
+when reviewing a single commit, or `--uncommitted` for the working tree).
+
+**Sandbox is pinned read-only via config override.** Top-level `codex review` has no
+`-s`/`--sandbox` flag (verified on 0.147.0: `codex review --help` lists none), so the
+read-only sandbox is set with `-c 'sandbox_mode="read-only"'` — the same form the
+consult resume path uses. Without it the call inherits the user's
+`~/.codex/config.toml` default, which on a trusted project can be WRITE access —
+contradicting this skill's read-only contract (#2496, #2524):
 
 ```bash
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 cd "$_REPO_ROOT"
-# 330s (5.5min) is slightly longer than the Bash 300s so the shell wrapper
-# only fires if Bash's own timeout doesn't.
-_gstack_codex_timeout_wrapper 330 codex review --base <base> -c 'model_reasoning_effort="high"' --enable web_search_cached < /dev/null 2>"$TMPERR"
+# The 330s wrapper sits BELOW the 360s Bash gate so the wrapper fires FIRST
+# and a stall surfaces as a diagnosable exit 124 with an explicit message,
+# never as a silent harness kill that downstream reads as "no findings".
+_gstack_codex_timeout_wrapper 330 codex review --base <base> -c 'sandbox_mode="read-only"' -c 'model_reasoning_effort="high"' --enable web_search_cached < /dev/null 2>"$TMPERR"
 _CODEX_EXIT=$?
 if [ "$_CODEX_EXIT" = "124" ]; then
   _gstack_codex_log_event "codex_timeout" "330"
@@ -1066,16 +1073,40 @@ instructions. The `codex exec` route loses that tuning but gains custom-instruct
 support; the prompt explicitly demands `[P1]` / `[P2]` markers so the gate logic in step 4
 still works. There is no third option that gets both — the CLI forbids it.
 
-Use `timeout: 300000` on the Bash call for either path.
+Use `timeout: 360000` on the Bash call for either path. The Bash gate sits ABOVE the
+330s wrapper deliberately: the wrapper fires first with its explicit exit-124 message,
+instead of the harness killing the call silently.
 
 3. Capture the output. Then parse cost from stderr:
 ```bash
 grep "tokens used" "$TMPERR" 2>/dev/null || echo "tokens: unknown"
 ```
 
-4. Determine gate verdict by checking the review output for critical findings.
-   If the output contains `[P1]` — the gate is **FAIL**.
-   If no `[P1]` markers are found (only `[P2]` or no findings) — the gate is **PASS**.
+4. Determine the gate verdict. **The gate FAILS CLOSED** — a run that cannot be
+verified is a FAIL, never a PASS. Work through these checks IN ORDER; the first
+match wins:
+
+   1. `_CODEX_EXIT` is non-zero (including 124) → **GATE: FAIL** (fail-closed:
+      codex exited `$_CODEX_EXIT` — the review did not complete, so there is no
+      verified result). Expired auth, a bad flag, a timeout, or a model-entitlement
+      400 all land here instead of masquerading as a clean pass.
+   2. The captured review output is empty or whitespace-only → **GATE: FAIL**
+      (fail-closed: empty output — nothing was reviewed).
+   3. The output contains `[P0]` or `[P1]` (or codex's native unbracketed `P0:` /
+      `P1:` severity labels) → **GATE: FAIL** (N critical findings). Codex's own
+      review rubric treats P0 as blocking; this gate does too.
+   4. The output contains NO `[P0]`, `[P1]`, or `[P2]` tag (nor native `P0:`/`P1:`/
+      `P2:` labels) anywhere → **GATE: FAIL** (fail-closed: untagged output — the
+      severity markers this gate greps for are absent, so "no critical findings"
+      cannot be verified mechanically; a human must read the verbatim output above
+      and judge). "No `[P1]` substring" and "no critical findings" are different
+      claims — never infer PASS from an untagged body.
+   5. Severity tags are present and none is P0/P1 (only P2/advisory) →
+      **GATE: PASS**.
+
+   There is no default branch: PASS is only reachable through check 5. When the
+   gate fails closed (checks 1, 2, 4), say explicitly that this is a
+   verification failure requiring human attention, not a finding count.
 
 5. Present the output:
 
@@ -1091,6 +1122,12 @@ or
 
 ```
 GATE: FAIL (N critical findings)
+```
+
+or, when the run itself could not be verified:
+
+```
+GATE: FAIL (fail-closed: <codex exited N | empty output | untagged output> — needs human attention)
 ```
 
 5a. **Synthesis recommendation (REQUIRED).** After presenting Codex's verbatim
@@ -1125,7 +1162,8 @@ CROSS-MODEL ANALYSIS:
 ```
 
 Substitute: TIMESTAMP (ISO 8601), STATUS ("clean" if PASS, "issues_found" if FAIL),
-GATE ("pass" or "fail"), findings (count of [P1] + [P2] markers),
+GATE ("pass" or "fail" — fail-closed verdicts log as "fail"), findings (count of
+[P0] + [P1] + [P2] markers; 0 for fail-closed runs, which reviewed nothing),
 findings_fixed (count of findings that were addressed/fixed before shipping).
 
 8. Clean up temp files:
@@ -1280,7 +1318,9 @@ With focus (e.g., "security"):
 
 Review the changes on this branch against the base branch. Run `git diff origin/<base>` to see the diff. Focus specifically on SECURITY. Your job is to find every way an attacker could exploit this code. Think about injection vectors, auth bypasses, privilege escalation, data exposure, and timing attacks. Be adversarial."
 
-2. Run codex exec with **JSONL output** to capture reasoning traces and tool calls (5-minute timeout):
+2. Run codex exec with **JSONL output** to capture reasoning traces and tool calls.
+Use `timeout: 660000` on the Bash call — the gate sits ABOVE the 600s wrapper so the
+wrapper fires first with its explicit stall message:
 
 If the user passed `--xhigh`, use `"xhigh"` instead of `"high"`.
 
@@ -1436,7 +1476,10 @@ For non-plan consult prompts (user typed `/codex <question>`), still prepend the
 
 <user's question>"
 
-4. Run codex exec with **JSONL output** to capture reasoning traces (5-minute timeout):
+4. Run codex exec with **JSONL output** to capture reasoning traces. Use
+`timeout: 660000` on the Bash call (for both new and resumed sessions) — the gate
+sits ABOVE the 600s wrapper so the wrapper fires first with its explicit stall
+message:
 
 If the user passed `--xhigh`, use `"xhigh"` instead of `"medium"`.
 
@@ -1564,7 +1607,8 @@ The reason must engage with a specific Codex insight and compare against an alte
 
 **Model:** No model is hardcoded — codex uses whatever its current default is (the frontier
 agentic coding model). This means as OpenAI ships newer models, /codex automatically
-uses them. If the user wants a specific model, pass `-m` through to codex.
+uses them. If the user wants a specific model, pass it through — but the flag differs
+by mode (see below).
 
 **Reasoning effort (per-mode defaults):**
 - **Review (2A):** `high` — bounded diff input, needs thoroughness but not max tokens
@@ -1578,8 +1622,16 @@ tasks (OpenAI issues #8545, #8402, #6931). Users can override with `--xhigh` fla
 **Web search:** All codex commands use `--enable web_search_cached` so Codex can look up
 docs and APIs during review. This is OpenAI's cached index — fast, no extra cost.
 
-If the user specifies a model (e.g., `/codex review -m gpt-5.1-codex-max`
-or `/codex challenge -m gpt-5.2`), pass the `-m` flag through to codex.
+If the user specifies a model (e.g., `/codex review -m gpt-5.1-codex-max` or
+`/codex challenge -m gpt-5.2`), the flag to pass depends on the underlying command:
+
+- **Exec-based modes** (Challenge, Consult, and the custom-instructions Review path)
+  run `codex exec`, which takes `-m <model>` — pass it through as-is.
+- **Default Review mode** runs `codex review`, which REJECTS `-m`
+  (`error: unexpected argument '-m' found`, verified on 0.147.0 — its help lists no
+  `-m`/`--model` option). Translate the user's `-m <model>` into the config form:
+  `-c model="<model>"`. Same shape as the `--base`-vs-prompt incompatibility above:
+  review mode takes its knobs through flags/config, never through extra arguments.
 
 ---
 
@@ -1598,7 +1650,10 @@ If token count is not available, display: `Tokens: unknown`
 - **Binary not found:** Detected in Step 0. Stop with install instructions.
 - **Auth error:** Codex prints an auth error to stderr. Surface the error:
   "Codex authentication failed. Run `codex login` in your terminal to authenticate via ChatGPT."
-- **Timeout (Bash outer gate):** If the Bash call times out (5 min for Review/Challenge, 10 min for Consult), tell the user:
+- **Timeout (Bash outer gate):** Every Bash gate sits ABOVE its inner wrapper (360s gate
+  over the 330s review wrapper; 660s gate over the 600s challenge/consult wrappers), so
+  the wrapper's exit-124 path normally fires first with its explicit message. If the Bash
+  call itself times out anyway (wrapper unavailable AND codex hung), tell the user:
   "Codex timed out. The prompt may be too large or the API may be slow. Try again or use a smaller scope."
 - **Timeout (inner `timeout` wrapper, exit 124):** If the shell `timeout 600` wrapper fires first, the skill's hang-detection block auto-logs a telemetry event + operational learning and prints: "Codex stalled past 10 minutes. Common causes: model API stall, long prompt, network issue. Try re-running. If persistent, split the prompt or check `~/.codex/logs/`." No extra action needed.
 - **`the argument '[PROMPT]' cannot be used with '--base <BRANCH>'`:** a prompt argument
@@ -1613,6 +1668,21 @@ If token count is not available, display: `Tokens: unknown`
   missing or wrong. A prompt-only `codex review` defaults to uncommitted changes, so a
   clean working tree reads as an empty review even when `<base>...HEAD` is large. Confirm
   `--base <base>` is actually on the command line.
+- **Model not supported (HTTP 400):** stderr shows
+  `The '<model>' model is not supported when using Codex with a ChatGPT account`
+  (a `status: 400` / `invalid_request_error` naming a model). This is an
+  entitlement/stale-pin problem, not an auth or network failure, and the auth probe
+  cannot catch it. The rejected model comes from the `model = "..."` line in
+  `~/.codex/config.toml`. Recovery, in order:
+  1. Read `~/.codex/config.toml` and check the `[notice.model_migrations]` table —
+     Codex records the intended replacement there (e.g. `"gpt-5.4" = "gpt-5.5"`).
+  2. Retry with the replacement model explicitly: exec-based modes (Challenge,
+     Consult, custom-instructions Review) take `-m <replacement>`; the default
+     Review path uses `codex review`, which REJECTS `-m` — pass
+     `-c model="<replacement>"` there instead.
+  3. Tell the user the one-line permanent fix: update the `model = ` pin in
+     `~/.codex/config.toml`.
+  Never present this as a model stall or a PASS — it is a fail-closed gate result.
 - **Empty response:** If `$TMPRESP` is empty or doesn't exist, tell the user:
   "Codex returned no response. Check stderr for errors."
 - **Session resume failure:** If resume fails, delete the session file and start fresh.
@@ -1625,7 +1695,10 @@ If token count is not available, display: `Tokens: unknown`
 - **Present output verbatim.** Do not truncate, summarize, or editorialize Codex's output
   before showing it. Show it in full inside the CODEX SAYS block.
 - **Add synthesis after, not instead of.** Any Claude commentary comes after the full output.
-- **5-minute timeout** on all Bash calls to codex (`timeout: 300000`).
+- **Bash gate above the wrapper.** Every Bash call to codex sets its `timeout`
+  parameter ABOVE the inner `_gstack_codex_timeout_wrapper` budget (Review:
+  `timeout: 360000` over the 330s wrapper; Challenge/Consult: `timeout: 660000`
+  over the 600s wrappers) so the wrapper fires first with a diagnosable exit 124.
 - **No double-reviewing.** If the user already ran `/review`, Codex provides a second
   independent opinion. Do not re-run Claude Code's own review.
 - **Detect skill-file rabbit holes.** After receiving Codex output, scan for signs
