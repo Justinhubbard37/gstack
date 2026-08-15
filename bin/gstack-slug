@@ -101,6 +101,27 @@ if [[ -z "$SLUG" ]]; then
   PROJECT_ROOT=$(_outermost_project_root "$PROJECT_DIR")
 fi
 
+# 1b. Cached identity is STICKY (#2212): a project that used gstack before it
+#     adopted a git remote keeps its pre-origin slug — recomputing from the
+#     remote here would rename the project mid-life and orphan everything
+#     under ~/.gstack/projects/<slug>/. The ONE exception is the provable
+#     old-bug shape (#1125): the pre-walk-up resolver cached basename(pwd)
+#     for a SUBDIRECTORY of the real project — if the cached value equals this
+#     pwd's basename while the walk-up says pwd is NOT the project root, the
+#     cache came from that bug, not from legitimate identity; fall through and
+#     recompute so it heals.
+if [[ -z "$SLUG" && -f "$CACHE_FILE" ]]; then
+  _CACHED=$(cat "$CACHE_FILE" 2>/dev/null | tr -cd 'a-zA-Z0-9._-')
+  if [[ -n "$_CACHED" ]]; then
+    _PWD_BASE=$(basename "$PROJECT_DIR" | tr -cd 'a-zA-Z0-9._-')
+    if [[ "$_CACHED" == "$_PWD_BASE" && -n "$PROJECT_ROOT" && "$PROJECT_ROOT" != "$PROJECT_DIR" ]]; then
+      : # old-bug shape — recompute below and self-heal the cache
+    else
+      SLUG="$_CACHED"
+    fi
+  fi
+fi
+
 # 2. If we found a project root and it has a git remote, derive slug from the
 #    remote URL (existing logic — kept verbatim, just rooted at PROJECT_ROOT
 #    instead of $PWD so a subdir without its own remote inherits the parent's).
