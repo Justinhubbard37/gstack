@@ -261,14 +261,39 @@ function formatShardSummary(shards: string[][]): string[] {
   });
 }
 
+/**
+ * True when a shard's output shows the run ended WITHOUT bun's final summary
+ * ("Ran N tests across ..."). A process.exit() fired mid-suite skips the
+ * summary AND hands back whatever code the caller passed — historically 0,
+ * which made a truncated shard indistinguishable from a green one. Exit code
+ * alone is therefore not evidence of completion; the summary line is.
+ * (Fault-injection coverage: test/exit-propagation.test.ts.)
+ */
+export function shardRunLooksTruncated(status: number | null, output: string): boolean {
+  if (status !== 0) return false; // already failing — not the silent case
+  return !/Ran \d+ tests? across \d+ files?/.test(output);
+}
+
 function runShard(files: string[], shardNumber: number, totalShards: number): number {
   const header = `[test:free] shard ${shardNumber}/${totalShards} (${files.length} files)`;
   console.log(header);
   const result = spawnSync(process.execPath, buildShardArgs(files), {
     cwd: ROOT,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
     env: process.env,
   });
+  // Preserve the inherit-style UX: replay the shard's output.
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  if (shardRunLooksTruncated(result.status, combined)) {
+    console.error(
+      `${header} exited 0 WITHOUT bun's final summary — the run was truncated ` +
+        '(a process.exit fired mid-suite). Treating as FAILED.',
+    );
+    return 1;
+  }
   if (result.status !== 0) {
     console.error(`${header} failed with exit code ${result.status ?? 1}`);
   }
