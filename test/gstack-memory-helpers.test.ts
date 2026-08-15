@@ -11,7 +11,7 @@
  * Free-tier (~50ms total). Runs in `bun test`.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -338,7 +338,11 @@ describe("withErrorContext", () => {
     process.env.GSTACK_HOME = testHome;
   });
 
-  afterAll(() => {
+  // afterEach, not afterAll: the save happens in beforeEach, so an afterAll
+  // restore would put back the PREVIOUS test's temp dir (the last beforeEach
+  // overwrote savedHome) and leak a gstack-test-home-* dir into every test
+  // file that runs after this one in the same bun process.
+  afterEach(() => {
     if (savedHome === undefined) delete process.env.GSTACK_HOME;
     else process.env.GSTACK_HOME = savedHome;
   });
@@ -414,7 +418,13 @@ describe("detectEngineTier", () => {
     process.env.HOME = testHome;
   });
 
-  afterAll(() => {
+  // afterEach, not afterAll: the save happens in beforeEach, so an afterAll
+  // restore would put back the PREVIOUS test's gstack-test-engine-* temp dir
+  // (the last beforeEach overwrote the saved values). That leaked
+  // HOME/GSTACK_HOME/PATH into every test file that ran after this one in the
+  // same bun process — child processes then looked for Playwright's Chromium
+  // cache and ~/.gstack config under a throwaway temp HOME.
+  afterEach(() => {
     if (savedHome === undefined) delete process.env.GSTACK_HOME;
     else process.env.GSTACK_HOME = savedHome;
     if (savedGbrainHome === undefined) delete process.env.GBRAIN_HOME;
