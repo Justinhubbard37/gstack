@@ -44,6 +44,18 @@
  * doesn't fix POSIX-bound tests, so we curate the subset that actually runs
  * on the windows-latest CI job.
  *
+ * Output contract (v1.66): the full child stream ALWAYS lands in a per-run
+ * log file under os.tmpdir() (path printed once at start and again in the
+ * epilogue). The console is quiet by default — only the runner's own
+ * [test:free] lines, `(fail)` result lines, bun error/crash markers
+ * (`error:`, `panic:`, `crashed`, `Unhandled error`), and the terminal
+ * `Ran N tests across M files` summary reach it; `--verbose` restores full
+ * forwarding. After every run a stable epilogue names the failing tests
+ * (attributed to files via bun's `path/to/file.test.ts:` chunk headers),
+ * crashed+retried workers, and — on a wall-timeout kill — the wedge-suspect
+ * files. The strict classifier consumes the FULL stream regardless of what
+ * the console shows.
+ *
  * Exit codes: 0 pass, 1 fail, 124 wall-clock timeout.
  *
  * Usage:
@@ -53,20 +65,22 @@
  *   bun run scripts/test-free-shards.ts --windows-only             # run curated
  *   bun run scripts/test-free-shards.ts --shards 4 --shard 1       # one shard (CI matrix)
  *   bun run scripts/test-free-shards.ts --wall-timeout 600         # override the kill deadline
+ *   bun run scripts/test-free-shards.ts --verbose                  # forward the full child stream
  */
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { isPaidTestFile } from '../test/helpers/paid-test-set';
 import {
   BunTestOutputClassifier,
   exactTestFileSelectors,
-  forwardAndClassify,
   installChildSignalForwarding,
   killProcessGroup,
   strictTestExitCode,
+  stripAnsiLine,
 } from './test-strict-output';
 
 const ROOT = path.resolve(import.meta.dir, '..');
@@ -324,6 +338,7 @@ type CliOptions = {
   dryRun: boolean;
   listOnly: boolean;
   windowsOnly: boolean;
+  verbose: boolean;
   shardCount: number;
   shardIndex: number | null;
   wallTimeoutMs: number;
@@ -333,6 +348,7 @@ function parseCliOptions(argv: string[]): CliOptions {
   let dryRun = false;
   let listOnly = false;
   let windowsOnly = false;
+  let verbose = false;
   let shardCount = DEFAULT_SHARD_COUNT;
   let shardIndex: number | null = null;
   let wallTimeoutMs = DEFAULT_WALL_TIMEOUT_MS;
@@ -342,6 +358,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     if (arg === '--dry-run') { dryRun = true; continue; }
     if (arg === '--list') { listOnly = true; continue; }
     if (arg === '--windows-only') { windowsOnly = true; continue; }
+    if (arg === '--verbose') { verbose = true; continue; }
     if (arg === '--shards') {
       const value = argv[index + 1];
       if (!value) throw new Error('Missing value for --shards');
@@ -366,7 +383,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { dryRun, listOnly, windowsOnly, shardCount, shardIndex, wallTimeoutMs };
+  return { dryRun, listOnly, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs };
 }
 
 function formatShardSummary(shards: string[][]): string[] {
@@ -394,6 +411,262 @@ export function shardRunLooksTruncated(status: number | null, output: string): b
   return !/Ran \d+ tests? across \d+ files?/.test(output);
 }
 
+// ---------------------------------------------------------------------------
+// Output contract: console filtering + per-file failure attribution.
+//
+// Bun groups each file's output under a `path/to/file.test.ts:` header line
+// (cwd-relative, sometimes ../-prefixed through a symlinked cwd). The
+// reporter tracks the current header while consuming the stream, attributes
+// `(fail)` lines and crash markers to files, and decides which lines reach
+// the console in the default quiet mode. All matching happens on
+// ANSI-stripped lines — colored `(fail)` lines defeated a prior grep.
+// ---------------------------------------------------------------------------
+
+const TEST_PATH_SOURCE = String.raw`\.test\.(?:[cm]?[jt]s|tsx|jsx)`;
+/** A file chunk header: the path bun printed, terminated by a bare colon. */
+const FILE_HEADER_RE = new RegExp(`^(\\S.*${TEST_PATH_SOURCE}):$`);
+/** Same shape strict-output classifies as failed-test, with the name captured. */
+const FAIL_RESULT_CAPTURE_RE = /^\(fail\) (.+) \[\d+(?:\.\d+)?(?:ns|us|µs|ms|s)\]$/;
+/** bun --parallel retries a crashed worker once: `<icon> crashed running <path>, retrying`. */
+const CRASH_RETRY_RE = new RegExp(`crashed running (\\S*${TEST_PATH_SOURCE}), retrying`);
+/** The give-up marker after the retry also crashes: `✗ <path> (crashed: exited)`. */
+const CRASH_FINAL_RE = new RegExp(`(\\S*${TEST_PATH_SOURCE}) \\(crashed: [^)]+\\)`);
+const TERMINAL_SUMMARY_CAPTURE_RE = /^Ran (\d+) tests? across (\d+) files?\. \[/;
+/** Substrings that must reach the console even in the default quiet mode. */
+const CONSOLE_ALWAYS_MARKERS = ['error:', 'panic:', 'Unhandled error', 'crashed'] as const;
+
+export type StreamOrigin = 'stdout' | 'stderr';
+
+export interface FreeRunFailure {
+  /** Planned relative path when attributable, else the raw header path, else null. */
+  file: string | null;
+  testName: string;
+}
+
+export interface FreeRunReport {
+  testsRan: number | null;
+  filesRan: number | null;
+  sawTerminalSummary: boolean;
+  /** Deduped `(fail)` lines in arrival order, attributed to the current file header. */
+  failures: FreeRunFailure[];
+  /** Files that crashed a worker (bun retries once; a second crash is final). Deduped. */
+  crashedFiles: string[];
+  /**
+   * Wedge-suspect heuristic for a wall-timeout kill: files whose header was
+   * seen but whose chunk never ENDED (chunk end = the next file's header, or
+   * a final crash marker) before the terminal summary — i.e. "started but
+   * never produced a result chunk end". Result lines deliberately do NOT end
+   * a chunk: a file that printed a fail and then wedged stays listed. Known
+   * limits of the approximation:
+   *   - Serial (--shard CI path): bun streams live but prints a file's header
+   *     lazily, on its first output line — a wedged file that printed ANY
+   *     line is listed; a fully silent wedge is not.
+   *   - Parallel (full-suite path): bun buffers a file's whole chunk until it
+   *     COMPLETES, so a wedged file usually never prints a header (see
+   *     filesWithNoOutput), and the LAST flushed chunk before the kill has no
+   *     closing header, so one completed noisy file can be over-listed.
+   */
+  inFlight: string[];
+  /** Planned files never observed in the stream (silent passers + never-flushed wedges). */
+  filesWithNoOutput: number;
+}
+
+interface FileProgress {
+  headerSeen: boolean;
+  /** The file's chunk ended: a later file's header arrived, or it crashed out. */
+  ended: boolean;
+}
+
+/**
+ * Incrementally consumes the child's stdout/stderr (chunk boundaries need not
+ * align to lines), attributing results to files and forwarding only
+ * always-visible lines to `forward` (omit `forward` for verbose/quiet modes —
+ * attribution still runs so the epilogue works in every mode).
+ */
+export class FreeRunReporter {
+  private readonly decoders: Record<StreamOrigin, StringDecoder> = {
+    stdout: new StringDecoder('utf8'),
+    stderr: new StringDecoder('utf8'),
+  };
+  private readonly pending: Record<StreamOrigin, string> = { stdout: '', stderr: '' };
+  private readonly plannedSet: Set<string>;
+  private readonly canonicalCache = new Map<string, string>();
+  private readonly progress = new Map<string, FileProgress>();
+  private readonly failureKeys = new Set<string>();
+  private readonly failures: FreeRunFailure[] = [];
+  private readonly crashed = new Set<string>();
+  private currentFile: string | null = null;
+  private testsRan: number | null = null;
+  private filesRan: number | null = null;
+  private sawSummary = false;
+
+  constructor(
+    private readonly plannedFiles: string[],
+    private readonly forward?: (text: string, origin: StreamOrigin) => void,
+  ) {
+    this.plannedSet = new Set(plannedFiles.map(normalizeRelativePath));
+  }
+
+  write(chunk: Uint8Array | string, origin: StreamOrigin): void {
+    this.pending[origin] += typeof chunk === 'string'
+      ? chunk
+      : this.decoders[origin].write(Buffer.from(chunk));
+    let newline = this.pending[origin].indexOf('\n');
+    while (newline !== -1) {
+      this.handleLine(this.pending[origin].slice(0, newline), origin);
+      this.pending[origin] = this.pending[origin].slice(newline + 1);
+      newline = this.pending[origin].indexOf('\n');
+    }
+  }
+
+  /** Flush partial trailing lines (a stream killed mid-line still classifies). */
+  end(): void {
+    for (const origin of ['stdout', 'stderr'] as const) {
+      this.pending[origin] += this.decoders[origin].end();
+      if (this.pending[origin].length > 0) this.handleLine(this.pending[origin], origin);
+      this.pending[origin] = '';
+    }
+  }
+
+  report(): FreeRunReport {
+    const inFlight = this.sawSummary
+      ? []
+      : [...this.progress.entries()]
+          .filter(([, p]) => p.headerSeen && !p.ended)
+          .map(([file]) => file)
+          .sort();
+    return {
+      testsRan: this.testsRan,
+      filesRan: this.filesRan,
+      sawTerminalSummary: this.sawSummary,
+      failures: [...this.failures],
+      crashedFiles: [...this.crashed].sort(),
+      inFlight,
+      filesWithNoOutput: this.plannedFiles.filter((f) => !this.progress.has(normalizeRelativePath(f))).length,
+    };
+  }
+
+  private handleLine(rawLine: string, origin: StreamOrigin): void {
+    const line = stripAnsiLine(rawLine);
+    let visible = false;
+
+    const header = FILE_HEADER_RE.exec(line);
+    if (header) {
+      const file = this.canonicalize(header[1]);
+      // A new header ends the previous file's chunk — that file is no longer
+      // a wedge suspect. (Bun 1.3.x prints NO (pass) lines, so chunk
+      // delimiters, not result lines, are the completion signal.)
+      if (this.currentFile && this.currentFile !== file) this.progressFor(this.currentFile).ended = true;
+      this.currentFile = file;
+      this.progressFor(file).headerSeen = true;
+    } else {
+      const fail = FAIL_RESULT_CAPTURE_RE.exec(line);
+      const retry = fail ? null : CRASH_RETRY_RE.exec(line);
+      const final = fail || retry ? null : CRASH_FINAL_RE.exec(line);
+      if (fail) {
+        visible = true;
+        const key = `${this.currentFile ?? ''}\u0000${fail[1]}`;
+        if (!this.failureKeys.has(key)) {
+          this.failureKeys.add(key);
+          this.failures.push({ file: this.currentFile, testName: fail[1] });
+        }
+      } else if (retry) {
+        // The file will run again — a crash+retry does not end its chunk.
+        visible = true;
+        this.crashed.add(this.canonicalize(retry[1]));
+      } else if (final) {
+        visible = true;
+        const file = this.canonicalize(final[1]);
+        this.crashed.add(file);
+        this.progressFor(file).ended = true;
+      } else {
+        const summary = TERMINAL_SUMMARY_CAPTURE_RE.exec(line);
+        if (summary) {
+          visible = true;
+          this.sawSummary = true;
+          this.testsRan = Number.parseInt(summary[1], 10);
+          this.filesRan = Number.parseInt(summary[2], 10);
+        }
+      }
+    }
+
+    if (!visible) visible = CONSOLE_ALWAYS_MARKERS.some((marker) => line.includes(marker));
+    if (visible && this.forward) this.forward(`${rawLine.replace(/\r$/, '')}\n`, origin);
+  }
+
+  private progressFor(file: string): FileProgress {
+    let entry = this.progress.get(file);
+    if (!entry) {
+      entry = { headerSeen: false, ended: false };
+      this.progress.set(file, entry);
+    }
+    return entry;
+  }
+
+  /**
+   * Map a printed path back to its planned relative path. Bun prints paths
+   * relative to the child's (real)cwd, so a symlinked cwd (macOS /tmp) yields
+   * `../..`-prefixed forms — strip the prefix and suffix-match.
+   */
+  private canonicalize(printedPath: string): string {
+    const cached = this.canonicalCache.get(printedPath);
+    if (cached) return cached;
+    const stripped = normalizeRelativePath(printedPath).replace(/^(?:\.{1,2}\/)+/, '');
+    let resolved = stripped;
+    if (!this.plannedSet.has(stripped)) {
+      const match = this.plannedFiles.find(
+        (planned) => stripped.endsWith(`/${planned}`) || planned.endsWith(`/${stripped}`),
+      );
+      if (match) resolved = match;
+    }
+    this.canonicalCache.set(printedPath, resolved);
+    return resolved;
+  }
+}
+
+/**
+ * The stable post-run epilogue. Success is one line; failure names every
+ * failing test (deduped, attributed) and crashed worker; a wall-timeout kill
+ * additionally prints the wedge-suspect list (see FreeRunReport.inFlight for
+ * the heuristic and its limits).
+ */
+export function buildRunEpilogue(
+  status: FreeShardStatus,
+  report: FreeRunReport,
+  elapsedMs: number,
+  logPath: string,
+): string[] {
+  const seconds = Math.round(elapsedMs / 1000);
+  if (status === 'passed') {
+    return [
+      `[test:free] PASS — ${report.testsRan ?? '?'} tests, ${report.filesRan ?? '?'} files, ${seconds}s. Full log: ${logPath}`,
+    ];
+  }
+  const failingFiles = new Set(report.failures.map((f) => f.file ?? '(unattributed)'));
+  const lines = [
+    `[test:free] FAIL — ${report.failures.length} failing test(s) in ${failingFiles.size} file(s), `
+    + `${report.crashedFiles.length} crashed worker(s). Full log: ${logPath}`,
+  ];
+  for (const failure of report.failures) {
+    lines.push(`  ✗ ${failure.file ?? '(unattributed)'} — ${failure.testName}`);
+  }
+  for (const file of report.crashedFiles) {
+    lines.push(`  ⚠ crashed+retried: ${file}`);
+  }
+  if (status === 'timed-out') {
+    if (report.inFlight.length > 0) {
+      lines.push(`  ⏱ in flight at kill: ${report.inFlight.join(', ')}`);
+    } else {
+      lines.push(
+        '  ⏱ in flight at kill: unknown — no open file chunk was observed '
+        + '(bun --parallel buffers a file\'s output until it completes, so a silent wedge never prints); '
+        + `${report.filesWithNoOutput} planned file(s) produced no output before the kill.`,
+      );
+    }
+  }
+  return lines;
+}
+
 export type FreeShardStatus = 'passed' | 'failed' | 'timed-out';
 
 export interface FreeShardOutcome {
@@ -419,8 +692,18 @@ export interface RunFreeShardOptions {
   parallel?: boolean;
   /** Override the spawned command. Tests inject fake pass/fail/slow commands. */
   commandFor?: (files: string[]) => ShardCommand;
-  /** Suppress forwarding child output to parent stdio (tests). Classification still sees every byte. */
+  /** Suppress ALL child output from the console (tests). The classifier and the log file still see every byte. */
   quiet?: boolean;
+  /** Forward the full child stream to the console (legacy firehose). Default: the quiet filtered console. */
+  verbose?: boolean;
+  /**
+   * Console sink for child-stream output (tests inject to assert quiet vs
+   * verbose behavior). Default: process.stdout / process.stderr by origin.
+   * Runner-owned [test:free] lines go through `log`, not this sink.
+   */
+  consoleWrite?: (text: string) => void;
+  /** Per-run full-stream log path (tests inject). Default: a timestamped file under os.tmpdir(). */
+  logFilePath?: string;
   log?: (line: string) => void;
 }
 
@@ -481,6 +764,19 @@ export async function runFreeShard(
   const wallTimeoutMs = options.wallTimeoutMs ?? DEFAULT_WALL_TIMEOUT_MS;
   log(`${label} (${files.length} files${options.parallel ? ', bun --parallel' : ''})`);
 
+  // Full-stream capture: EVERY child byte lands here, whatever the console
+  // shows. Printed once at start so a wedged or noisy run is inspectable
+  // without a re-run.
+  const logPath = options.logFilePath ?? nextDefaultLogPath();
+  const logStream = fs.createWriteStream(logPath);
+  let logWriteFailed = false;
+  logStream.on('error', (err) => {
+    if (logWriteFailed) return;
+    logWriteFailed = true;
+    console.error(`${label} could not write the full log at ${logPath}: ${err.message}`);
+  });
+  log(`[test:free] full log: ${logPath}`);
+
   const { command, args } = options.commandFor
     ? options.commandFor(files)
     : { command: process.execPath, args: buildShardArgs(files, { parallel: options.parallel, rootDir }) };
@@ -511,7 +807,32 @@ export async function runFreeShard(
   });
 
   const classifier = new BunTestOutputClassifier();
-  const devNull = { write: () => true } as unknown as NodeJS.WriteStream;
+
+  // Console policy: quiet => nothing; verbose => the raw firehose; default =>
+  // only always-visible lines (fail results, crash markers, error/panic
+  // markers, the terminal summary), selected by the reporter. The reporter
+  // consumes the stream in EVERY mode so the epilogue can attribute failures.
+  const emitToConsole = (text: string, origin: StreamOrigin): void => {
+    if (options.quiet) return;
+    if (options.consoleWrite) {
+      options.consoleWrite(text);
+      return;
+    }
+    (origin === 'stdout' ? process.stdout : process.stderr).write(text);
+  };
+  const reporter = new FreeRunReporter(files, options.verbose ? undefined : emitToConsole);
+
+  const consumeStream = (stream: NodeJS.ReadableStream, origin: StreamOrigin): Promise<void> =>
+    new Promise((resolve, reject) => {
+      stream.on('data', (chunk: Buffer | string) => {
+        classifier.write(chunk); // strict verdict ALWAYS sees the full stream
+        if (!logWriteFailed) logStream.write(chunk);
+        reporter.write(chunk, origin);
+        if (options.verbose) emitToConsole(typeof chunk === 'string' ? chunk : chunk.toString('utf8'), origin);
+      });
+      stream.on('end', resolve);
+      stream.on('error', reject);
+    });
 
   let timedOut = false;
   const killTimer = setTimeout(() => {
@@ -522,8 +843,8 @@ export async function runFreeShard(
   let exitCode: number | null = null;
   try {
     const streams: Array<Promise<void>> = [];
-    if (child.stdout) streams.push(forwardAndClassify(child.stdout, options.quiet ? devNull : process.stdout, classifier));
-    if (child.stderr) streams.push(forwardAndClassify(child.stderr, options.quiet ? devNull : process.stderr, classifier));
+    if (child.stdout) streams.push(consumeStream(child.stdout, 'stdout'));
+    if (child.stderr) streams.push(consumeStream(child.stderr, 'stderr'));
     exitCode = await new Promise<number | null>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code) => resolve(code));
@@ -534,6 +855,8 @@ export async function runFreeShard(
     forwarding.dispose();
     // Reap survivors of this shard even on the clean path.
     killProcessGroup(child, 'SIGKILL');
+    reporter.end();
+    await new Promise<void>((resolve) => logStream.end(() => resolve()));
     try {
       fs.rmSync(stateDir, { recursive: true, force: true });
     } catch {
@@ -567,7 +890,17 @@ export async function runFreeShard(
     shard: shardNumber, files, status, exitCode, elapsedMs: Date.now() - startedAt, groupPid,
   };
   log(shardEpilogue(outcome, totalShards));
+  for (const line of buildRunEpilogue(status, reporter.report(), outcome.elapsedMs, logPath)) log(line);
   return outcome;
+}
+
+let logPathSequence = 0;
+
+/** Timestamped per-run log file under os.tmpdir(); pid+sequence defeat same-ms collisions. */
+function nextDefaultLogPath(): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  logPathSequence += 1;
+  return path.join(os.tmpdir(), `gstack-free-test-${stamp}-${process.pid}-${logPathSequence}.log`);
 }
 
 function exitCodeFor(status: FreeShardStatus): number {
@@ -623,6 +956,7 @@ async function main(): Promise<number> {
     const shards = assignFilesToShards(files, options.shardCount);
     const outcome = await runFreeShard(shards[options.shardIndex - 1], options.shardIndex, options.shardCount, {
       wallTimeoutMs: options.wallTimeoutMs,
+      verbose: options.verbose,
     });
     return exitCodeFor(outcome.status);
   }
@@ -633,6 +967,7 @@ async function main(): Promise<number> {
   const outcome = await runFreeShard(files, 1, 1, {
     parallel: true,
     wallTimeoutMs: options.wallTimeoutMs,
+    verbose: options.verbose,
   });
   return exitCodeFor(outcome.status);
 }

@@ -132,15 +132,25 @@ export function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): v
   }
 }
 
+/**
+ * Strip ANSI escapes and a trailing CR from one output line. Every line
+ * matcher (here and in the free runner's console filter / failure
+ * attribution) MUST match against this form — a prior grep for `(fail)`
+ * lines missed real failures because color codes sat inside the line.
+ */
+export function stripAnsiLine(rawLine: string): string {
+  return rawLine.replace(ANSI_ESCAPE, '').replace(/\r$/, '');
+}
+
 export function classifyBunTestOutputLine(rawLine: string): BunTestOutputFinding | null {
-  const line = rawLine.replace(ANSI_ESCAPE, '').replace(/\r$/, '');
+  const line = stripAnsiLine(rawLine);
   if (BUN_FAIL_RESULT.test(line)) return 'failed-test';
   if (line === BUN_BETWEEN_TESTS_ERROR) return 'unhandled-between-tests';
   return null;
 }
 
 export function parseBunTerminalSummaryLine(rawLine: string): number | null {
-  const line = rawLine.replace(ANSI_ESCAPE, '').replace(/\r$/, '');
+  const line = stripAnsiLine(rawLine);
   const match = BUN_TERMINAL_SUMMARY.exec(line);
   return match ? Number.parseInt(match[1], 10) : null;
 }

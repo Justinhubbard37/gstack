@@ -12,6 +12,8 @@ import {
   buildShardArgs,
   normalizeRelativePath,
   runFreeShard,
+  FreeRunReporter,
+  buildRunEpilogue,
   FREE_TEST_TIMEOUT_MS,
 } from '../scripts/test-free-shards';
 
@@ -253,6 +255,16 @@ describe('test-free-shards: strict shard execution', () => {
     expect(lines.some((l) => /^\[test:free\] shard 7\/20: 0 files, 0s, pass$/.test(l))).toBe(true);
   });
 
+  test('the log-file path is announced once at start and the PASS epilogue repeats it', async () => {
+    const lines: string[] = [];
+    const outcome = await runFreeShard(['pass'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('passed');
+    const announced = lines.filter((l) => /^\[test:free\] full log: .+gstack-free-test-.+\.log$/.test(l));
+    expect(announced.length).toBe(1);
+    // PASS epilogue carries the counts from the terminal summary + the log path.
+    expect(lines.some((l) => /^\[test:free\] PASS — 3 tests, 1 files, \d+s\. Full log: .+\.log$/.test(l))).toBe(true);
+  });
+
   test('spawned shard gets throwaway TMPDIR but NEVER an injected GSTACK_HOME', async () => {
     // GSTACK_HOME injection was tried and reverted: one shared scratch home
     // per invocation made 6,900 tests share MUTABLE state — config tests
@@ -284,5 +296,184 @@ describe('test-free-shards: strict shard execution', () => {
     } finally {
       fs.rmSync(captureDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('test-free-shards: output contract (log capture, quiet console, failure epilogue)', () => {
+  // Convention from the block above: never write a raw bun fail line into this
+  // source file — build it at runtime so a printed source excerpt can't trip
+  // the strict classifier.
+  const FAIL_WORD = '(fa' + 'il)';
+  const failLine = (name: string) => `${FAIL_WORD} ${name} [0.10ms]`;
+  const SUMMARY_1 = 'Ran 3 tests across 1 files. [12.00ms]';
+
+  /** Fake child that prints the given lines (stdout, then stderr) and exits. */
+  const commandPrinting = (stdoutLines: string[], stderrLines: string[] = [], exitCode = 0) => () => ({
+    command: process.execPath,
+    args: ['-e',
+      stdoutLines.map((l) => `console.log(${JSON.stringify(l)});`).join('')
+      + stderrLines.map((l) => `console.error(${JSON.stringify(l)});`).join('')
+      + (exitCode !== 0 ? `process.exit(${exitCode});` : ''),
+    ],
+  });
+
+  test('failure epilogue names the failing test, attributed to its file-chunk header', async () => {
+    const lines: string[] = [];
+    const commandFor = commandPrinting(['test/planted.test.ts:', failLine('planted failure'), SUMMARY_1]);
+    const outcome = await runFreeShard(['planted'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('failed');
+    expect(lines.some((l) =>
+      /^\[test:free\] FAIL — 1 failing test\(s\) in 1 file\(s\), 0 crashed worker\(s\)\. Full log: .+\.log$/.test(l),
+    )).toBe(true);
+    expect(lines).toContain('  ✗ test/planted.test.ts — planted failure');
+  });
+
+  test('crash markers surface in the epilogue as crashed+retried workers', async () => {
+    const lines: string[] = [];
+    const commandFor = commandPrinting([
+      'test/crashy.test.ts:',
+      '⟳ crashed running test/crashy.test.ts, retrying',
+      'test/crashy.test.ts:',
+      '✗ test/crashy.test.ts (crashed: exited)',
+      'Ran 0 tests across 1 files. [12.00ms]',
+    ], [], 1);
+    const outcome = await runFreeShard(['crashy'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('failed');
+    expect(lines.some((l) =>
+      /^\[test:free\] FAIL — 0 failing test\(s\) in 0 file\(s\), 1 crashed worker\(s\)\. Full log: /.test(l),
+    )).toBe(true);
+    expect(lines).toContain('  ⚠ crashed+retried: test/crashy.test.ts');
+  });
+
+  test('default console is quiet: noise stays in the log; fail/error/summary lines pass through', async () => {
+    const consoleOut: string[] = [];
+    const commandFor = commandPrinting([
+      'PASSING-NOISE gitleaks ascii art',
+      'test/noisy.test.ts:',
+      failLine('quiet mode failure'),
+      'error: expect(received).toBe(expected)',
+      'Ran 1 tests across 1 files. [1.00ms]',
+    ], ['telemetry stderr spam']);
+    const outcome = await runFreeShard(['noisy'], 1, 1, {
+      commandFor, consoleWrite: (t) => consoleOut.push(t), log: () => {},
+    });
+    expect(outcome.status).toBe('failed');
+    const joined = consoleOut.join('');
+    expect(joined).toContain(failLine('quiet mode failure'));
+    expect(joined).toContain('error: expect(received).toBe(expected)');
+    expect(joined).toContain('Ran 1 tests across 1 files.');
+    expect(joined).not.toContain('PASSING-NOISE');
+    expect(joined).not.toContain('telemetry stderr spam');
+    expect(joined).not.toContain('test/noisy.test.ts:'); // headers feed the epilogue, not the console
+  });
+
+  test('--verbose restores the full firehose to the console', async () => {
+    const consoleOut: string[] = [];
+    const commandFor = commandPrinting(
+      ['PASSING-NOISE gitleaks ascii art', SUMMARY_1],
+      ['telemetry stderr spam'],
+    );
+    const outcome = await runFreeShard(['pass'], 1, 1, {
+      commandFor, verbose: true, consoleWrite: (t) => consoleOut.push(t), log: () => {},
+    });
+    expect(outcome.status).toBe('passed');
+    const joined = consoleOut.join('');
+    expect(joined).toContain('PASSING-NOISE gitleaks ascii art');
+    expect(joined).toContain('telemetry stderr spam');
+  });
+
+  test('quiet suppresses the console entirely, even with an injected sink', async () => {
+    const consoleOut: string[] = [];
+    const commandFor = commandPrinting(['PASSING-NOISE', failLine('hidden'), SUMMARY_1]);
+    await runFreeShard(['pass'], 1, 1, {
+      commandFor, quiet: true, consoleWrite: (t) => consoleOut.push(t), log: () => {},
+    });
+    expect(consoleOut).toEqual([]);
+  });
+
+  test('the full child stream lands in the per-run log file, including console-filtered noise', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-log-'));
+    const logFilePath = path.join(dir, 'run.log');
+    try {
+      const lines: string[] = [];
+      const commandFor = commandPrinting(['stdout NOISE-A', SUMMARY_1], ['stderr NOISE-B']);
+      const outcome = await runFreeShard(['pass'], 1, 1, { commandFor, quiet: true, logFilePath, log: (l) => lines.push(l) });
+      expect(outcome.status).toBe('passed');
+      expect(lines).toContain(`[test:free] full log: ${logFilePath}`);
+      const logged = fs.readFileSync(logFilePath, 'utf8');
+      expect(logged).toContain('stdout NOISE-A');
+      expect(logged).toContain('stderr NOISE-B');
+      expect(logged).toContain('Ran 3 tests across 1 files.');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('colored fail lines are attributed after ANSI stripping (a prior grep missed them)', async () => {
+    const lines: string[] = [];
+    const colored = `\u001B[31m${failLine('colored failure')}\u001B[0m`;
+    const commandFor = commandPrinting(['test/colored.test.ts:', colored, 'Ran 1 tests across 1 files. [1.00ms]']);
+    const outcome = await runFreeShard(['colored'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('failed');
+    expect(lines).toContain('  ✗ test/colored.test.ts — colored failure');
+  });
+
+  test('wall-timeout epilogue lists wedge suspects: header seen, no results, no summary', async () => {
+    const lines: string[] = [];
+    const commandFor = () => ({
+      command: process.execPath,
+      args: ['-e', 'console.log("test/wedged.test.ts:");console.log("wedged noise");setTimeout(() => {}, 600000);'],
+    });
+    const outcome = await runFreeShard(['wedged'], 1, 1, {
+      commandFor, quiet: true, wallTimeoutMs: 1_500, log: (l) => lines.push(l),
+    });
+    expect(outcome.status).toBe('timed-out');
+    expect(lines).toContain('  ⏱ in flight at kill: test/wedged.test.ts');
+    // The epilogue headline shape stays stable across statuses.
+    expect(lines.some((l) => l.startsWith('[test:free] FAIL — '))).toBe(true);
+  }, 30_000);
+
+  test('timeout with no observable header falls back to the buffered-parallel explanation', () => {
+    const reporter = new FreeRunReporter(['test/a.test.ts', 'test/b.test.ts']);
+    reporter.end();
+    const lines = buildRunEpilogue('timed-out', reporter.report(), 5_000, '/tmp/x.log');
+    expect(lines.some((l) => l.includes('in flight at kill: unknown'))).toBe(true);
+    expect(lines.some((l) => l.includes('2 planned file(s) produced no output'))).toBe(true);
+  });
+
+  test('duplicate fail lines dedupe; pre-header failures are labeled unattributed', () => {
+    const reporter = new FreeRunReporter(['test/a.test.ts']);
+    reporter.write(`${failLine('early unattributed')}\n`, 'stderr');
+    reporter.write('test/a.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('dup')}\n${failLine('dup')}\n`, 'stderr');
+    reporter.end();
+    const report = reporter.report();
+    expect(report.failures).toEqual([
+      { file: null, testName: 'early unattributed' },
+      { file: 'test/a.test.ts', testName: 'dup' },
+    ]);
+    const lines = buildRunEpilogue('failed', report, 1_000, '/tmp/x.log');
+    expect(lines).toContain('  ✗ (unattributed) — early unattributed');
+    expect(lines).toContain('  ✗ test/a.test.ts — dup');
+    expect(lines.some((l) => l.includes('2 failing test(s) in 2 file(s)'))).toBe(true);
+  });
+
+  test("a later file's header ends the previous chunk — completed noisy files are not wedge suspects", () => {
+    const reporter = new FreeRunReporter(['test/done.test.ts', 'test/hung.test.ts']);
+    reporter.write('test/done.test.ts:\n', 'stderr');
+    reporter.write('noise from the completed file\n', 'stderr');
+    reporter.write('test/hung.test.ts:\n', 'stderr');
+    reporter.write('noise before the hang\n', 'stderr');
+    reporter.end();
+    // No terminal summary: only the still-open chunk is in flight.
+    expect(reporter.report().inFlight).toEqual(['test/hung.test.ts']);
+  });
+
+  test('../-prefixed printed paths canonicalize to planned relative paths (symlinked cwd)', () => {
+    const reporter = new FreeRunReporter(['browse/test/x.test.ts']);
+    reporter.write('../../../work/repo/browse/test/x.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('boom')}\n`, 'stderr');
+    reporter.end();
+    expect(reporter.report().failures[0]).toEqual({ file: 'browse/test/x.test.ts', testName: 'boom' });
   });
 });
