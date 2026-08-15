@@ -294,7 +294,7 @@ jobs:
           retention-days: 90
 
   report:
-    runs-on: ubicloud-standard-8
+    runs-on: ubicloud-standard-2
     needs: evals
     if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 5
