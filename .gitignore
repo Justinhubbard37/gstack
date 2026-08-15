@@ -44,3 +44,6 @@ docs/throughput-*.json
 
 # gbrain local source-staging dir (capability checks, source clones) — runtime artifact
 .sources/
+
+# Swift build output from the ios-qa gen-accessors tool (built on demand by its tests)
+ios-qa/scripts/gen-accessors-tool/.build/
