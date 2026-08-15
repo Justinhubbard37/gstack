@@ -116,6 +116,7 @@ jobs:
       # vanished suite) and also covers the old exit-0-on-module-load-error
       # Bun behavior. Same isolation model as scripts/test-paid-shards.ts.
       - name: Run free suite (per-file isolation)
+        shell: bash
         run: |
           set -o pipefail
           FILES=$(bun run scripts/test-free-shards.ts --list | grep -E '^  (browse/|test/|make-pdf/)' | sed 's/^  //')
