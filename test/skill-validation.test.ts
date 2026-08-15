@@ -1500,11 +1500,37 @@ describe('Codex skill', () => {
   });
 
   test('codex review invocations avoid the prompt plus --base argument shape', () => {
+    // The real invariant is "never pass a positional [PROMPT] together with a
+    // scope flag" — the CLI rejects that combination at argv parse time
+    // (#1428, #1479). Two different shapes satisfy it, and these files have
+    // diverged on which one they use:
+    //
+    //   scoped   — `codex review --base <base>` with NO prompt argument. The
+    //     scope comes from the CLI, which is the only thing that actually sets
+    //     it. This is what all three files now use.
+    //   broken   — prompt-only `codex review "<text>"` describing the diff
+    //     range in prose. This parses, but the CLI falls back to *uncommitted
+    //     working-tree* scope, so the review silently covers the wrong changes.
+    //
+    // The old assertion banned the substring `--base <base> -c '...'`, which
+    // the correct scoped form also contains — it could not tell the two apart,
+    // so it effectively banned the fix.
     for (const rel of ['codex/SKILL.md', 'review/SKILL.md', 'ship/SKILL.md']) {
       // ship's codex command moved into sections/adversarial.md (T9 carve).
       const content = rel === 'ship/SKILL.md' ? readShipUnion() : fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-      expect(content).not.toContain('--base <base> -c \'model_reasoning_effort="high"\'');
-      expect(content).toContain('Run git diff origin/<base>...HEAD 2>/dev/null || git diff <base>...HEAD');
+      expect(content).toMatch(/codex\s+review\s+--base\b/);
+      const offending: string[] = [];
+      for (const line of content.split('\n')) {
+        if (line.includes('`codex review`')) continue;
+        const match = line.match(/(?:^|[;&|]\s*|\s)codex\s+review\b(.*)$/);
+        if (!match) continue;
+        const rest = match[1];
+        if (!/--base\b|--commit\b|--uncommitted\b/.test(rest)) continue;
+        const beforeFlag = rest.split(/--base\b|--commit\b|--uncommitted\b/)[0].trim();
+        // A quoted string or variable expansion before the scope flag is the bug.
+        if (/^["'$]|^--\s*["']/.test(beforeFlag)) offending.push(`${rel}: ${line.trim()}`);
+      }
+      expect(offending).toEqual([]);
     }
   });
 
@@ -1512,9 +1538,13 @@ describe('Codex skill', () => {
     // Pre-#1209, the bare `codex review --base` path stripped the filesystem
     // boundary instruction, letting Codex spend tokens reading skill files.
     // #1209's prompt rewrite restored the boundary by routing every default
-    // call through a prompt. Pin both halves so a future refactor can't
-    // regress: (a) the boundary line must appear, (b) the call must be
-    // through `codex review "<prompt>"` not bare `codex review --base`.
+    // call through a prompt — but routing through a prompt is what breaks the
+    // diff scope, so codex/ no longer does that. What this test pins is the
+    // boundary TEXT, which must still be present for the paths that do take a
+    // prompt (`codex exec` for challenge, consult, and custom review focus).
+    // Do NOT "restore" the boundary by putting a prompt argument back on a
+    // scoped `codex review` call: that combination fails to parse, and
+    // dropping the scope flag to make it parse silently reviews the wrong diff.
     const boundaryLine =
       'Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/';
     for (const rel of ['codex/SKILL.md', 'review/SKILL.md', 'ship/SKILL.md']) {

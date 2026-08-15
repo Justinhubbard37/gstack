@@ -14,7 +14,7 @@ const claude = defineHost({
 
   generation: {
     generateMetadata: false,
-    skipSkills: [],  // overrides the default ['codex'] — the /codex skill IS a Claude skill (wrapper around codex exec)
+    skipSkills: ['claude'],  // the /claude outside-voice skill is for non-Claude hosts; /codex stays (it IS a Claude skill wrapping codex exec)
   },
 
   pathRewrites: [],  // Claude is the primary host — no rewrites needed

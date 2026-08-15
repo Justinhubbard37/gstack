@@ -224,9 +224,8 @@ describe('/command tunnel command allowlist', () => {
       'return handleCommand(body, tokenInfo)'
     );
     expect(commandBlock).toContain("surface === 'tunnel'");
-    // v1.63.0.0 made the allowlist args-aware (canDispatchOverTunnel gained a
-    // second param for --out denial); this pin was stale from then until the
-    // free suite got a CI job.
+    // Args-aware since the --out (disk write) tunnel ban: the dispatch gate
+    // takes both the command and its args.
     expect(commandBlock).toContain('canDispatchOverTunnel(body?.command, body?.args)');
     expect(commandBlock).toContain('disallowed_command');
     expect(commandBlock).toContain('is not allowed over the tunnel surface');

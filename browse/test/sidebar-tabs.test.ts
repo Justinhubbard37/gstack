@@ -157,9 +157,9 @@ describe('sidepanel-terminal.js: eager auto-connect + injection API', () => {
   test('forceRestart helper closes ws, disposes xterm, returns to IDLE', () => {
     expect(TERM_JS).toContain('function forceRestart');
     const fn = TERM_JS.slice(TERM_JS.indexOf('function forceRestart'));
-    // Deliberate close code so the agent's close handler can distinguish an
-    // intentional restart from a dropped connection (codex D8 redesign).
-    expect(fn).toContain("ws.close(4001, 'intentional-restart')");
+    // close() carries an intentional-restart close code so the agent's
+    // close handler can distinguish user restarts from network drops.
+    expect(fn).toContain("ws && ws.close(4001, 'intentional-restart')");
     expect(fn).toContain('term.dispose()');
     expect(fn).toContain('STATE.IDLE');
     expect(fn).toContain('tryAutoConnect()');
@@ -225,16 +225,17 @@ describe('cli.ts: sidebar-agent is no longer spawned', () => {
   });
 
   test('Terminal-agent spawn survives', () => {
-    // The inline Bun.spawn of termAgentScript moved into the shared
-    // spawnTerminalAgent helper (terminal-agent-control.ts) so the CLI
-    // cold-start path and the supervisor respawn path share one
-    // identity-tracked spawn. The CLI must still call it.
-    expect(CLI_SRC).toContain("import { spawnTerminalAgent } from './terminal-agent-control'");
-    expect(CLI_SRC).toMatch(/spawnTerminalAgent\(\{/);
+    // v1.44 moved the raw Bun.spawn into the shared spawnTerminalAgent
+    // helper (terminal-agent-control.ts) so cli.ts, the supervisor respawn
+    // loop, and the watchdog all share identity-based process control.
+    // cli.ts must still route through that helper.
+    expect(CLI_SRC).toContain('spawnTerminalAgent');
     const CONTROL_SRC = fs.readFileSync(
-      path.join(import.meta.dir, '../src/terminal-agent-control.ts'), 'utf-8');
+      path.join(import.meta.dir, '../src/terminal-agent-control.ts'),
+      'utf-8',
+    );
     expect(CONTROL_SRC).toContain('terminal-agent.ts');
-    expect(CONTROL_SRC).toMatch(/spawn\(\['bun',\s*'run',\s*script\]/);
+    expect(CONTROL_SRC).toMatch(/\.spawn\(\['bun',\s*'run',\s*script\]/);
   });
 });
 

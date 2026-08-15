@@ -1,14 +1,23 @@
 /**
- * Tests for sidebar UX invariants that survived the chat-tab rip:
- * - Browser tab bar HTML/CSS + browser-manager tab sync plumbing
- * - Inspector message allowlist + CSP fallback basic picker
- * - Cleanup/screenshot toolbar buttons + deterministic cleanup heuristics
- * - Welcome page, sidebar auto-open, arrow hint signal chain
- * - Connection auth race, startup fast-retry, debug visibility
+ * Structural tests for the sidebar's surviving UX surfaces:
+ * - Quick-action toolbar (cleanup via PTY injection, screenshot, cookies)
+ * - CSP fallback basic picker (content.js) + inspector allowlist
+ * - Deterministic cleanup heuristics (write-commands.ts)
+ * - Welcome page + sidebar auto-open + arrow hint signal chain
+ * - Connection/auth race prevention + startup health check
+ * - browser-manager tab tracking + no-focus-steal invariants
+ * - Server shutdown teardown of the terminal-agent
  *
- * The chat-queue pipeline (sidebar-agent.ts, /sidebar-command,
- * /sidebar-chat, chat bubbles) is gone — its tests were pruned with it.
- * See sidebar-tabs.test.ts for the invariants locking that removal.
+ * History: this file used to also pin the chat-queue architecture
+ * (sidebar-agent.ts, /sidebar-command, /sidebar-chat, /sidebar-tabs,
+ * per-tab chat context, stop button, chat polling, processAgentEvent,
+ * pickSidebarModel). That entire path was deliberately ripped in PR #1216
+ * (v1.14.0.0) when the interactive claude PTY (terminal-agent.ts) proved
+ * strictly more capable — see docs/designs/SIDEBAR_MESSAGE_FLOW.md. The
+ * stale blocks kept "passing" only because a teardown bug made `bun test`
+ * exit 0 before reporting; once that was fixed (PR #2172) they surfaced as
+ * failures and were removed. The rip itself is pinned as absence tests in
+ * browse/test/sidebar-tabs.test.ts.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -16,8 +25,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const ROOT = path.resolve(__dirname, '..');
-
-// ─── Browser tab bar ────────────────────────────────────────────
 
 describe('browser tab bar (sidepanel.html)', () => {
   const html = fs.readFileSync(path.join(ROOT, '..', 'extension', 'sidepanel.html'), 'utf-8');
@@ -48,8 +55,6 @@ describe('sidebar→browser tab switch', () => {
 
 describe('browser→sidebar tab sync', () => {
   const bmSrc = fs.readFileSync(path.join(ROOT, 'src', 'browser-manager.ts'), 'utf-8');
-  const serverSrc = fs.readFileSync(path.join(ROOT, 'src', 'server.ts'), 'utf-8');
-  const js = fs.readFileSync(path.join(ROOT, '..', 'extension', 'sidepanel.js'), 'utf-8');
 
   test('syncActiveTabByUrl method exists on BrowserManager', () => {
     expect(bmSrc).toContain('syncActiveTabByUrl(activeUrl: string)');
@@ -89,12 +94,16 @@ describe('browser→sidebar tab sync', () => {
     expect(fn).toContain('this.pages.size <= 1');
   });
 
+  // NOTE: the /sidebar-tabs + /sidebar-command server consumers of
+  // syncActiveTabByUrl and the sidepanel chat-tab handlers were removed
+  // with the chat-queue rip (PR #1216). The BrowserManager primitives above
+  // survive (tab tracking feeds active-tab.json for the PTY claude).
+
   test('background.js listens for chrome.tabs.onActivated', () => {
     const bgSrc = fs.readFileSync(path.join(ROOT, '..', 'extension', 'background.js'), 'utf-8');
     expect(bgSrc).toContain('chrome.tabs.onActivated.addListener');
     expect(bgSrc).toContain('browserTabActivated');
   });
-
 });
 
 describe('browser tab bar (sidepanel.css)', () => {
@@ -197,13 +206,14 @@ describe('CSP fallback basic picker', () => {
     expect(contentSrc).toContain('getBoundingClientRect()');
   });
 
-  test('content.js contains CSSOM iteration tolerating cross-origin sheets', () => {
+  test('content.js contains CSSOM iteration guarded against cross-origin sheets', () => {
     expect(contentSrc).toContain('document.styleSheets');
     expect(contentSrc).toContain('cssRules');
-    // Cross-origin sheets throw DOMException on cssRules access — the
-    // iteration swallows exactly that (typed catch), nothing broader.
-    expect(contentSrc).toContain('same-origin only');
-    expect(contentSrc).toContain('instanceof DOMException');
+    // Cross-origin stylesheets throw DOMException on cssRules access. The
+    // iteration must swallow exactly that (typed catch, not a bare catch {}
+    // — see the slop-scan philosophy in CLAUDE.md).
+    expect(contentSrc).toContain('(same-origin only)');
+    expect(contentSrc).toMatch(/catch \(e\) \{ if \(!\(e instanceof DOMException\)\) throw e; \}/);
   });
 
   test('content.js saves and restores outline on elements', () => {
@@ -258,6 +268,24 @@ describe('cleanup and screenshot buttons', () => {
     expect(html).toContain('chat-cleanup-btn');
     expect(html).toContain('chat-screenshot-btn');
     expect(html).toContain('quick-actions');
+  });
+
+  test('cleanup button injects smart prompt into the live PTY (not just deterministic selectors)', () => {
+    // Cleanup pipes a prompt into the running claude PTY via
+    // gstackInjectToTerminal (the chat-queue POST to /sidebar-command was
+    // ripped in PR #1216 — the live REPL is the only execution surface).
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    expect(cleanupFn).toContain('gstackInjectToTerminal');
+    expect(cleanupFn).toContain('cleanupPrompt');
+    // Should include both deterministic first pass AND agent snapshot analysis
+    expect(cleanupFn).toContain('cleanup --all');
+    expect(cleanupFn).toContain('snapshot -i');
+    // Should instruct claude to keep site branding
+    expect(cleanupFn).toContain('Keep the site');
+    expect(cleanupFn).toContain('header/masthead');
   });
 
   test('sidepanel.js screenshot handler POSTs to /command with screenshot', () => {
@@ -408,9 +436,9 @@ describe('chat toolbar buttons disabled state', () => {
   });
 });
 
-// ─── No focus stealing (switchTab bringToFront) ─────────────────
+// ─── Focus stealing prevention ──────────────────────────────────
 
-describe('no focus stealing (switchTab bringToFront)', () => {
+describe('tab switching does not steal focus', () => {
   const serverSrc = fs.readFileSync(path.join(ROOT, 'src', 'server.ts'), 'utf-8');
   const bmSrc = fs.readFileSync(path.join(ROOT, 'src', 'browser-manager.ts'), 'utf-8');
 
@@ -438,6 +466,17 @@ describe('LLM-based cleanup (smart agent cleanup)', () => {
   const js = fs.readFileSync(path.join(ROOT, '..', 'extension', 'sidepanel.js'), 'utf-8');
   const wcSrc = fs.readFileSync(path.join(ROOT, 'src', 'write-commands.ts'), 'utf-8');
 
+  test('cleanup button does not bypass the agent with a direct /command POST', () => {
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    // The smart cleanup goes through the claude PTY, never a raw
+    // deterministic /command fetch. (The PTY-injection wiring itself is
+    // pinned in sidebar-tabs.test.ts.)
+    expect(cleanupFn).not.toMatch(/fetch.*\/command['"]/);
+  });
+
   test('cleanup prompt includes deterministic first pass', () => {
     const cleanupFn = js.slice(
       js.indexOf('async function runCleanup('),
@@ -445,6 +484,64 @@ describe('LLM-based cleanup (smart agent cleanup)', () => {
     );
     // First run the deterministic sweep
     expect(cleanupFn).toContain('cleanup --all');
+  });
+
+  test('cleanup prompt instructs agent to snapshot and analyze', () => {
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    // Agent should take a snapshot to see what deterministic pass missed
+    expect(cleanupFn).toContain('snapshot -i');
+    // Agent should analyze what remains
+    expect(cleanupFn).toContain('identify any remaining');
+  });
+
+  test('cleanup prompt lists specific clutter categories for agent', () => {
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    // Should guide the agent on what to look for
+    expect(cleanupFn).toContain('cookie/consent banners');
+    expect(cleanupFn).toContain('newsletter popups');
+    expect(cleanupFn).toContain('login walls');
+    expect(cleanupFn).toContain('video autoplay');
+    expect(cleanupFn).toContain('sidebar');
+    expect(cleanupFn).toContain('share');
+    expect(cleanupFn).toContain('floating chat');
+  });
+
+  test('cleanup prompt instructs agent to preserve site identity', () => {
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    // Must keep the site looking like itself
+    expect(cleanupFn).toContain('Keep the site');
+    expect(cleanupFn).toContain('header/masthead');
+    expect(cleanupFn).toContain('headline');
+    expect(cleanupFn).toContain('article body');
+    expect(cleanupFn).toContain('byline');
+  });
+
+  test('cleanup prompt instructs agent to unlock scrolling', () => {
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    expect(cleanupFn).toContain('unlock scrolling');
+    expect(cleanupFn).toContain('scroll-locked');
+  });
+
+  test('cleanup prompt instructs agent to use $B eval for removal', () => {
+    const cleanupFn = js.slice(
+      js.indexOf('async function runCleanup('),
+      js.indexOf('async function runScreenshot('),
+    );
+    // Agent should use $B eval to hide elements via JavaScript
+    expect(cleanupFn).toContain('$B eval');
+    expect(cleanupFn).toContain('hide each');
   });
 
   test('cleanup removes loading state after short delay (agent is async)', () => {
@@ -677,13 +774,16 @@ describe('sidebar arrow hint hide flow (4-step signal chain)', () => {
   test('step 1: sidepanel sends sidebarOpened message on connect', () => {
     expect(spSrc).toContain("{ type: 'sidebarOpened' }");
     // Should be in updateConnection, after setConnState('connected').
-    // Window is 1500 chars — the function grew bootstrap-global exports
-    // for sidepanel-terminal.js ahead of the sidebarOpened send.
+    // Window is generous: updateConnection also exposes the PTY bootstrap
+    // globals (gstackServerPort/gstackAuthToken) before the connected branch.
     const connectFn = spSrc.slice(
       spSrc.indexOf('function updateConnection('),
-      spSrc.indexOf('function updateConnection(') + 1500,
+      spSrc.indexOf('function updateConnection(') + 2500,
     );
-    expect(connectFn).toContain('sidebarOpened');
+    const connectedIdx = connectFn.indexOf("setConnState('connected')");
+    const openedIdx = connectFn.indexOf('sidebarOpened');
+    expect(connectedIdx).toBeGreaterThan(0);
+    expect(openedIdx).toBeGreaterThan(connectedIdx);
   });
 
   // Step 2: background.js accepts and relays sidebarOpened
@@ -798,6 +898,51 @@ describe('sidebar debug visibility when stuck', () => {
   });
 });
 
+describe('BROWSE_NO_AUTOSTART (sidebar headless prevention)', () => {
+  const cliSrc = fs.readFileSync(path.join(ROOT, 'src', 'cli.ts'), 'utf-8');
+  const termAgentSrc = fs.readFileSync(path.join(ROOT, 'src', 'terminal-agent.ts'), 'utf-8');
+
+  test('cli.ts checks BROWSE_NO_AUTOSTART before starting a new server', () => {
+    // ensureServer must check this env var BEFORE spawning a server.
+    // (Anchor on the open paren — both functions grew parameters.)
+    const ensureStart = cliSrc.indexOf('async function ensureServer(');
+    const ensureEnd = cliSrc.indexOf('\nasync function ', ensureStart + 1);
+    const ensureServerFn = cliSrc.slice(
+      ensureStart,
+      ensureEnd > ensureStart ? ensureEnd : undefined,
+    );
+    expect(ensureServerFn).toContain('BROWSE_NO_AUTOSTART');
+    expect(ensureServerFn).toContain('process.exit(1)');
+  });
+
+  test('cli.ts shows actionable error message when BROWSE_NO_AUTOSTART blocks', () => {
+    expect(cliSrc).toContain('/open-gstack-browser');
+    expect(cliSrc).toContain('BROWSE_NO_AUTOSTART is set');
+  });
+
+  test('terminal-agent.ts sets BROWSE_NO_AUTOSTART=1 for the claude PTY', () => {
+    // The PTY claude must reuse THIS headed server, never race to spawn
+    // its own. (sidebar-agent.ts, the original setter, was ripped in
+    // PR #1216 — the PTY agent inherited the same env contract.)
+    expect(termAgentSrc).toContain("BROWSE_NO_AUTOSTART: '1'");
+  });
+
+  test('terminal-agent.ts sets BROWSE_PORT for headed server reuse', () => {
+    expect(termAgentSrc).toContain('BROWSE_PORT');
+  });
+
+  test('BROWSE_NO_AUTOSTART check happens before lock acquisition', () => {
+    // The guard must be BEFORE the lock acquisition. If it's after,
+    // we'd acquire a lock and then exit, leaving a stale lock file.
+    const ensureServerStart = cliSrc.indexOf('async function ensureServer(');
+    const noAutoStart = cliSrc.indexOf('BROWSE_NO_AUTOSTART', ensureServerStart);
+    const lockAcquisition = cliSrc.indexOf('Acquire lock', ensureServerStart);
+    expect(noAutoStart).toBeGreaterThan(0);
+    expect(lockAcquisition).toBeGreaterThan(0);
+    expect(noAutoStart).toBeLessThan(lockAcquisition);
+  });
+});
+
 // ─── Idle timeout disabled in headed mode (server.ts) ───────────
 //
 // The original 'idle check skips in headed mode' string-grep test was deleted
@@ -806,6 +951,32 @@ describe('sidebar debug visibility when stuck', () => {
 // Behavioral coverage lives in browse/test/server-factory.test.ts under the
 // 'idle timer + onDisconnect dual-instance fix' describe block, which
 // exercises the headed/headless/tunnel branches of idleCheckTick directly.
+// The companion '/sidebar-command resets idle timer' test went with the
+// chat-queue rip (PR #1216) — /command and /batch reset the timer and are
+// covered by that factory suite.
+
+// ─── Shutdown kills the terminal-agent (server.ts) ──────────────
+
+describe('shutdown cleanup (server.ts)', () => {
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'src', 'server.ts'), 'utf-8');
+
+  test('shutdown kills the terminal-agent via identity-based kill (no pkill)', () => {
+    // v1.44+ identity-based teardown: only the PID recorded by THIS
+    // daemon's agent is signaled. The pre-v1.44 `pkill -f terminal-agent`
+    // regex killed sibling gstack sessions on the same host (also pinned
+    // by browse/test/terminal-agent-pid-identity.test.ts).
+    const shutdownFn = serverSrc.slice(
+      serverSrc.indexOf('async function shutdown('),
+      serverSrc.indexOf('async function shutdown(') + 1200,
+    );
+    expect(shutdownFn).toContain('killAgentByRecord');
+    expect(shutdownFn).toContain('readAgentRecord');
+    // No pkill CALL — the word may appear in the explanatory comment, so
+    // match invocation shapes only. The repo-wide reintroduction tripwire
+    // is browse/test/terminal-agent-pid-identity.test.ts.
+    expect(shutdownFn).not.toMatch(/(?:spawnSync|execSync|\$)\(\s*['"`]pkill/);
+  });
+});
 
 // ─── Cookie button in sidebar footer ────────────────────────────
 

@@ -3,6 +3,40 @@
 set -e
 umask 077  # Restrict new files to owner-only (0o600 files, 0o700 dirs)
 
+usage() {
+  cat <<'EOF'
+gstack setup — install gstack skills + build browse binary
+
+Usage: ./setup [options]
+
+Options:
+  --host <name>     Install for a specific host (claude, codex, kiro, factory,
+                    opencode, openclaw, hermes, gbrain, auto). Default: claude.
+  --prefix          Install skills with the gstack- prefix (e.g. /gstack-review).
+  --no-prefix       Install skills with short names (e.g. /review). Default.
+  --team            Switch to team mode (per-repo gstack with auto-update).
+  --no-team         Force solo install even if a team-mode repo is detected.
+  -q, --quiet       Suppress progress output.
+  -h, --help        Show this help and exit.
+
+Examples:
+  ./setup                          # solo install for Claude Code
+  ./setup --host codex             # install for OpenAI Codex CLI
+  ./setup --team                   # team mode for a shared repo
+  ./setup --no-prefix              # use short slash-command names
+
+Docs: https://github.com/garrytan/gstack
+EOF
+}
+
+# Short-circuit on -h/--help before any environment checks so users can
+# discover flags even without bun installed.
+for _arg in "$@"; do
+  case "$_arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
 if ! command -v bun >/dev/null 2>&1; then
   echo "Error: bun is required but not installed." >&2
   echo "Install with checksum verification:" >&2
@@ -29,6 +63,11 @@ IS_WINDOWS=0
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT) IS_WINDOWS=1 ;;
 esac
+
+# Windows: binaries are compiled with .exe suffix
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  BROWSE_BIN="$SOURCE_GSTACK_DIR/browse/dist/browse.exe"
+fi
 
 # ─── Symlink-or-copy helper ───────────────────────────────────
 # On macOS/Linux: create a symlink (existing behavior).
@@ -243,6 +282,11 @@ migrate_direct_codex_install() {
   INSTALL_GSTACK_DIR="$migrated_dir"
   INSTALL_SKILLS_DIR="$(dirname "$INSTALL_GSTACK_DIR")"
   BROWSE_BIN="$SOURCE_GSTACK_DIR/browse/dist/browse"
+  # Windows: binaries are compiled with .exe suffix (same as the top-level
+  # BROWSE_BIN assignment — this re-derivation must not drop the suffix).
+  if [ "$IS_WINDOWS" -eq 1 ]; then
+    BROWSE_BIN="$SOURCE_GSTACK_DIR/browse/dist/browse.exe"
+  fi
 }
 
 if [ "$INSTALL_CODEX" -eq 1 ]; then
@@ -403,14 +447,46 @@ if [ "$NEEDS_BUILD" -eq 1 ]; then
   # macOS kills with SIGKILL (exit 137). The two-step remove+re-sign is
   # required because a naive `codesign -s - -f` fails when the existing
   # signature block is corrupt. This is idempotent and costs <1s.
+  #
+  # Some binaries (observed: find-browse, gstack-global-discover) also carry
+  # trailing zero-padding AFTER the Mach-O LC_CODE_SIGNATURE region. macOS
+  # codesign requires the signature to be the last content and extend to EOF,
+  # so the padding triggers "main executable failed strict validation" on
+  # re-sign (and "internal error in Code Signing subsystem" on remove). We
+  # truncate that trailing slack to the end of LC_CODE_SIGNATURE first, which
+  # lets the identical re-sign succeed. The binary runs either way: Bun's
+  # adhoc code-page signature satisfies the kernel's exec check even when
+  # `codesign --verify` is unhappy, so a re-sign failure only warns when the
+  # binary is genuinely SIGKILL'd on exec (exit 137).
   # See: https://github.com/garrytan/gstack/issues/997
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
     for _bin in browse/dist/browse browse/dist/find-browse design/dist/design make-pdf/dist/pdf bin/gstack-global-discover; do
       _bin_path="$SOURCE_GSTACK_DIR/$_bin"
       [ -f "$_bin_path" ] && [ -x "$_bin_path" ] || continue
+      # Strip any trailing bytes past LC_CODE_SIGNATURE so codesign can re-sign.
+      # otool prints the signature's dataoff+datasize; if the file is larger,
+      # the extra bytes are Bun padding that breaks strict validation.
+      _sig_end=$(otool -l "$_bin_path" 2>/dev/null | awk '/LC_CODE_SIGNATURE/{f=1} f&&/dataoff/{o=$2} f&&/datasize/{print o+$2; exit}')
+      _fsize=$(stat -f%z "$_bin_path" 2>/dev/null)
+      if [ -n "$_sig_end" ] && [ -n "$_fsize" ] && [ "$_sig_end" -gt 0 ] 2>/dev/null && [ "$_sig_end" -lt "$_fsize" ] 2>/dev/null; then
+        _trunc_tmp=$(mktemp 2>/dev/null) || _trunc_tmp=""
+        if [ -n "$_trunc_tmp" ] && head -c "$_sig_end" "$_bin_path" > "$_trunc_tmp" 2>/dev/null; then
+          cat "$_trunc_tmp" > "$_bin_path" && chmod +x "$_bin_path"
+        fi
+        [ -n "$_trunc_tmp" ] && rm -f "$_trunc_tmp"
+      fi
       codesign --remove-signature "$_bin_path" 2>/dev/null || true
       if ! codesign -s - -f "$_bin_path" 2>/dev/null; then
-        log "warning: codesign failed for $_bin (binary may not run on Apple Silicon)"
+        # Re-sign failed. Only warn if the binary genuinely cannot execute
+        # (SIGKILL = exit 137). Otherwise Bun's adhoc code-page signature still
+        # runs fine and the codesign --verify miss is cosmetic. set -e safe.
+        _probe_rc=0
+        "$_bin_path" --help >/dev/null 2>&1 || _probe_rc=$?
+        if [ "$_probe_rc" -eq 137 ]; then
+          log "warning: codesign failed for $_bin and it is SIGKILL'd on exec (exit 137) — it may not run on Apple Silicon"
+        else
+          log "note: codesign could not re-sign $_bin, but it executes fine (Bun adhoc signature); continuing"
+        fi
       fi
     done
   fi
@@ -476,11 +552,29 @@ if [ "$INSTALL_OPENCODE" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
 fi
 
 # 2. Ensure Playwright's Chromium is available
+# Detect Ubuntu 26.04: Playwright does not yet ship a native chromium build for
+# ubuntu26.04-x64. Override the platform to ubuntu24.04-x64 so the installer
+# picks the correct binary. This is safe because the ubuntu24.04 build runs
+# fine on ubuntu26.04 (same glibc lineage). See #2101.
+_PLAYWRIGHT_PLATFORM_OVERRIDE=""
+if [ -f /etc/os-release ]; then
+  _os_id=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+  _os_ver=$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+  if [ "$_os_id" = "ubuntu" ] && [ "$_os_ver" = "26.04" ]; then
+    _PLAYWRIGHT_PLATFORM_OVERRIDE="ubuntu24.04-x64"
+    echo "Ubuntu 26.04 detected — using PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$_PLAYWRIGHT_PLATFORM_OVERRIDE"
+  fi
+fi
+
 if ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
   (
     cd "$SOURCE_GSTACK_DIR"
-    bunx playwright install chromium
+    if [ -n "$_PLAYWRIGHT_PLATFORM_OVERRIDE" ]; then
+      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bunx playwright install chromium
+    else
+      bunx playwright install chromium
+    fi
   )
 
   if [ "$IS_WINDOWS" -eq 1 ]; then
@@ -711,7 +805,7 @@ link_codex_skill_dirs() {
 
   if [ ! -d "$agents_dir" ]; then
     echo "  Generating .agents/ skill docs..."
-    ( cd "$gstack_dir" && bun run gen:skill-docs --host codex )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host codex )
   fi
 
   if [ ! -d "$agents_dir" ]; then
@@ -748,8 +842,9 @@ create_agents_sidecar() {
   local agents_gstack="$repo_root/.agents/skills/gstack"
   mkdir -p "$agents_gstack"
 
-  # Sidecar directories that skills reference at runtime
-  for asset in bin browse review qa; do
+  # Sidecar directories that skills reference at runtime. bin scripts import
+  # shared modules via ../lib, so bin and lib must always travel together.
+  for asset in bin lib browse review qa; do
     local src="$SOURCE_GSTACK_DIR/$asset"
     local dst="$agents_gstack/$asset"
     if [ -d "$src" ] || [ -f "$src" ]; then
@@ -769,6 +864,13 @@ create_agents_sidecar() {
       fi
     fi
   done
+
+  # supabase/config.sh — required by gstack-telemetry-sync to resolve GSTACK_SUPABASE_URL
+  # (file-level on purpose: migrations/ and functions/ are dev-only)
+  if [ -f "$SOURCE_GSTACK_DIR/supabase/config.sh" ]; then
+    mkdir -p "$agents_gstack/supabase"
+    _link_or_copy "$SOURCE_GSTACK_DIR/supabase/config.sh" "$agents_gstack/supabase/config.sh"
+  fi
 }
 
 # ─── Helper: create a minimal ~/.codex/skills/gstack runtime root ───────────
@@ -796,6 +898,9 @@ create_codex_runtime_root() {
   if [ -d "$gstack_dir/bin" ]; then
     _link_or_copy "$gstack_dir/bin" "$codex_gstack/bin"
   fi
+  if [ -d "$gstack_dir/lib" ]; then
+    _link_or_copy "$gstack_dir/lib" "$codex_gstack/lib"
+  fi
   if [ -d "$gstack_dir/browse/dist" ]; then
     _link_or_copy "$gstack_dir/browse/dist" "$codex_gstack/browse/dist"
   fi
@@ -814,6 +919,11 @@ create_codex_runtime_root() {
   # ETHOS.md — referenced by "Search Before Building" in all skill preambles
   if [ -f "$gstack_dir/ETHOS.md" ]; then
     _link_or_copy "$gstack_dir/ETHOS.md" "$codex_gstack/ETHOS.md"
+  fi
+  # supabase/config.sh — required by gstack-telemetry-sync to resolve GSTACK_SUPABASE_URL
+  if [ -f "$gstack_dir/supabase/config.sh" ]; then
+    mkdir -p "$codex_gstack/supabase"
+    _link_or_copy "$gstack_dir/supabase/config.sh" "$codex_gstack/supabase/config.sh"
   fi
 }
 
@@ -836,6 +946,9 @@ create_factory_runtime_root() {
   if [ -d "$gstack_dir/bin" ]; then
     _link_or_copy "$gstack_dir/bin" "$factory_gstack/bin"
   fi
+  if [ -d "$gstack_dir/lib" ]; then
+    _link_or_copy "$gstack_dir/lib" "$factory_gstack/lib"
+  fi
   if [ -d "$gstack_dir/browse/dist" ]; then
     _link_or_copy "$gstack_dir/browse/dist" "$factory_gstack/browse/dist"
   fi
@@ -852,6 +965,11 @@ create_factory_runtime_root() {
   done
   if [ -f "$gstack_dir/ETHOS.md" ]; then
     _link_or_copy "$gstack_dir/ETHOS.md" "$factory_gstack/ETHOS.md"
+  fi
+  # supabase/config.sh — required by gstack-telemetry-sync to resolve GSTACK_SUPABASE_URL
+  if [ -f "$gstack_dir/supabase/config.sh" ]; then
+    mkdir -p "$factory_gstack/supabase"
+    _link_or_copy "$gstack_dir/supabase/config.sh" "$factory_gstack/supabase/config.sh"
   fi
 }
 
@@ -873,6 +991,9 @@ create_opencode_runtime_root() {
   fi
   if [ -d "$gstack_dir/bin" ]; then
     _link_or_copy "$gstack_dir/bin" "$opencode_gstack/bin"
+  fi
+  if [ -d "$gstack_dir/lib" ]; then
+    _link_or_copy "$gstack_dir/lib" "$opencode_gstack/lib"
   fi
   if [ -d "$gstack_dir/browse/dist" ]; then
     _link_or_copy "$gstack_dir/browse/dist" "$opencode_gstack/browse/dist"
@@ -906,6 +1027,11 @@ create_opencode_runtime_root() {
   if [ -f "$gstack_dir/ETHOS.md" ]; then
     _link_or_copy "$gstack_dir/ETHOS.md" "$opencode_gstack/ETHOS.md"
   fi
+  # supabase/config.sh — required by gstack-telemetry-sync to resolve GSTACK_SUPABASE_URL
+  if [ -f "$gstack_dir/supabase/config.sh" ]; then
+    mkdir -p "$opencode_gstack/supabase"
+    _link_or_copy "$gstack_dir/supabase/config.sh" "$opencode_gstack/supabase/config.sh"
+  fi
 }
 
 link_factory_skill_dirs() {
@@ -916,7 +1042,7 @@ link_factory_skill_dirs() {
 
   if [ ! -d "$factory_dir" ]; then
     echo "  Generating .factory/ skill docs..."
-    ( cd "$gstack_dir" && bun run gen:skill-docs --host factory )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host factory )
   fi
 
   if [ ! -d "$factory_dir" ]; then
@@ -948,7 +1074,7 @@ link_opencode_skill_dirs() {
 
   if [ ! -d "$opencode_dir" ]; then
     echo "  Generating .opencode/ skill docs..."
-    ( cd "$gstack_dir" && bun run gen:skill-docs --host opencode )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host opencode )
   fi
 
   if [ ! -d "$opencode_dir" ]; then
@@ -1115,11 +1241,17 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
   [ -L "$KIRO_GSTACK" ] && rm -f "$KIRO_GSTACK"
   mkdir -p "$KIRO_GSTACK" "$KIRO_GSTACK/browse" "$KIRO_GSTACK/gstack-upgrade" "$KIRO_GSTACK/review"
   _link_or_copy "$SOURCE_GSTACK_DIR/bin" "$KIRO_GSTACK/bin"
+  _link_or_copy "$SOURCE_GSTACK_DIR/lib" "$KIRO_GSTACK/lib"
   _link_or_copy "$SOURCE_GSTACK_DIR/browse/dist" "$KIRO_GSTACK/browse/dist"
   _link_or_copy "$SOURCE_GSTACK_DIR/browse/bin" "$KIRO_GSTACK/browse/bin"
   # ETHOS.md — referenced by "Search Before Building" in all skill preambles
   if [ -f "$SOURCE_GSTACK_DIR/ETHOS.md" ]; then
     _link_or_copy "$SOURCE_GSTACK_DIR/ETHOS.md" "$KIRO_GSTACK/ETHOS.md"
+  fi
+  # supabase/config.sh — required by gstack-telemetry-sync to resolve GSTACK_SUPABASE_URL
+  if [ -f "$SOURCE_GSTACK_DIR/supabase/config.sh" ]; then
+    mkdir -p "$KIRO_GSTACK/supabase"
+    _link_or_copy "$SOURCE_GSTACK_DIR/supabase/config.sh" "$KIRO_GSTACK/supabase/config.sh"
   fi
   # gstack-upgrade skill
   if [ -f "$AGENTS_DIR/gstack-upgrade/SKILL.md" ]; then
@@ -1245,7 +1377,14 @@ rm -f /tmp/gstack-latest-version
 
 # 10. Team mode: register/unregister SessionStart hook
 SETTINGS_HOOK="$SOURCE_GSTACK_DIR/bin/gstack-settings-hook"
-HOOK_CMD="$SOURCE_GSTACK_DIR/bin/gstack-session-update"
+# On Windows (Git Bash / MSYS2 / Cygwin), extensionless scripts can't be
+# launched directly by the OS — the file-association dialog appears instead.
+# Prefix with 'bash' so Claude Code's hook runner invokes Git Bash explicitly.
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  HOOK_CMD="bash $SOURCE_GSTACK_DIR/bin/gstack-session-update"
+else
+  HOOK_CMD="$SOURCE_GSTACK_DIR/bin/gstack-session-update"
+fi
 
 if [ "$TEAM_MODE" -eq 1 ]; then
   "$GSTACK_CONFIG" set auto_upgrade true 2>/dev/null || true
@@ -1317,7 +1456,13 @@ if [ -x "$DETECT_BIN" ]; then
         log "gbrain detected — regenerating Claude SKILL.md with brain-aware blocks (~250 token overhead per planning skill)..."
         (
           cd "$SOURCE_GSTACK_DIR"
-          bun_cmd run gen:skill-docs:user --host claude 2>&1 | tail -3
+          # No pipe before the || guard: `cmd | tail -3` reports TAIL's exit
+          # status, so a generator crash read as success (same masking the
+          # main gen:skill-docs site had). Capture, show the tail, propagate.
+          _GEN_USER_OUT=$(bun_cmd run gen:skill-docs:user --host claude 2>&1)
+          _GEN_USER_RC=$?
+          printf '%s\n' "$_GEN_USER_OUT" | tail -3
+          exit "$_GEN_USER_RC"
         ) || log "  warning: gen:skill-docs:user failed — run 'bun run gen:skill-docs:user' manually if you want brain-aware blocks"
       fi
     else

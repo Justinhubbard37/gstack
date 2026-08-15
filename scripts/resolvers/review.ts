@@ -352,7 +352,7 @@ If B: skip Phase 3.5 entirely. Remember that the second opinion did NOT run (aff
 2. **Write the assembled prompt to a temp file** (prevents shell injection from user-derived content):
 
 \`\`\`bash
-CODEX_PROMPT_FILE=$(mktemp /tmp/gstack-codex-oh-XXXXXXXX.txt)
+CODEX_PROMPT_FILE=$(mktemp /tmp/gstack-codex-oh-XXXXXXXX)
 \`\`\`
 
 Write the full prompt to this file. **Always start with the filesystem boundary:**
@@ -528,10 +528,14 @@ If \`CODEX_MODE\` is \`ready\`:
 \`\`\`bash
 TMPERR_ADV=$(mktemp /tmp/codex-adv-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "${CODEX_BOUNDARY}Review the changes on this branch against the base branch. Run DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" to see the diff. Your job is to find ways this code will fail in production. Think like an attacker and a chaos engineer. Find edge cases, race conditions, security holes, resource leaks, failure modes, and silent data corruption paths. Be adversarial. Be thorough. No compliments — just the problems. End your output with ONE line in the canonical format \`Recommendation: <action> because <one-line reason naming the most exploitable finding>\`. Generic reasons like 'because it's safer' do not qualify; the reason must point to a specific finding or no-fix rationale." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' --enable web_search_cached < /dev/null 2>"$TMPERR_ADV"
+# Shell functions do not survive between Bash blocks, so re-source the probe
+# here. It defines _gstack_codex_timeout_wrapper (gtimeout -> timeout ->
+# unwrapped fallback), added in #1056 but never wired into this call site.
+source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
+_gstack_codex_timeout_wrapper 540 codex exec "${CODEX_BOUNDARY}Review the changes on this branch against the base branch. Run DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" to see the diff. Your job is to find ways this code will fail in production. Think like an attacker and a chaos engineer. Find edge cases, race conditions, security holes, resource leaks, failure modes, and silent data corruption paths. Be adversarial. Be thorough. No compliments — just the problems. End your output with ONE line in the canonical format \`Recommendation: <action> because <one-line reason naming the most exploitable finding>\`. Generic reasons like 'because it's safer' do not qualify; the reason must point to a specific finding or no-fix rationale." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' --enable web_search_cached < /dev/null 2>"$TMPERR_ADV"
 \`\`\`
 
-Set the Bash tool's \`timeout\` parameter to \`300000\` (5 minutes). Do NOT use the \`timeout\` shell command — it doesn't exist on macOS. After the command completes, read stderr:
+Set the Bash tool's \`timeout\` parameter to \`600000\` (10 minutes). It sits ABOVE the 540s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves \`gtimeout\`, then \`timeout\`, then runs unwrapped, so it is safe on a macOS without coreutils. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_ADV"
 \`\`\`
@@ -540,7 +544,7 @@ Present the full output verbatim. This is informational — it never blocks ship
 
 **Error handling:** All errors are non-blocking — adversarial review is a quality enhancement, not a prerequisite.
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run \\\`codex login\\\` to authenticate."
-- **Timeout:** "Codex timed out after 5 minutes."
+- **Timeout (exit 124):** "Codex exceeded 9 minutes and was terminated; this pass produced NO findings." A timed-out pass is MISSING COVERAGE, not a clean bill — say so explicitly rather than continuing as if Codex had reviewed. Whatever it produced before the cut is recoverable from that run's rollout log under \`~/.codex/sessions/<YYYY>/<MM>/<DD>/\`.
 - **Empty response:** "Codex returned no response. Stderr: <paste relevant error>."
 
 **Cleanup:** Run \`rm -f "$TMPERR_ADV"\` after processing.
@@ -557,10 +561,16 @@ If \`DIFF_TOTAL >= 200\` AND \`CODEX_MODE\` is \`ready\`:
 TMPERR=$(mktemp /tmp/codex-review-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 cd "$_REPO_ROOT"
-codex review "${CODEX_BOUNDARY}Review the changes on this branch against the base branch <base>. Run git diff origin/<base>...HEAD 2>/dev/null || git diff <base>...HEAD to see the diff and review only those changes." -c 'model_reasoning_effort="high"' --enable web_search_cached < /dev/null 2>"$TMPERR"
+# Shell functions do not survive between Bash blocks, so re-source the probe
+# here. It defines _gstack_codex_timeout_wrapper (gtimeout -> timeout ->
+# unwrapped fallback), added in #1056 but never wired into this call site.
+source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
+_gstack_codex_timeout_wrapper 540 codex review --base <base> -c 'model_reasoning_effort="high"' --enable web_search_cached < /dev/null 2>"$TMPERR"
 \`\`\`
 
-Set the Bash tool's \`timeout\` parameter to \`300000\` (5 minutes). Do NOT use the \`timeout\` shell command — it doesn't exist on macOS. Present output under \`CODEX SAYS (code review):\` header.
+**No prompt argument.** \`--base\` is what scopes the review, and the positional \`[PROMPT]\` is mutually exclusive with it — passing both fails at argv parsing. Do NOT "fix" that error by dropping \`--base\` and keeping the prompt: a prompt-only \`codex review\` silently falls back to the **uncommitted working-tree** scope (\`git status --short; git diff\`), so it reviews the wrong changes and reports "no changes" on a clean tree. Prompt text describing the diff range does not change what the CLI feeds the reviewer. Unlike the adversarial pass above, which uses \`codex exec\` and really does run the git command it's told to, this path gets a pre-computed diff from the CLI — which is also why it needs no filesystem boundary.
+
+Set the Bash tool's \`timeout\` parameter to \`600000\` (10 minutes). It sits ABOVE the 540s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves \`gtimeout\`, then \`timeout\`, then runs unwrapped, so it is safe on a macOS without coreutils. Present output under \`CODEX SAYS (code review):\` header.
 Check for \`[P1]\` markers: found → \`GATE: FAIL\`, not found → \`GATE: PASS\`.
 
 If GATE is FAIL, use AskUserQuestion:

@@ -45,19 +45,30 @@ jobs:
       - if: steps.check.outputs.exists == 'false'
         run: cp package.json bun.lock .github/docker/
 
+      # A fork PR's GITHUB_TOKEN only has `packages: read`, so pushing fails.
+      # Still BUILD (validates Dockerfile.ci changes), just don't publish. This
+      # job intentionally keeps no `if:` so fork PRs still get one real, honest
+      # green check here instead of a run where every job is grey.
       - if: steps.check.outputs.exists == 'false'
         uses: docker/build-push-action@v6
         with:
           context: .github/docker
           file: .github/docker/Dockerfile.ci
-          push: true
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           tags: |
             ${{ steps.meta.outputs.tag }}
             ${{ env.IMAGE }}:latest
 
+  # Fork PRs never receive repository secrets (ANTHROPIC_API_KEY et al), so every
+  # API-calling eval fails at SDK auth before a model runs. Skip deterministically
+  # rather than leaving the outcome to Docker-cache luck: a warm cache let these
+  # run and fail, a cold one made build-image fail its push and the shards skip.
+  # Same-repo PRs, pushes, and workflow_dispatch keep full coverage. Fork work
+  # gets real coverage via a trusted base-repo branch.
   evals:
     runs-on: ${{ matrix.suite.runner || 'ubicloud-standard-8' }}
     needs: build-image
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     container:
       image: ${{ needs.build-image.outputs.image-tag }}
       credentials:
@@ -276,7 +287,7 @@ jobs:
   report:
     runs-on: ubicloud-standard-8
     needs: evals
-    if: always() && github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 5
     permissions:
       contents: read

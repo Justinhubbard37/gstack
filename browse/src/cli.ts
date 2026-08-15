@@ -21,7 +21,32 @@ import { spawnTerminalAgent } from './terminal-agent-control';
 
 const config = resolveConfig();
 const IS_WINDOWS = process.platform === 'win32';
-const MAX_START_WAIT = IS_WINDOWS ? 15000 : (process.env.CI ? 30000 : 8000); // Node+Chromium takes longer on Windows
+
+/**
+ * Startup health-probe budget (ms) for a freshly spawned server. The daemon is
+ * detached + unref'd, so it keeps booting regardless of how long the CLI is
+ * willing to poll — this constant only bounds how long `startServer` waits
+ * before reporting failure.
+ *
+ * Overridable via `BROWSE_START_TIMEOUT` (ms) for hosts where even the platform
+ * ceiling isn't enough — e.g. Windows under heavy load (#1846), where the 15s
+ * budget can still elapse before a busy box finishes booting Node+Chromium.
+ * Mirrors the `BROWSE_*` tunable convention used throughout server.ts
+ * (BROWSE_PORT, BROWSE_IDLE_TIMEOUT, ...). A non-positive or unparseable value
+ * falls back to the platform default. Pure + exported for tests.
+ */
+export function resolveStartTimeout(env: NodeJS.ProcessEnv = process.env): number {
+  // Cold Chromium launch measured ~5.7s at load avg 10 on a dev machine running
+  // many servers; at load 12+ it exceeds the old 8s budget, so the CLI gave up
+  // while the (detached) daemon was still booting → "Server failed to start
+  // within 8s". 15s matches the Windows budget and gives real headroom; the poll
+  // loop returns the instant the daemon is healthy, so this only costs time in a
+  // genuine-failure case.
+  const platformDefault = IS_WINDOWS ? 15000 : (env.CI ? 30000 : 15000); // Node+Chromium takes longer on Windows
+  const override = parseInt(env.BROWSE_START_TIMEOUT || '', 10);
+  return Number.isFinite(override) && override > 0 ? override : platformDefault;
+}
+const MAX_START_WAIT = resolveStartTimeout();
 
 export function resolveServerScript(
   env: Record<string, string | undefined> = process.env,
@@ -357,6 +382,17 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
     await Bun.sleep(100);
   }
 
+  // One last check before declaring failure. The daemon is detached + unref'd,
+  // so on a loaded machine it can become healthy in the gap between the poll
+  // loop's final tick and now — the probe timed out, the launch did not
+  // (#1846). Re-checking here turns that false negative into a success, and
+  // mirrors the post-loop recovery already done in ensureServer(). A genuinely
+  // failed server is still unhealthy, so this falls through to the error report.
+  const lateState = readState();
+  if (lateState && await isServerHealthy(lateState.port)) {
+    return lateState;
+  }
+
   // Server didn't start in time — check the on-disk startup error log.
   // Both platforms now spawn with stdio: 'ignore', so the server writes
   // errors to disk for the CLI to read (see server.ts start().catch).
@@ -372,12 +408,31 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
   throw new Error(`Server failed to start within ${MAX_START_WAIT / 1000}s`);
 }
 
+function errorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
+  return 'UNKNOWN';
+}
+
+function errorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string' && message.length > 0) return message;
+  }
+  return String(err);
+}
+
+function logServerLockError(action: string, lockPath: string, err: unknown): void {
+  console.error(`[browse] acquireServerLock: unexpected ${errorCode(err)} while ${action} ${lockPath}: ${errorMessage(err)}`);
+}
+
 /**
  * Acquire an exclusive lockfile to prevent concurrent ensureServer() races (TOCTOU).
  * Returns a cleanup function that releases the lock.
  */
-function acquireServerLock(): (() => void) | null {
-  const lockPath = `${config.stateFile}.lock`;
+export function acquireServerLock(lockPath: string = `${config.stateFile}.lock`): (() => void) | null {
   try {
     // 'wx' — create exclusively, fails if file already exists (atomic check-and-create)
     // Using string flag instead of numeric constants for Bun Windows compatibility
@@ -385,19 +440,36 @@ function acquireServerLock(): (() => void) | null {
     fs.writeSync(fd, `${process.pid}\n`);
     fs.closeSync(fd);
     return () => { safeUnlink(lockPath); };
-  } catch {
-    // Lock already held — check if the holder is still alive
-    try {
-      const holderPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
-      if (holderPid && isProcessAlive(holderPid)) {
-        return null; // Another live process holds the lock
-      }
-      // Stale lock — remove and retry
-      fs.unlinkSync(lockPath);
-      return acquireServerLock();
-    } catch {
+  } catch (err) {
+    if (errorCode(err) !== 'EEXIST') {
+      logServerLockError('opening', lockPath, err);
       return null;
     }
+
+    // Lock already held — check if the holder is still alive
+    let holderPid: number;
+    try {
+      holderPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
+    } catch (readErr) {
+      if (errorCode(readErr) === 'ENOENT') {
+        return acquireServerLock(lockPath);
+      }
+      logServerLockError('reading holder PID from', lockPath, readErr);
+      return null;
+    }
+
+    if (holderPid && isProcessAlive(holderPid)) {
+      return null; // Another live process holds the lock
+    }
+
+    // Stale lock — remove and retry
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (unlinkErr) {
+      logServerLockError('removing stale', lockPath, unlinkErr);
+      return null;
+    }
+    return acquireServerLock(lockPath);
   }
 }
 
@@ -584,7 +656,17 @@ async function sendCommand(state: ServerState, command: string, args: string[], 
       process.exit(1);
     }
     // Connection error — server may have crashed, OR may just be busy.
-    if (err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET' || err.message?.includes('fetch failed')) {
+    // The compiled CLI runs on Bun, whose fetch reports a refused/dropped
+    // socket as err.code 'ConnectionRefused' / 'ConnectionClosed' (message
+    // "Unable to connect. Is the computer able to access the url?"), NOT Node's
+    // ECONNREFUSED/ECONNRESET. Match both, or daemon crashes leak the raw Bun
+    // error and exit 1 instead of triggering the busy-check/restart below.
+    const isConnError =
+      err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET' ||
+      err.code === 'ConnectionRefused' || err.code === 'ConnectionClosed' ||
+      err.message?.includes('fetch failed') ||
+      err.message?.includes('Unable to connect');
+    if (isConnError) {
       const oldState = readState();
       // #1781 busy-vs-dead: a single-threaded daemon under beacon/extension load
       // can briefly stop answering HTTP while still alive. Before declaring a
@@ -1125,6 +1207,7 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
         const newPid = spawnTerminalAgent({
           stateFile: config.stateFile,
           serverPort: newState.port,
+          ownerPid: newState.pid,
           cwd: config.projectDir,
         });
         if (newPid) {
@@ -1217,6 +1300,7 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
           spawnTerminalAgent({
             stateFile: config.stateFile,
             serverPort: respawned.port,
+            ownerPid: respawned.pid,
             cwd: config.projectDir,
           });
         } catch (err: any) {

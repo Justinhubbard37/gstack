@@ -470,6 +470,10 @@ describe('host config correctness', () => {
     expect(codex.generation.generateMetadata).toBe(true);
   });
 
+  test('codex rewrites CLAUDE.md to AGENTS.md', () => {
+    expect(codex.pathRewrites).toContainEqual({ from: 'CLAUDE.md', to: 'AGENTS.md' });
+  });
+
   test('factory has tool rewrites', () => {
     expect(factory.toolRewrites).toBeDefined();
     expect(Object.keys(factory.toolRewrites!).length).toBeGreaterThan(0);

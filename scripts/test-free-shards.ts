@@ -30,7 +30,10 @@ import { spawnSync } from 'child_process';
 import { isPaidTestFile } from '../test/helpers/paid-test-set';
 
 const ROOT = path.resolve(import.meta.dir, '..');
-const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test'] as const;
+// design/test was silently absent from BOTH the package.json test script and
+// this list — design tests (including a teardown bomb) never ran in any CI
+// or local free run. Keep the two lists in sync.
+const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test', 'design/test'] as const;
 const TEST_FILE_REGEX = /\.test\.(?:[cm]?[jt]s|tsx|jsx)$/;
 
 // POSIX-only patterns that indicate a test will fail on windows-latest no
@@ -88,6 +91,32 @@ const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
   {
     file: 'browse/test/findport.test.ts',
     reason: 'asserts Bun.serve.stop() is fire-and-forget — Bun behavior differs on Windows for this polyfill',
+  },
+];
+
+// Force-include overrides: files a WINDOWS_FRAGILE_PATTERNS regex excludes for
+// a reason that does not actually apply to them. Each entry documents WHY the
+// pattern hit is a false positive — the point of these files is Windows
+// coverage, so auto-excluding them defeats the regression tests they carry.
+const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
+  {
+    file: 'browse/test/file-permissions.test.ts',
+    // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
+    // is platform-guarded (win32 returns early / takes the icacls branch).
+    // This file carries the win32-only icacls-by-SID regression tests, which
+    // can ONLY execute on windows-latest — excluding it here means the
+    // machine-account ACL lockout regression is never exercised on the one
+    // platform it bricks.
+    reason: 'mode-bitmask hits are POSIX-branch only; win32-only ACL regression tests must run on windows-latest',
+  },
+  {
+    file: 'browse/test/terminal-agent-owner-watchdog.test.ts',
+    // Trips the spawn(['bun','run',...]) pattern, whose reason is the
+    // Playwright-bound browse server. This test spawns terminal-agent.ts,
+    // which imports only fs/path/crypto + local helpers (no Playwright, no
+    // PTY at module scope) and boots under Bun on Windows — the owner-PID
+    // orphan leak it pins was reported on Windows (#2019).
+    reason: 'spawns terminal-agent (no Playwright), not the browse server; owner-orphan leak is a Windows defect',
   },
 ];
 
@@ -160,10 +189,15 @@ export function curateWindowsSafe(files: string[], rootDir = ROOT): CurationResu
   const safe: string[] = [];
   const excluded: Array<{ file: string; reason: string }> = [];
   const knownBad = new Map(KNOWN_WINDOWS_INCOMPATIBLE.map((e) => [e.file, e.reason]));
+  const knownSafe = new Set(KNOWN_WINDOWS_SAFE.map((e) => e.file));
   for (const relativePath of files) {
     const knownReason = knownBad.get(relativePath);
     if (knownReason) {
       excluded.push({ file: relativePath, reason: knownReason });
+      continue;
+    }
+    if (knownSafe.has(relativePath)) {
+      safe.push(relativePath);
       continue;
     }
     const absolute = path.join(rootDir, relativePath);
@@ -254,14 +288,39 @@ function formatShardSummary(shards: string[][]): string[] {
   });
 }
 
+/**
+ * True when a shard's output shows the run ended WITHOUT bun's final summary
+ * ("Ran N tests across ..."). A process.exit() fired mid-suite skips the
+ * summary AND hands back whatever code the caller passed — historically 0,
+ * which made a truncated shard indistinguishable from a green one. Exit code
+ * alone is therefore not evidence of completion; the summary line is.
+ * (Fault-injection coverage: test/exit-propagation.test.ts.)
+ */
+export function shardRunLooksTruncated(status: number | null, output: string): boolean {
+  if (status !== 0) return false; // already failing — not the silent case
+  return !/Ran \d+ tests? across \d+ files?/.test(output);
+}
+
 function runShard(files: string[], shardNumber: number, totalShards: number): number {
   const header = `[test:free] shard ${shardNumber}/${totalShards} (${files.length} files)`;
   console.log(header);
   const result = spawnSync(process.execPath, buildShardArgs(files), {
     cwd: ROOT,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
     env: process.env,
   });
+  // Preserve the inherit-style UX: replay the shard's output.
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  if (shardRunLooksTruncated(result.status, combined)) {
+    console.error(
+      `${header} exited 0 WITHOUT bun's final summary — the run was truncated ` +
+        '(a process.exit fired mid-suite). Treating as FAILED.',
+    );
+    return 1;
+  }
   if (result.status !== 0) {
     console.error(`${header} failed with exit code ${result.status ?? 1}`);
   }

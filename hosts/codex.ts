@@ -32,6 +32,7 @@ const codex = defineHost({
     { from: '.claude/skills/gstack', to: '.agents/skills/gstack' },
     { from: '.claude/skills/review', to: '.agents/skills/gstack/review' },
     { from: '.claude/skills', to: '.agents/skills' },
+    { from: 'CLAUDE.md', to: 'AGENTS.md' },
   ],
 
   // The cross-model resolvers all shell out to Codex — Codex can't invoke itself.

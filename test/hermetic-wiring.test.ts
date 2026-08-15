@@ -19,7 +19,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { getHermeticDirs, hermeticSkillsConfigDir } from './helpers/hermetic-env';
 
-const ROOT = path.resolve(new URL(import.meta.url).pathname, '..', '..');
+const ROOT = path.resolve(import.meta.path, '..', '..');
 
 const RUNNERS = [
   'test/helpers/session-runner.ts',
