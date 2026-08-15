@@ -499,7 +499,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   // GBrain CLI round-trip — periodic per Voyage embedding cost (~$0.001/run)
   // and external-API-dependency (skips cleanly if VOYAGE_API_KEY unset).
   'gbrain-roundtrip-local': 'periodic',
-  'office-hours-forcing-energy': 'gate',       // V1.1 mode-posture regression gate (Sonnet generator)
+  'office-hours-forcing-energy': 'periodic',   // D2a demotion 2026-08: posture score, periodic-grade signal (sibling precedent at office-hours-tone)
   // 'office-hours-builder-wildness' retiered to periodic in v1.32 contributor
   // wave: this is an LLM-judge creativity score (axis_a ≥4 on a "wildness"
   // posture). Per CLAUDE.md tier-classification rules, non-deterministic
@@ -658,7 +658,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'global-discover': 'gate',
 
   // CSO — gate for security guardrails, periodic for quality
-  'cso-full-audit': 'gate',      // Hardcoded secrets detection
+  'cso-full-audit': 'periodic',  // D2a demotion 2026-08: 250s/$0.57 full audit; cso targeted tests stay gate
   'cso-diff-mode': 'gate',
   'cso-infra-scope': 'periodic',
 
@@ -679,8 +679,8 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   // Design — gate for cheap functional, periodic for Opus/quality
   'design-consultation-core': 'periodic',
   'design-consultation-existing': 'periodic',
-  'design-consultation-research': 'gate',
-  'design-consultation-preview': 'gate',
+  'design-consultation-research': 'periodic',  // D2a demotion 2026-08: the two most expensive gate tests ($0.91/304s)
+  'design-consultation-preview': 'periodic',   // D2a demotion 2026-08 ($0.89/481s)
   'plan-design-review-no-ui-scope': 'gate',
   'design-review-fix': 'periodic',
   'design-shotgun-path': 'gate',
