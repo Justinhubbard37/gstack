@@ -45,6 +45,13 @@ JOURNAL="${MIGRATION_DIR}/v1.27.0.0.journal"
 DONE="${MIGRATION_DIR}/v1.27.0.0.done"
 SKIPPED="${MIGRATION_DIR}/v1.27.0.0.skipped-by-user"
 
+# Real, copy-pasteable re-run command for every remediation message below.
+# There is no runner re-ask: the upgrade runners' version windows never
+# re-select an already-passed migration, so the only honest remediation is
+# a direct invocation of this script ($0-derived so it survives any cwd).
+SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+RERUN_CMD="GSTACK_MIGRATE_ASSUME_YES=1 bash ${SELF_PATH}"
+
 USER_NAME="${USER:-$(whoami 2>/dev/null || echo unknown)}"
 OLD_REPO_NAME="gstack-brain-${USER_NAME}"
 NEW_REPO_NAME="gstack-artifacts-${USER_NAME}"
@@ -61,8 +68,8 @@ mkdir -p "$MIGRATION_DIR"
 # Already done? exit silently.
 [ -f "$DONE" ] && exit 0
 
-# User opted out previously? exit silently. (Re-invoke via
-# `/setup-gbrain --rerun-migration` removes this marker.)
+# User opted out previously? exit silently. (To re-run after an opt-out:
+# rm the skipped-by-user marker, then invoke this script directly.)
 [ -f "$SKIPPED" ] && exit 0
 
 journal_done() {
@@ -119,13 +126,16 @@ EOF
     read -r REPLY || REPLY=""
     case "$REPLY" in
       n|N|no|No|NO)
-        echo "  Skipping migration. Re-run via /setup-gbrain --rerun-migration." >&2
+        echo "  Skipping migration. To re-run later:" >&2
+        echo "    rm ${SKIPPED} && ${RERUN_CMD}" >&2
         touch "$SKIPPED"
         exit 0
         ;;
       skip|skip-for-now|s)
-        echo "  Skipping for now. Will ask again next upgrade." >&2
-        # Don't write SKIPPED — leave both old + new state untouched, ask again next time.
+        echo "  Skipping for now. Re-run manually with: ${RERUN_CMD}" >&2
+        # Don't write SKIPPED — leave both old + new state untouched. The
+        # upgrade runner will NOT re-select this migration, so re-running is
+        # manual via the command above.
         exit 0
         ;;
     esac
@@ -138,9 +148,9 @@ EOF
     if [ "${GSTACK_MIGRATE_ASSUME_YES:-0}" = "1" ]; then
       echo "  (non-interactive: proceeding — GSTACK_MIGRATE_ASSUME_YES=1)" >&2
     else
-      echo "  Non-interactive session: skipping for now (will ask again next upgrade)." >&2
-      echo "  To proceed unattended: GSTACK_MIGRATE_ASSUME_YES=1 ./setup" >&2
-      echo "  To run interactively:  /setup-gbrain --rerun-migration" >&2
+      echo "  Non-interactive session: skipping for now." >&2
+      echo "  Re-run manually with: ${RERUN_CMD}" >&2
+      echo "  To run interactively:  bash ${SELF_PATH}" >&2
       exit 0
     fi
   fi
@@ -357,7 +367,7 @@ done
 if [ -n "$INCOMPLETE" ]; then
   echo "  [v1.27.0.0] migration INCOMPLETE — pending step(s):$INCOMPLETE" >&2
   echo "  Completed steps are journaled and will be skipped on re-run." >&2
-  echo "  Re-run via: /setup-gbrain --rerun-migration" >&2
+  echo "  Re-run manually with: ${RERUN_CMD}" >&2
   exit 1
 fi
 touch "$DONE"
