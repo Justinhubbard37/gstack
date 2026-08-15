@@ -195,7 +195,11 @@ export const FREE_TEST_TIMEOUT_MS = 30_000;
 // full-suite --parallel invocation). A wedged child — a spinning main thread
 // no in-process --timeout timer can interrupt — is SIGKILLed at the group
 // level and reported 'timed-out', distinct from 'failed'.
-export const DEFAULT_WALL_TIMEOUT_MS = 15 * 60_000;
+// ~3.5x the observed full-suite wall (~100-160s). A wedged run should be
+// killed-and-diagnosed (the epilogue prints the in-flight suspects) in
+// minutes, not sat out — 15min of silence was pure diagnosis latency.
+// Override per run with --wall-timeout <secs>.
+export const DEFAULT_WALL_TIMEOUT_MS = 6 * 60_000;
 
 export function normalizeRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
