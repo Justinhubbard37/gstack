@@ -4,12 +4,6 @@ const hermes = defineHost({
   name: 'hermes',
   displayName: 'Hermes',
 
-  generation: {
-    generateMetadata: false,
-    skipSkills: ['codex'],
-    includeSkills: [],
-  },
-
   extraPathRewrites: [
     { from: 'CLAUDE.md', to: 'AGENTS.md' },
   ],

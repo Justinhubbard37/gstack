@@ -1733,13 +1733,6 @@ describe('Codex skill validation', () => {
     expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-codex', 'SKILL.md'))).toBe(false);
   });
 
-  test('/claude skill is external-host-only — no Claude-host variant', () => {
-    // Claude host should not get an outside-voice skill that shells into Claude.
-    expect(fs.existsSync(path.join(ROOT, 'claude', 'SKILL.md'))).toBe(false);
-    // Codex/external hosts should get the generated wrapper.
-    expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-claude', 'SKILL.md'))).toBe(true);
-  });
-
   test('Codex skill names follow gstack-{name} convention', () => {
     const codexDirs = fs.readdirSync(AGENTS_DIR);
     for (const dir of codexDirs) {

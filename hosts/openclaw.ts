@@ -4,21 +4,6 @@ const openclaw = defineHost({
   name: 'openclaw',
   displayName: 'OpenClaw',
 
-  frontmatter: {
-    mode: 'allowlist',
-    keepFields: ['name', 'description'],
-    descriptionLimit: null,
-    extraFields: {
-      version: '0.15.2.0',
-    },
-  },
-
-  generation: {
-    generateMetadata: false,
-    skipSkills: ['codex'],
-    includeSkills: [],  // native ClawHub skills replaced the generated ones
-  },
-
   extraPathRewrites: [
     { from: 'CLAUDE.md', to: 'AGENTS.md' },
   ],
