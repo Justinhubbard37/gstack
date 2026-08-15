@@ -224,6 +224,16 @@ async function cmdSearch(terms: string[]): Promise<void> {
   // loopback providers need no consent, so their path is unchanged.
   const searchRoot = getRoot(provider!.id) ?? resolve(process.cwd());
   const consented = hasConsent(searchRoot, undefined, "read");
+  // Honest pre-flight (mirrors cmdIndex): the adapter enforces the same gate
+  // (assertEgressConsent throws PROVIDER_NOT_CONSENTED before any bytes or
+  // receipt exist), but the CLI names WHY — missing consent vs a deny repo
+  // trust policy — instead of surfacing a generic provider error.
+  if (!provider!.local && !consented) {
+    const recorded = readSelection().consents[searchRoot] === true;
+    fail(recorded
+      ? `${provider!.label} search is blocked by the repo trust policy (deny — the query text is repo-derived content). Change with: gstack-gbrain-repo-policy set <origin-url> read-only (search allowed) or read-write`
+      : `${provider!.label} would send the query text (repo-derived content) off this machine. Run \`gstack-code-intelligence consent ${searchRoot} yes\` first.`);
+  }
   try {
     const hits = await provider!.search(query, { limit: 10, consented });
     if (!hits.length) {

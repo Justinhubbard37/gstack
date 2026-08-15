@@ -92,9 +92,14 @@ export class GbrainProvider implements CodeProvider {
   }
 
   /**
-   * Fail-closed egress receipt for the write ops (register/refresh/add). The
-   * gbrain subprocess owns the wire bytes, so the receipt records destination
-   * + payload class; sha256 is only known for `add` (the exact document body).
+   * Fail-closed egress receipt, written BEFORE every content-bearing send
+   * (register/refresh/add AND search/export). The gbrain subprocess owns the
+   * wire bytes, so the receipt records destination + payload class; sha256 is
+   * known when the exact payload text is (the `add` document body, the
+   * `search` query). The consent field records the ACTUAL consent state from
+   * opts — the tamper-evident ledger must never attest consented=true for a
+   * send where nothing checked consent (every current caller asserts consent
+   * first, so the unchecked branch is defense-in-depth, not a live path).
    */
   #receipt(payloadClass: string, opts: OpOptions, body?: string): void {
     writeReceipt({
@@ -104,7 +109,9 @@ export class GbrainProvider implements CodeProvider {
       payloadClass,
       bytes: body == null ? 0 : Buffer.byteLength(body),
       sha256: body == null ? null : sha256Hex(body),
-      consent: "code-intelligence provider=gbrain + per-repo consented=true",
+      consent: opts.consented === true
+        ? "code-intelligence provider=gbrain + per-repo consented=true"
+        : "code-intelligence provider=gbrain + consent=unchecked (content-bearing ops assert consent before sending)",
     });
   }
 
@@ -143,6 +150,14 @@ export class GbrainProvider implements CodeProvider {
 
   async search(query: string, opts: SearchOptions = {}): Promise<CodeSearchHit[]> {
     if (!query.trim()) return [];
+    // The query text is repo-derived content and DATABASE_URL may point at a
+    // remote DB. Unlike Sourcebot there is no cheap loopback check here — the
+    // URL is resolved inside the gbrain CLI's own config, not by this adapter
+    // — so EVERY send is treated as consent-requiring (fail closed, matching
+    // the contract's OpOptions doc). The throw happens before any bytes (or
+    // any receipt) exist; the receipt lands before the subprocess spawns.
+    assertEgressConsent(this, opts);
+    this.#receipt("code-search-query (sent by gbrain subprocess)", opts, query);
     // `gbrain search` is global and has no `--source` flag; `--limit` is real
     // (verified against gbrain 0.42.x --help).
     const args = ["search", query];
@@ -198,6 +213,11 @@ export class GbrainProvider implements CodeProvider {
 
   async export(_source: SourceRef, opts: OpOptions = {}): Promise<string> {
     assertCapability(this, "export");
+    // The export request federates into the same possibly-remote DB as
+    // search — same fail-closed consent gate + receipt (no loopback
+    // exemption exists for gbrain; see search()).
+    assertEgressConsent(this, opts);
+    this.#receipt("brain-export-request (sent by gbrain subprocess)", opts);
     // `gbrain export` is brain-wide (no per-source flag); returns whatever it prints.
     const r = spawnGbrain(["export"], {
       baseEnv: opts.env,

@@ -13,6 +13,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { execFileSync, spawnSync } from "child_process";
+import { sha256Hex } from "../lib/egress-receipt.js";
 import {
   REQUIRED_CAPABILITIES,
   detectAvailable,
@@ -351,7 +352,7 @@ if [ "$1" = "search" ]; then
 fi
 exit 1
 `);
-    const hits = await new GbrainProvider().search("where", { env: env() });
+    const hits = await new GbrainProvider().search("where", { env: env(), consented: true });
     expect(hits).toEqual([{ ref: "src/x.ts", score: 0.88, snippet: "match", kind: "document" }]);
   });
 
@@ -377,14 +378,14 @@ echo "PGLite failed to initialize its WASM runtime." >&2
 echo "  Original error: Aborted()." >&2
 exit 1
 `);
-    await expect(new GbrainProvider().search("q", { env: env() })).rejects.toMatchObject({
+    await expect(new GbrainProvider().search("q", { env: env(), consented: true })).rejects.toMatchObject({
       code: "PROVIDER_UNAVAILABLE",
     });
   });
 
   test("missing CLI degrades to PROVIDER_UNAVAILABLE", async () => {
     await expect(
-      new GbrainProvider().search("q", { env: { PATH: binDir, HOME: homeDir } }),
+      new GbrainProvider().search("q", { env: { PATH: binDir, HOME: homeDir }, consented: true }),
     ).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
   });
 });
@@ -588,6 +589,157 @@ describe("Sourcebot egress receipts record the TRUE consent state", () => {
     const sb = new SourcebotProvider({ baseUrl: "http://localhost:3000", fetch: okFetch });
     await sb.search("foo", { env: { GSTACK_HOME: home } });
     expect(ledgerLines()).toEqual([]);
+  });
+});
+
+// ── GBrain consent + receipts: gbrain federates into a possibly-remote
+// DATABASE_URL and (unlike Sourcebot) has no cheap loopback check — the URL is
+// resolved inside the gbrain CLI's own config — so EVERY content-bearing send
+// is consent-gated and receipted: search's query text and the export request
+// included, not just register/refresh/add.
+describe("GBrain search/export consent gate + egress receipts", () => {
+  let binDir: string;
+  let home: string;
+  let marker: string;
+  function env(): NodeJS.ProcessEnv {
+    return { PATH: `${binDir}:${process.env.PATH}`, HOME: home, GSTACK_HOME: home };
+  }
+  function ledgerLines(): Array<Record<string, unknown>> {
+    const p = path.join(home, "security", "egress.jsonl");
+    if (!fs.existsSync(p)) return [];
+    return fs
+      .readFileSync(p, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+  beforeEach(() => {
+    binDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gb-egress-bin-"));
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gb-egress-home-"));
+    marker = path.join(home, "gbrain-invocations.log");
+    // Shim logs every invocation, so "refused BEFORE the subprocess runs" is
+    // provable: an unconsented op must leave the marker file nonexistent.
+    fs.writeFileSync(
+      path.join(binDir, "gbrain"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${marker}"
+if [ "$1" = "search" ]; then echo "[0.88] src/x.ts -- match"; exit 0; fi
+if [ "$1" = "export" ]; then echo "exported-brain-body"; exit 0; fi
+exit 1
+`,
+      { mode: 0o755 },
+    );
+  });
+  afterEach(() => {
+    fs.rmSync(binDir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  test("unconsented search is refused BEFORE the subprocess runs (fail-closed) and writes no receipt", async () => {
+    await expect(new GbrainProvider().search("internalSecretFn", { env: env() })).rejects.toMatchObject({
+      code: "PROVIDER_NOT_CONSENTED",
+    });
+    expect(fs.existsSync(marker)).toBe(false); // the query never left the machine
+    expect(ledgerLines()).toEqual([]); // nothing sent → nothing receipted
+  });
+
+  test("consented search sends, and the receipt truthfully records consented=true + the query hash", async () => {
+    const hits = await new GbrainProvider().search("where is auth", { env: env(), consented: true });
+    expect(hits).toEqual([{ ref: "src/x.ts", score: 0.88, snippet: "match", kind: "document" }]);
+    const lines = ledgerLines();
+    expect(lines.length).toBe(1);
+    expect(lines[0].sink).toBe("gbrain");
+    expect(String(lines[0].consent)).toContain("consented=true");
+    expect(String(lines[0].payload_class)).toContain("code-search-query");
+    expect(lines[0].sha256).toBe(sha256Hex("where is auth"));
+    expect(lines[0].bytes).toBe(Buffer.byteLength("where is auth"));
+  });
+
+  test("unconsented export is refused (no loopback exemption exists for gbrain) and writes no receipt", async () => {
+    await expect(new GbrainProvider().export({ id: "code" }, { env: env() })).rejects.toMatchObject({
+      code: "PROVIDER_NOT_CONSENTED",
+    });
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(ledgerLines()).toEqual([]);
+  });
+
+  test("consented export sends and writes a truthful receipt", async () => {
+    const body = await new GbrainProvider().export({ id: "code" }, { env: env(), consented: true });
+    expect(body).toContain("exported-brain-body");
+    const lines = ledgerLines();
+    expect(lines.length).toBe(1);
+    expect(lines[0].sink).toBe("gbrain");
+    expect(String(lines[0].consent)).toContain("consented=true");
+    expect(String(lines[0].payload_class)).toContain("brain-export-request");
+  });
+});
+
+// ── the CLI names WHY a gbrain search is refused (missing consent vs a deny
+// repo trust policy) instead of surfacing a generic provider error, and the
+// refusal happens before any subprocess spawn or receipt.
+describe("CLI search consent gate (gbrain provider, honest refusal message)", () => {
+  const CLI = path.join(import.meta.dir, "..", "bin", "gstack-code-intelligence");
+  const POLICY_BIN = path.join(import.meta.dir, "..", "bin", "gstack-gbrain-repo-policy");
+  const URL = "https://github.com/acme/search-widget.git";
+  let home: string;
+  let shimDir: string;
+  let marker: string;
+  let repo: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-cli-search-"));
+    shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-cli-search-bin-"));
+    marker = path.join(home, "gbrain-invocations.log");
+    fs.writeFileSync(
+      path.join(shimDir, "gbrain"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${marker}"\necho "[0.90] slug -- hit"; exit 0\n`,
+      { mode: 0o755 },
+    );
+    repo = path.join(home, "repo");
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync("git", ["init", "-q", "."], { cwd: repo });
+    execFileSync("git", ["remote", "add", "origin", URL], { cwd: repo });
+    env = { ...process.env, GSTACK_HOME: home, PATH: `${shimDir}:${process.env.PATH}` };
+    setProvider("gbrain", env);
+    setRoot("gbrain", repo, env);
+  });
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  });
+
+  function runSearch() {
+    return spawnSync("bun", [CLI, "search", "internalSecretFn"], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: env as Record<string, string>,
+    });
+  }
+
+  test("no recorded consent → refused with the consent instruction; nothing spawned, nothing receipted", () => {
+    const res = runSearch();
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("consent");
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(path.join(home, "security", "egress.jsonl"))).toBe(false);
+  });
+
+  test("deny repo trust policy → refused with the trust-policy explanation even with recorded consent", () => {
+    setConsent(repo, true, env);
+    execFileSync(POLICY_BIN, ["set", URL, "deny"], { env, encoding: "utf-8" });
+    const res = runSearch();
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("repo trust policy");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  test("recorded consent + no deny → search runs against the provider", () => {
+    setConsent(repo, true, env);
+    const res = runSearch();
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("slug");
+    expect(fs.existsSync(marker)).toBe(true);
   });
 });
 
