@@ -100,12 +100,16 @@ describe('process liveness probe (Windows terminal-agent leak)', () => {
       const pid = spawnTerminalAgent({
         stateFile: path.join(tmpDir, 'state.json'),
         serverPort: 12345,
+        ownerPid: process.pid,
         cwd: tmpDir,
         scriptPath: script,
       });
       expect(pid).toBe(4242);
       expect(captured).not.toBeNull();
       expect(captured.windowsHide).toBe(true);
+      // Owner-PID lifetime tie (#2019): the agent polls this and exits when
+      // its owning browse server dies, so it can't be adopted by PID 1.
+      expect(captured.env.BROWSE_OWNER_PID).toBe(String(process.pid));
       // Detached background daemon — must not inherit a terminal either.
       expect(captured.stdio).toEqual(['ignore', 'ignore', 'ignore']);
     } finally {

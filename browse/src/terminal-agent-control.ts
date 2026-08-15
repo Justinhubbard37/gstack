@@ -48,12 +48,13 @@ export function resolveTerminalAgentScript(searchHints: { metaDir?: string; exec
  *
  * Used by both the CLI cold-start path (cli.ts) and the v1.44 watchdog in
  * server.ts. Centralizing here removes a copy-paste between them and means
- * future spawn-env additions (e.g. BROWSE_OWNER_PID for the generation
- * counter rollout) land in one place.
+ * spawn-env additions (BROWSE_OWNER_PID being the first) land in one place.
  */
 export function spawnTerminalAgent(opts: {
   stateFile: string;
   serverPort: number;
+  /** PID of the browse server that owns this agent. */
+  ownerPid: number;
   cwd?: string;
   /** Optional extra env vars to add to the agent's process env. */
   extraEnv?: Record<string, string>;
@@ -74,6 +75,7 @@ export function spawnTerminalAgent(opts: {
       ...process.env,
       BROWSE_STATE_FILE: opts.stateFile,
       BROWSE_SERVER_PORT: String(opts.serverPort),
+      BROWSE_OWNER_PID: String(opts.ownerPid),
       ...(opts.extraEnv || {}),
     },
     stdio: ['ignore', 'ignore', 'ignore'],
