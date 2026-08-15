@@ -42,6 +42,14 @@ beforeEach(() => {
   const binDir = join(gstackDir, 'bin');
   mkdirSync(binDir);
   symlinkSync(join(import.meta.dir, '..', '..', 'bin', 'gstack-config'), join(binDir, 'gstack-config'));
+  // v1.63+: the script sources bin/gstack-egress-lib.sh unconditionally
+  // (receipted fetch helpers). A real install always has it beside
+  // gstack-config; without this link every test failed at the source line —
+  // masked until the suite-truncation fix because the runner died first.
+  symlinkSync(
+    join(import.meta.dir, '..', '..', 'bin', 'gstack-egress-lib.sh'),
+    join(binDir, 'gstack-egress-lib.sh'),
+  );
 });
 
 afterEach(() => {
