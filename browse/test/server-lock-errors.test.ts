@@ -15,6 +15,10 @@
 
 import { describe, test, expect, afterAll } from 'bun:test';
 import * as fs from 'fs';
+// Default (CJS) export — its properties are mutable in Bun, unlike the frozen
+// `* as fs` namespace, and mutations propagate to cli.ts's own fs import.
+// Used only for the depth-cap livelock simulations below (restored in finally).
+import fsMutable from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { acquireServerLock, ServerLockError } from '../src/cli';
@@ -76,5 +80,44 @@ describe('acquireServerLock (#1084 error honesty)', () => {
     fs.writeFileSync(lockPath, `${process.pid}\n`); // this test process is alive
     expect(acquireServerLock(lockPath)).toBeNull();
     fs.unlinkSync(lockPath);
+  });
+
+  test('EEXIST + garbage lockfile content: NaN pid is treated as stale, lock acquired', () => {
+    const lockPath = path.join(tmpRoot, 'garbage.lock');
+    fs.writeFileSync(lockPath, 'not-a-pid\n'); // parseInt → NaN → falsy → stale path
+    const release = acquireServerLock(lockPath);
+    expect(release).not.toBeNull();
+    // Our pid replaced the garbage — the stale lock was removed and re-acquired.
+    expect(fs.readFileSync(lockPath, 'utf8').trim()).toBe(String(process.pid));
+    release!();
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  // NOTE: the "stale lock that survives unlink" livelock variant is deliberately
+  // not simulated here — the source removes locks through safeUnlink's own fs
+  // binding, which a test-side fs monkey-patch cannot reliably intercept in Bun.
+  // The depth cap itself is exercised by the vanish-race test below.
+
+  test('depth cap: holder that vanishes between open and read returns null after 5 retries', () => {
+    // The EEXIST → readFileSync ENOENT race: the lock exists at openSync but
+    // is gone by the read (holder released in between). Repeated forever
+    // (open/release storm), the same depth cap must bound the retry loop.
+    const lockPath = path.join(tmpRoot, 'vanish.lock');
+    fs.writeFileSync(lockPath, `${process.pid}\n`);
+    const origRead = fsMutable.readFileSync;
+    try {
+      (fsMutable as any).readFileSync = (p: fs.PathLike | number, ...rest: unknown[]) => {
+        if (p === lockPath) {
+          const e: NodeJS.ErrnoException = new Error('mock: lock vanished before read');
+          e.code = 'ENOENT';
+          throw e;
+        }
+        return (origRead as any)(p, ...rest);
+      };
+      expect(acquireServerLock(lockPath)).toBeNull();
+    } finally {
+      (fsMutable as any).readFileSync = origRead;
+      fs.unlinkSync(lockPath);
+    }
   });
 });

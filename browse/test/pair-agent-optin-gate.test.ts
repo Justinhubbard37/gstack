@@ -95,6 +95,22 @@ describe('gate wiring — every tunnel activation point consults the guard', () 
     expect(CLI_SRC).toContain('const ngrokAvailable = pairEnabled && isNgrokAvailable();');
   });
 
+  test('CLI consent-off branch names the real remedy, never ngrok reinstall', () => {
+    // When pair_agent is off but ngrok is installed+authed, telling the user
+    // to `ngrok config add-authtoken` can never fix it — the gate is consent,
+    // not tooling. The consent branch must carry the same remedy wording as
+    // the /tunnel/start 403 body, and must not mention ngrok setup.
+    const branchAt = CLI_SRC.indexOf('} else if (!pairEnabled) {');
+    expect(branchAt).toBeGreaterThan(-1);
+    const branchEnd = CLI_SRC.indexOf('} else {', branchAt);
+    expect(branchEnd).toBeGreaterThan(branchAt);
+    const branch = CLI_SRC.slice(branchAt, branchEnd);
+    expect(branch).toContain('gstack-config set pair_agent on');
+    expect(branch).toContain('/pair-agent');
+    expect(branch).not.toContain('ngrok config add-authtoken');
+    expect(branch).not.toContain('install ngrok');
+  });
+
   test('/tunnel/start refuses with the enable hint when disabled', () => {
     const startIdx = SERVER_SRC.indexOf("url.pathname === '/tunnel/start'");
     const block = SERVER_SRC.slice(startIdx, startIdx + 1200);

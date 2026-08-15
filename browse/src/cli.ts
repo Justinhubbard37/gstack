@@ -961,6 +961,14 @@ async function handlePairAgent(state: ServerState, args: string[]): Promise<void
         console.warn('[browse] Using localhost (same-machine only).\n');
         serverUrl = pairData.server_url;
       }
+    } else if (!pairEnabled) {
+      // Consent gate, not a tooling gap: when pair_agent is off, ngrok
+      // setup instructions can never fix it. Name the real remedy, with
+      // the same wording as the /tunnel/start 403 body in server.ts.
+      console.warn('[browse] No tunnel active: pair-agent is off (tunnel exposes this browser beyond the machine).');
+      console.warn('[browse] Instructions will use localhost (same-machine only).');
+      console.warn('[browse] For remote agents: enable once with `gstack-config set pair_agent on` — or run /pair-agent, which asks for consent and sets it.\n');
+      serverUrl = pairData.server_url;
     } else {
       console.warn('[browse] No tunnel active and ngrok is not installed/configured.');
       console.warn('[browse] Instructions will use localhost (same-machine only).');
