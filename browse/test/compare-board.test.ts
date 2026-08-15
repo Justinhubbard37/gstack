@@ -49,6 +49,11 @@ function createTestPng(filePath: string): void {
 }
 
 beforeAll(async () => {
+  // Skipped describes do NOT skip file-level hooks: this setup (Bun.serve +
+  // BrowserManager launch) still ran with all 16 tests skipped, and under
+  // parallel load it wedges — caught by the runner's in-flight-at-kill
+  // epilogue as the suite's intermittent staller. Gate the hooks too.
+  if (!COMPARE_BOARD_ENABLED) return;
   // Create test PNG files
   tmpDir = '/tmp/compare-board-test-' + Date.now();
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -80,6 +85,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (!COMPARE_BOARD_ENABLED) return;
   try { server.stop(); } catch {}
   fs.rmSync(tmpDir, { recursive: true, force: true });
   // Close only this file's own browser — never process.exit(): bun test runs
