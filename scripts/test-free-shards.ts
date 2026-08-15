@@ -230,6 +230,19 @@ export const WORKER_HOSTILE: Record<string, string> = {
  * readers never race a mutator. (CI's --shards matrix is unaffected: each CI
  * shard has its own checkout.) Each mutator restores default state itself.
  */
+/**
+ * TREE-SERIAL files: run in ONE serial shard AFTER the parallel shards.
+ * Two kinds live here:
+ *   - MUTATORS: tests that regenerate shared repo artifacts in place.
+ *   - RATCHET READERS: tests that MEASURE the shared tree (parity caps,
+ *     size budgets). Measuring while any concurrent test regenerates is
+ *     undefined behavior — two runs failed with byte-identical inflated
+ *     skeletons while the tree was clean before and after, so rather than
+ *     hunt every present and future mutator, the measurers get a quiet
+ *     tree by construction.
+ * Serial order within the shard: readers are appended after mutators by the
+ * assignment below, and every mutator restores default state itself.
+ */
 export const TREE_MUTATING: Record<string, string> = {
   'test/catalog-mode-full.test.ts': 'regenerates ALL SKILL.md in full-catalog mode, then restores',
   'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
@@ -238,6 +251,10 @@ export const TREE_MUTATING: Record<string, string> = {
   'test/skill-validation.test.ts': 'regenerates .agents/ (codex host) artifacts in place (3 sites)',
   'test/gbrain-detection-override.test.ts':
     'regenerates SKILL.md in place with --respect-detection (gbrain variant), then git-restores — readers see inflated skeletons mid-window',
+  // Ratchet readers (measure the tree; need it quiet):
+  'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
+  'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',
+  'test/carve-guard-checks.test.ts': 'RATCHET READER — carve-guard skeleton checks measure the live tree',
 };
 
 export function normalizeRelativePath(filePath: string): string {
