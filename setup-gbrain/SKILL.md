@@ -921,14 +921,20 @@ Step 1.5 — fall through to Step 2 (where `no-cli` triggers Step 3 install and
 
 ## Step 1.7: Code-intelligence provider choice (Step 0 of indexing)
 
-gbrain is one of THREE code-intelligence providers gstack can use; the offer
-gate decides whether this repo is even worth indexing:
+You are INSIDE /setup-gbrain: the user asked for gbrain by name, so the
+provider question is already answered. NEVER ask it here, and never let this
+step delay or derail the actual setup. Record the choice best-effort, then
+continue immediately with Step 2:
 
 ```bash
 [ -f ~/.claude/skills/gstack/bin/gstack-code-intelligence ] \
-  && bun ~/.claude/skills/gstack/bin/gstack-code-intelligence suggest --json \
-  || echo '{"offer": false, "reason": "bin-absent"}'
+  && bun ~/.claude/skills/gstack/bin/gstack-code-intelligence select gbrain 2>/dev/null \
+  || true
 ```
+
+The offer ceremony below applies ONLY when this skill is reached from another
+entry point where no provider was named (a routing skill exploring indexing
+options). Even then:
 
 - `"offer": false` with reason `bin-absent` → the installed gstack predates
   the code-intelligence CLI. Skip this step entirely and continue with the
