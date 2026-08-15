@@ -101,6 +101,32 @@ const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
   },
 ];
 
+// Force-include overrides: files a WINDOWS_FRAGILE_PATTERNS regex excludes for
+// a reason that does not actually apply to them. Each entry documents WHY the
+// pattern hit is a false positive — the point of these files is Windows
+// coverage, so auto-excluding them defeats the regression tests they carry.
+const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
+  {
+    file: 'browse/test/file-permissions.test.ts',
+    // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
+    // is platform-guarded (win32 returns early / takes the icacls branch).
+    // This file carries the win32-only icacls-by-SID regression tests, which
+    // can ONLY execute on windows-latest — excluding it here means the
+    // machine-account ACL lockout regression is never exercised on the one
+    // platform it bricks.
+    reason: 'mode-bitmask hits are POSIX-branch only; win32-only ACL regression tests must run on windows-latest',
+  },
+  {
+    file: 'browse/test/terminal-agent-owner-watchdog.test.ts',
+    // Trips the spawn(['bun','run',...]) pattern, whose reason is the
+    // Playwright-bound browse server. This test spawns terminal-agent.ts,
+    // which imports only fs/path/crypto + local helpers (no Playwright, no
+    // PTY at module scope) and boots under Bun on Windows — the owner-PID
+    // orphan leak it pins was reported on Windows (#2019).
+    reason: 'spawns terminal-agent (no Playwright), not the browse server; owner-orphan leak is a Windows defect',
+  },
+];
+
 export const DEFAULT_SHARD_COUNT = 20;
 export const FREE_TEST_TIMEOUT_MS = 10_000;
 
@@ -170,10 +196,15 @@ export function curateWindowsSafe(files: string[], rootDir = ROOT): CurationResu
   const safe: string[] = [];
   const excluded: Array<{ file: string; reason: string }> = [];
   const knownBad = new Map(KNOWN_WINDOWS_INCOMPATIBLE.map((e) => [e.file, e.reason]));
+  const knownSafe = new Set(KNOWN_WINDOWS_SAFE.map((e) => e.file));
   for (const relativePath of files) {
     const knownReason = knownBad.get(relativePath);
     if (knownReason) {
       excluded.push({ file: relativePath, reason: knownReason });
+      continue;
+    }
+    if (knownSafe.has(relativePath)) {
+      safe.push(relativePath);
       continue;
     }
     const absolute = path.join(rootDir, relativePath);

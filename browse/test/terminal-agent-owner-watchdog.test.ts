@@ -41,7 +41,13 @@ describe('terminal-agent owner lifecycle', () => {
     const stateFile = path.join(stateDir, 'browse.json');
     fs.writeFileSync(stateFile, JSON.stringify({ token: 'test-token' }));
 
-    const owner = Bun.spawn(['sleep', '30'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    // process.execPath (the running bun) instead of `sleep`: coreutils are
+    // not guaranteed on a bare windows-latest runner, and this test is on the
+    // Windows CI curated list — the owner-orphan leak it pins is a Windows bug.
+    const owner = Bun.spawn(
+      [process.execPath, '-e', 'await Bun.sleep(30000)'],
+      { stdio: ['ignore', 'ignore', 'ignore'] },
+    );
     spawned.push(owner);
     const agent = Bun.spawn(['bun', 'run', AGENT_SCRIPT], {
       env: {
