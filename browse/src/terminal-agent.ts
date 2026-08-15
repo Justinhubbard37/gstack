@@ -3,8 +3,8 @@
  * sidebar. Translates the phoenix gbrowser PTY (cmd/gbd/terminal.go) into
  * Bun, with a few changes informed by codex's outside-voice review:
  *
- *  - Lives in a separate non-compiled bun process from sidebar-agent.ts so
- *    a bug in WS framing or PTY cleanup can't take down the chat path.
+ *  - Lives in a separate non-compiled bun process from the browse daemon so
+ *    a bug in WS framing or PTY cleanup can't take down the command surface.
  *  - Binds 127.0.0.1 only — never on the dual-listener tunnel surface.
  *  - Origin validation on the WS upgrade is REQUIRED (not defense-in-depth)
  *    because a localhost shell WS is a real cross-site WebSocket-hijacking

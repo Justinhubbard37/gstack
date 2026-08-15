@@ -496,10 +496,6 @@ function isRootRequest(req: Request): boolean {
   return token !== null && isRootToken(token);
 }
 
-// Sidebar model router was here (sonnet vs opus by message intent). Ripped
-// alongside the chat queue; the interactive PTY just runs whatever model
-// the user's `claude` CLI is configured with.
-
 // ─── Help text (auto-generated from COMMAND_DESCRIPTIONS) ────────
 function generateHelpText(): string {
   // Group commands by category
@@ -572,15 +568,6 @@ function tmpStatePath(): string {
 
 
 // ─── Sidebar agent / chat state ripped ──────────────────────────────
-// ChatEntry, SidebarSession, TabAgentState interfaces; chatBuffer,
-// chatBuffers, sidebarSession, agentProcess, agentStatus, agentStartTime,
-// agentTabId, messageQueue, currentMessage, tabAgents; addChatEntry,
-// loadSession, createSession, persistSession, processAgentEvent,
-// killAgent, listSessions, getTabAgent, getTabAgentStatus, and the
-// agentHealthInterval all lived here. Replaced by the live PTY in
-// terminal-agent.ts; chat queue + per-tab agent multiplexing are no
-// longer needed.
-
 let lastConsoleFlushed = 0;
 let lastNetworkFlushed = 0;
 let lastDialogFlushed = 0;
@@ -779,7 +766,7 @@ const browserManager = new BrowserManager();
 // short-circuits idle-shutdown.
 let activeBrowserManager: BrowserManager = browserManager;
 // When the user closes the headed browser window, run full cleanup
-// (kill sidebar-agent, save session, remove profile locks, delete state file)
+// (kill terminal agent, save session, remove profile locks, delete state file)
 // before exiting. Exit code 0 means user-initiated clean quit (Cmd+Q on
 // macOS) so process supervisors like gbrowser's gbd skip the restart loop;
 // 2 means a real crash that should respawn. The fallback `?? 2` preserves
@@ -1031,7 +1018,7 @@ async function handleCommandInternalImpl(
     if (!opts?.skipRateCheck && tokenInfo.token) recordCommand(tokenInfo.token);
   }
 
-  // Pin to a specific tab if requested (set by BROWSE_TAB env var in sidebar agents).
+  // Pin to a specific tab if requested (set by BROWSE_TAB env var, e.g. per-tab agent contexts).
   // This prevents parallel agents from interfering with each other's tab context.
   // Safe because Bun's event loop is single-threaded — no concurrent handleCommand.
   let savedTabId: number | null = null;
@@ -1833,9 +1820,7 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           tabs: browserManager.getTabCount(),
           // Security module status — drives the shield icon in the sidepanel.
           // Returns {status: 'protected'|'degraded'|'inactive', layers: {...}}.
-          // The chat-path classifier no longer feeds this since
-          // sidebar-agent.ts was ripped; only the page-content side
-          // (canary, content-security) keeps reporting in.
+          // Fed by the page-content side (testsavant sidecar, canary state).
           security: getSecurityStatus(),
           // Terminal-agent discovery. ONLY a port number — never a token.
           // Tokens flow via the /pty-session HttpOnly cookie path. See
@@ -2559,15 +2544,6 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
       }
 
 
-      // ─── Sidebar chat endpoints ripped ──────────────────────────────
-      // /sidebar-tabs, /sidebar-tabs/switch, /sidebar-chat[/clear],
-      // /sidebar-command, /sidebar-agent/{event,kill,stop},
-      // /sidebar-queue/dismiss, /sidebar-session{,/new,/list} all lived
-      // here. They drove the one-shot claude -p chat queue. Replaced by
-      // the interactive PTY in terminal-agent.ts; the queue + browser-tab
-      // multiplexing are no longer needed.
-
-
       // ─── Batch endpoint — N commands, 1 HTTP round-trip ─────────────
       // Accepts both root AND scoped tokens (same as /command).
       // Executes commands sequentially through the full security pipeline.
@@ -3109,11 +3085,6 @@ export async function start() {
   console.log(`[browse] Server running on http://127.0.0.1:${port} (PID: ${process.pid})`);
   console.log(`[browse] State file: ${config.stateFile}`);
   console.log(`[browse] Idle timeout: ${IDLE_TIMEOUT_MS / 1000}s`);
-
-  // initSidebarSession() ripped alongside the chat queue (it loaded
-  // chat.jsonl into memory and started the agent-health watchdog —
-  // both functions are gone). The Terminal pane manages its own state
-  // directly via terminal-agent.ts.
 
   // ─── Tunnel startup (optional) ────────────────────────────────
   // Start ngrok tunnel if BROWSE_TUNNEL=1 is set.  Uses the dual-listener

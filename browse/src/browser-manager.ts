@@ -244,7 +244,7 @@ export class BrowserManager {
 
   // Called when the headed browser disconnects without intentional teardown
   // (user closed the window). Wired up by server.ts to run full cleanup
-  // (sidebar-agent, state file, profile locks) before exiting with code 2.
+  // (terminal agent, state file, profile locks) before exiting with code 2.
   // Returns void or a Promise; rejections are caught and fall back to exit(2).
   // `exitCode` is the resolved process exit code from the disconnect cause:
   // 0 on clean user-initiated quit (e.g., Cmd+Q on headed Chromium), 2 on
@@ -680,7 +680,7 @@ export class BrowserManager {
     // restart loop. Crash → process.exit(2) preserves the legacy headed
     // semantics that's distinct from launch()'s code 1.
     // Always calls onDisconnect() first to trigger full shutdown (kill
-    // sidebar-agent, save session, clean profile locks + state file) so
+    // terminal agent, save session, clean profile locks + state file) so
     // crashes don't strand resources either.
     if (this.browser) {
       this.browser.on('disconnected', () => {
