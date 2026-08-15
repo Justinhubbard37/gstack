@@ -249,14 +249,31 @@ if [ "$INSTALL_CODEX" -eq 1 ]; then
   migrate_direct_codex_install "$SOURCE_GSTACK_DIR" "$CODEX_GSTACK"
 fi
 
+# Kill an entire process tree rooted at $1, leaves first. Killing only the
+# backgrounded subshell orphans the wedged node/bun -> Chromium probe
+# processes underneath it — re-creating the #2136 stuck-process pile-up and
+# potentially leaving Playwright cache locks held. macOS ships no setsid
+# binary, so a portable group-kill isn't available; walk `pgrep -P` children
+# depth-first instead (pgrep exists on macOS and Linux). Falls back to a
+# plain kill of the root pid when pgrep is unavailable.
+_kill_tree() {
+  local pid="$1" child
+  if command -v pgrep >/dev/null 2>&1; then
+    for child in $(pgrep -P "$pid" 2>/dev/null); do
+      _kill_tree "$child"
+    done
+  fi
+  kill -9 "$pid" 2>/dev/null || true
+}
+
 # Deadline-bounded wait for a background probe. macOS ships no GNU timeout;
-# poll the PID and SIGKILL past the deadline. Returns the probe's exit code,
-# or 124 on timeout.
+# poll the PID and SIGKILL the whole probe tree past the deadline. Returns
+# the probe's exit code, or 124 on timeout.
 _wait_with_deadline() {
   local pid="$1" deadline_s="$2" waited=0
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$waited" -ge "$deadline_s" ]; then
-      kill -9 "$pid" 2>/dev/null || true
+      _kill_tree "$pid"
       wait "$pid" 2>/dev/null || true
       return 124
     fi
@@ -505,13 +522,18 @@ if ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
   _PW_LOCK="${TMPDIR:-/tmp}/gstack-playwright-install.lock"
   if mkdir "$_PW_LOCK" 2>/dev/null; then
-    trap 'rmdir "$_PW_LOCK" 2>/dev/null || true' EXIT
+    # Chain the earlier cleanup_copied_bun EXIT trap: `trap ... EXIT` REPLACES
+    # the previous handler, so the lock trap must run both or any run taking
+    # this path leaves .tmp-bun-bin behind.
+    trap 'rmdir "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun' EXIT
     (
       cd "$SOURCE_GSTACK_DIR"
       bunx playwright install chromium
     )
     rmdir "$_PW_LOCK" 2>/dev/null || true
-    trap - EXIT
+    # Restore the original handler (never `trap - EXIT`, which would clear
+    # cleanup_copied_bun for the rest of the script).
+    trap cleanup_copied_bun EXIT
   else
     echo "  another gstack setup is already installing Chromium (lock: $_PW_LOCK)." >&2
     echo "  Wait for it to finish, then re-run ./setup. If no other setup is running," >&2
