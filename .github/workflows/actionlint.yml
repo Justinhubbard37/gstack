@@ -18,4 +18,6 @@ jobs:
     runs-on: ubicloud-standard-8
     steps:
       - uses: actions/checkout@v4
-      - uses: rhysd/actionlint@v1.7.11
+      # Pull the prebuilt image instead of rhysd/actionlint@v1.7.11 (a Docker
+      # action that rebuilt from source every run: 16s of a 44s job for 1s of lint).
+      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.11 -color
