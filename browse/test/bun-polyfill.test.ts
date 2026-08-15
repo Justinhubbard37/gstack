@@ -1,5 +1,10 @@
-import { describe, test, expect, afterAll } from 'bun:test';
+import { describe, test, expect, afterAll, setDefaultTimeout } from 'bun:test';
 import * as path from 'path';
+
+// Every test here spawnSync's a `node` child; Windows CI cold-start (AV scan,
+// first-touch of node.exe) alone can blow bun's 5s default — observed 5,007ms
+// on a 50ms sleep test. Subprocess budget, not assertion looseness.
+setDefaultTimeout(20_000);
 
 // Load the polyfill into a fresh object (don't clobber globalThis.Bun)
 const polyfillPath = path.resolve(import.meta.dir, '../src/bun-polyfill.cjs');
