@@ -90,8 +90,11 @@ export interface TierClassification {
  *
  * Exclusion is the dangerous direction (a wrongly-skipped gate test is exactly
  * the invisible-non-execution bug this runner exists to kill), so the only
- * exclusion evidence accepted is an explicit whole-file `EVALS_TIER === '<other>'`
- * guard. Inferring a file's tier from which E2E_TIERS names appear in its source
+ * exclusion evidence accepted is an explicit whole-file tier guard: either the
+ * raw `EVALS_TIER === '<other>'` predicate or the consolidated helper form
+ * `describeE2ETier('<other>')` / `e2eTierEnabled('<other>')` from
+ * test/helpers/e2e-gate.ts (same semantics, read from env at module load).
+ * Inferring a file's tier from which E2E_TIERS names appear in its source
  * is guesswork that silently drops real work: short keys like 'retro' match
  * unrelated strings, and LLM-judge tests are keyed off LLM_JUDGE_TOUCHFILES and
  * carry no E2E_TIERS name at all. Everything without an explicit other-tier
@@ -100,10 +103,11 @@ export interface TierClassification {
 export function classifyPaidTestFile(source: string, tier: PaidTier): TierClassification {
   const other: PaidTier = tier === 'gate' ? 'periodic' : 'gate';
   const declares = (candidate: PaidTier) =>
-    new RegExp(`EVALS_TIER\\s*===\\s*['"\`]${candidate}['"\`]`).test(source);
+    new RegExp(`EVALS_TIER\\s*===\\s*['"\`]${candidate}['"\`]`).test(source) ||
+    new RegExp(`\\b(?:describeE2ETier|e2eTierEnabled)\\(\\s*['"\`]${candidate}['"\`]`).test(source);
 
-  if (declares(tier)) return { included: true, reason: `declares EVALS_TIER === '${tier}'` };
-  if (declares(other)) return { included: false, reason: `declares EVALS_TIER === '${other}' only` };
+  if (declares(tier)) return { included: true, reason: `declares tier '${tier}'` };
+  if (declares(other)) return { included: false, reason: `declares tier '${other}' only` };
   return { included: true, reason: 'no whole-file tier guard — runtime E2E_TIERS filter decides' };
 }
 
