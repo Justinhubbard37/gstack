@@ -17,13 +17,16 @@
  *   distill — free-text distillation (cheap, structured): haiku (pinned)
  */
 
-const DEFAULTS: Record<string, string> = {
+// `as const satisfies` keeps EvalModelKind the literal union
+// 'capture' | 'warmup' | 'distill' — a `Record<string, string>` annotation
+// would widen it to string and let any typo through the type gate.
+const DEFAULTS = {
   capture: "claude-opus-4-7",
   warmup: "claude-haiku-4-5",
   distill: "claude-haiku-4-5-20251001",
-};
+} as const satisfies Record<string, string>;
 
-export type EvalModelKind = keyof typeof DEFAULTS & string;
+export type EvalModelKind = keyof typeof DEFAULTS;
 
 export function resolveEvalModel(
   kind: EvalModelKind,
