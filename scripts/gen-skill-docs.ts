@@ -9,8 +9,6 @@
  * Used by skill:check and CI freshness checks.
  */
 
-import { COMMAND_DESCRIPTIONS } from '../browse/src/commands';
-import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
 import { discoverTemplates, discoverSectionTemplates } from './discover-skills';
 import { writeLlmsTxt } from './gen-llms-txt';
 import * as fs from 'fs';
@@ -18,8 +16,6 @@ import * as path from 'path';
 import type { Host, TemplateContext } from './resolvers/types';
 import { HOST_PATHS, unwrapResolver } from './resolvers/types';
 import { RESOLVERS } from './resolvers/index';
-import { externalSkillName, extractHookSafetyProse as _extractHookSafetyProse, extractNameAndDescription as _extractNameAndDescription, condenseOpenAIShortDescription as _condenseOpenAIShortDescription, generateOpenAIYaml as _generateOpenAIYaml } from './resolvers/codex-helpers';
-import { generatePlanCompletionAuditShip, generatePlanCompletionAuditReview, generatePlanVerificationExec } from './resolvers/review';
 import { ALL_HOST_CONFIGS, ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
 import type { HostConfig } from './host-config';
 
@@ -184,7 +180,8 @@ function rewriteSectionBase(content: string): string {
 
 // ─── External Host Helpers ───────────────────────────────────
 
-// Re-export local copy for use in this file (matches codex-helpers.ts)
+// Canonical implementation (the codex-helpers.ts shadow copy was deleted —
+// it was imported, immediately shadowed by this declaration, and stale)
 // Accepts optional frontmatter name to support directory/invocation name divergence
 function externalSkillName(skillDir: string, frontmatterName?: string): string {
   // Root skill (skillDir === '' or '.') always maps to 'gstack' regardless of frontmatter
