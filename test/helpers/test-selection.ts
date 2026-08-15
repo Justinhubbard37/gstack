@@ -3,8 +3,10 @@
  *
  * Each test declares which source files it depends on ("touchfiles") in
  * ./touchfiles-data.ts (literals only — see the note there). The test runner
- * checks `git diff` and only runs tests whose dependencies were modified.
- * Override with EVALS_ALL=1 to run everything.
+ * computes changed files as the union of committed diff, staged + unstaged
+ * diff, and untracked files — uncommitted work selects tests too — and only
+ * runs tests whose dependencies were modified. Override with EVALS_ALL=1 to
+ * run everything.
  *
  * When touchfiles-data.ts itself changed, selection uses MAP-DIFF instead of
  * a global run-all: the old version of the data file is loaded from git and
@@ -71,14 +73,63 @@ export function detectBaseBranch(cwd: string): string | null {
 }
 
 /**
- * Get list of files changed between base branch and HEAD.
+ * Run a git command and return stdout. FAIL-CLOSED: any failure (spawn
+ * error, non-zero exit) throws — a broken git environment must abort the
+ * suite loudly instead of silently degrading into a full (paid) run.
  */
-export function getChangedFiles(baseBranch: string, cwd: string): string[] {
-  const result = spawnSync('git', ['diff', '--name-only', `${baseBranch}...HEAD`], {
-    cwd, stdio: 'pipe', timeout: 5000,
+function runGitOrThrow(args: string[], cwd: string, spawnImpl: typeof spawnSync): string {
+  const result = spawnImpl('git', args, {
+    cwd, stdio: 'pipe', timeout: 10000, maxBuffer: 8 * 1024 * 1024,
   });
-  if (result.status !== 0) return [];
-  return result.stdout.toString().trim().split('\n').filter(Boolean);
+  if (result.error || result.status !== 0) {
+    const stderr = result.stderr?.toString().trim() || result.error?.message || 'unknown error';
+    throw new Error(
+      `getChangedFiles: \`git ${args.join(' ')}\` failed in ${cwd} `
+      + `(exit ${result.status ?? 'spawn-error'}): ${stderr}\n`
+      + 'Diff-based test selection cannot proceed. Fix the git environment, '
+      + 'or set EVALS_ALL=1 to deliberately run the full suite.',
+    );
+  }
+  return result.stdout.toString();
+}
+
+/**
+ * Get the list of files changed relative to the base branch, INCLUDING
+ * uncommitted work. Union of three sources, deduped:
+ *   1. committed:  `git diff --name-only <base>...HEAD`
+ *   2. staged + unstaged: `git diff --name-only HEAD`
+ *   3. untracked:  `git status --porcelain --untracked-files=all` ('?? ' lines)
+ *
+ * Without 2 and 3, an agent that edits files and runs evals BEFORE
+ * committing gets an empty diff → run-all → the full paid suite every time.
+ *
+ * An empty UNION still means "no changes" and callers keep their intentional
+ * run-all semantics for it (main-branch / periodic full runs depend on that).
+ *
+ * Git failures THROW (see runGitOrThrow) instead of returning [] — the old
+ * behavior made a broken git environment indistinguishable from a clean tree.
+ *
+ * `spawnImpl` is injectable for tests.
+ */
+export function getChangedFiles(
+  baseBranch: string,
+  cwd: string,
+  spawnImpl: typeof spawnSync = spawnSync,
+): string[] {
+  const committed = runGitOrThrow(['diff', '--name-only', `${baseBranch}...HEAD`], cwd, spawnImpl)
+    .trim().split('\n').filter(Boolean);
+  const uncommitted = runGitOrThrow(['diff', '--name-only', 'HEAD'], cwd, spawnImpl)
+    .trim().split('\n').filter(Boolean);
+  const untracked = runGitOrThrow(['status', '--porcelain', '--untracked-files=all'], cwd, spawnImpl)
+    .split('\n')
+    .filter(line => line.startsWith('?? '))
+    .map(line => {
+      let p = line.slice(3);
+      // git quotes paths containing special characters
+      if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+      return p;
+    });
+  return [...new Set([...committed, ...uncommitted, ...untracked])];
 }
 
 // --- Touchfile map diffing ---
