@@ -144,10 +144,16 @@ Write a summary to ${dir}/ship-preflight.md including:
     }
 
     // Verify no destructive actions — no push, no PR creation
-    const destructiveTools = result.toolCalls.filter(tc =>
-      tc.tool === 'Bash' && typeof tc.input === 'string' &&
-      (tc.input.includes('git push') || tc.input.includes('gh pr create'))
-    );
+    // session-runner records tool inputs as OBJECTS ({command} for Bash) —
+    // a typeof-string filter here matches nothing and the assertion can
+    // never fail, even against a real `git push`.
+    const destructiveTools = result.toolCalls.filter(tc => {
+      if (tc.tool !== 'Bash') return false;
+      const command = typeof tc.input === 'string'
+        ? tc.input
+        : ((tc.input as { command?: string })?.command ?? JSON.stringify(tc.input ?? {}));
+      return command.includes('git push') || command.includes('gh pr create');
+    });
     expect(destructiveTools).toHaveLength(0);
   }, 180_000);
 });
