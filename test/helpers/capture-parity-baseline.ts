@@ -57,7 +57,7 @@ export interface CaptureOptions {
 }
 
 /** Extract the frontmatter description from a SKILL.md file. Empty string if none. */
-function extractDescription(content: string): string {
+export function extractDescription(content: string): string {
   if (!content.startsWith('---\n')) return '';
   const fmEnd = content.indexOf('\n---', 4);
   if (fmEnd === -1) return '';

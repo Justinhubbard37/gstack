@@ -32,7 +32,7 @@ import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { captureBaseline, type ParityBaseline } from './helpers/capture-parity-baseline';
+import { captureBaseline, extractDescription, type ParityBaseline } from './helpers/capture-parity-baseline';
 import { logBudgetOverride } from './helpers/budget-override';
 import { CARVED_SKILLS } from './helpers/carve-guards';
 
@@ -212,28 +212,31 @@ describe('SKILL.md size budget regression (gate, free)', () => {
   });
 
   test('catalog token estimate stays compressed (v1.45 target ≤ 7000)', () => {
-    const current = captureBaseline({ repoRoot: REPO_ROOT });
-    // Count only git-TRACKED skills. Under the parallel free-suite runner,
-    // concurrent test files can leave transient skill-shaped dirs in the live
-    // repo mid-run (observed: this estimate exactly DOUBLED, 8356 vs 4177,
-    // while a solo run passed). A repo-budget ratchet should measure the
-    // catalog that ships, not another worker's scratch state.
-    const tracked = new Set(
-      execSync('git ls-files -- "*/SKILL.md"', { cwd: REPO_ROOT, encoding: 'utf-8' })
-        .split('\n')
-        .filter(Boolean)
-        .filter((p) => p.split('/').length === 2)
-        .map((p) => p.split('/')[0]),
-    );
-    const catalogTokens = Math.round(
-      Object.values(current.skills)
-        .filter((s) => tracked.has(s.skill))
-        .reduce((sum, s) => sum + s.descriptionLen, 0) / 4,
-    );
+    // Measure COMMITTED content (git show HEAD:), not the live tree. Under
+    // the parallel free-suite runner, sibling workers regenerate real
+    // SKILL.md files mid-run (gen-skill-docs regen tests), so the live-tree
+    // estimate was a moving target: 4177 solo, 8356 and 8041 in two parallel
+    // runs. A repo-budget ratchet measures the catalog that ships; CI always
+    // checks the PR's committed tree anyway.
+    const trackedPaths = execSync('git ls-files -- "*/SKILL.md"', { cwd: REPO_ROOT, encoding: 'utf-8' })
+      .split('\n')
+      .filter(Boolean)
+      .filter((p) => p.split('/').length === 2);
+    let descriptionBytes = 0;
+    for (const rel of trackedPaths) {
+      const committed = execSync(`git show HEAD:${JSON.stringify(rel)}`, {
+        cwd: REPO_ROOT,
+        encoding: 'utf-8',
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      descriptionBytes += Buffer.byteLength(extractDescription(committed), 'utf-8');
+    }
+    const catalogTokens = Math.round(descriptionBytes / 4);
+    const trackedCount = trackedPaths.length;
     const v145Target = 7000;
     if (catalogTokens <= v145Target) {
       // eslint-disable-next-line no-console
-      console.log(`[skill-size-budget] catalog OK: ~${catalogTokens} tokens (target ≤${v145Target}, ${tracked.size} tracked skills)`);
+      console.log(`[skill-size-budget] catalog OK: ~${catalogTokens} tokens (target ≤${v145Target}, ${trackedCount} tracked skills)`);
       return;
     }
     const overrideReason = process.env.GSTACK_SIZE_BUDGET_OVERRIDE_REASON?.trim();
