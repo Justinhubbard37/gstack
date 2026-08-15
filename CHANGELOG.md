@@ -1,5 +1,163 @@
 # Changelog
 
+## [1.64.0.0] - 2026-08-14
+
+**Ninety fixes in one wave. Every guard that said it was protecting you now actually does.**
+
+This release is a fix wave built from a full audit of the tracker: every open
+PR and every open issue, verified against main before anything landed. The
+pattern that kept showing up was guards that failed open. The freeze and
+careful hooks emitted a payload shape Claude Code ignores, so deny meant
+allow. The redact pre-push hook had six separate paths that let a credential
+through. The test suite exited green after running 4% of itself. All of that
+is fixed, with a regression test or a static tripwire pinning each one shut.
+
+The wave absorbs the best community fix for each defect, credited by name:
+82 contributors are named in this release, several of whom independently
+fixed the same bug within days of each other. That duplication is the
+tracker telling us how many people hit the same wall.
+
+### The numbers that matter
+
+Source: `git log 1.63.0.0..HEAD` on this branch, plus the audit workflow
+records referenced in the PR.
+
+| Metric | Before | After |
+|---|---|---|
+| Free-suite files that actually run | ~16 of 434 (truncated, exit 0) | all 434, honest exit code |
+| Guard hooks that can block (freeze/careful/team-init) | 0 of 3 | 3 of 3, fail closed |
+| Native AskUserQuestion answers recorded | 14% | 100%, suffix-aware |
+| /codex runs per macOS session before breaking | 1 | unlimited (mktemp fixed) |
+| Issues closed by this release | — | 52 |
+| Community PRs absorbed with credit | — | ~50 |
+
+The suite number is the one to sit with. A delayed process.exit(0) in one
+test file killed the whole run mid-flight with a green exit code — so every
+other guarantee in CI was resting on a suite that could not fail. It can
+fail now, a fault-injection test proves the failure propagates, and the
+sharded runner treats a summary-less shard as failed.
+
+### What this means for you
+
+Skill enforcement (/freeze, /careful, team required-mode) actually blocks.
+The redact guard scans big diffs instead of blocking them unscanned, and
+quoted arguments can't hide an rm -rf from /careful. Auto-upgrade un-wedges
+itself on installs with local patches. Memory ingest refuses to claim
+success while importing nothing. Windows installs stop bricking .gstack
+when your hostname matches your username, stop flashing console windows,
+and the plan-tune hooks finally record your answers. Design image
+generation works again. Update gstack and the wave is yours.
+
+### Itemized changes
+
+#### Fixed — enforcement guards
+- /freeze deny and /careful ask decisions nest under hookSpecificOutput so
+  Claude Code honors them; team-init required mode blocks with exit 2 even
+  on schema drift. Contributed by @jawadakram20, @Masashi-Ono0611.
+- /careful parses the tool payload with a real JSON parser (quoted
+  arguments no longer truncate the command), asks on IFS/base64
+  obfuscation, fails closed on unreadable input, and multi-line commands
+  cannot ride the safe-exception whitelist. Contributed by @wtamminga.
+- The investigate scope lock resolves check-freeze via $HOME (the
+  CLAUDE_SKILL_DIR path never resolved at hook time). Reported with a fix
+  by @maxpetrusenkoagent.
+- Specialist review agents run with run_in_background: false — required
+  since Claude Code 2.1.198 made background the default.
+
+#### Fixed — credentials and redaction
+- Pre-push scanning: line-aligned chunked scans for big diffs
+  (@luckywenapere), real push-base resolution instead of whole-repo blame
+  (@stormeoio), byte-exact stdin for chained hooks (@francis-eye),
+  --no-ext-diff/--no-textconv, hunk-aware header parsing, fail-closed ref
+  parsing (bypasses reported by @lubosxyz), GOCSPX + Telegram token
+  patterns (@francis-eye), UUID fixture false-positive suppression.
+- pair-agent walks you through ngrok auth in YOUR terminal — the token
+  never enters the transcript.
+- The extension denies token/port reads to content scripts and foreign
+  extensions, reimplemented for the v1.63 pinned-origin token model.
+  Contributed by @punksterlabs.
+- diff 9.0.0 (GHSA-73rr-hh4g-fpgx, @genisis0x); OpenAI key file written
+  0600-at-create (@bunlongheng); injection-denylist and phone-pattern
+  false positives calibrated (@Masashi-Ono0611, @JonasFocus, @abkrim).
+
+#### Fixed — test-suite integrity
+- All eight delayed process.exit teardown bombs removed; static no-suicide
+  tripwire; fault-injection proof of exit-code propagation; the sharded
+  runner fails shards that exit 0 without bun's summary. Contributed by
+  @sneakygriff with repairs from @time-attack; also fixed by @whd4.
+- design/test/ joins the free suite and the sharded runner (it never ran
+  anywhere before).
+- The orphaned sidebar chat-queue suites are gone; live sidebar tests stay.
+- Fork PRs skip eval jobs deterministically instead of red/green by Docker
+  cache luck. Contributed by @andrey-esipov.
+
+#### Fixed — silent data loss
+- memory-ingest imports gitignored staging (@gawievanblerk), reconciles
+  imported-vs-staged counts and refuses to advance state on shortfall
+  (@Charles-Grant), with a version-adaptive flag fallback.
+- lib/ ships beside bin/ on every host install — learnings, decisions and
+  telemetry scripts work outside Claude Code. Contributed by @fedster99;
+  supabase/config.sh copy by @jizusun.
+- Native AskUserQuestion answers parse correctly (object-map shape), the
+  (Recommended) suffix compares equal, and extraction failures no longer
+  poison followed_recommendation. Based on the working patch by @yijisoo;
+  suffix fix by @chuchu2781.
+- The autoplan task aggregator returns real tasks (jq scope bug swallowed
+  by 2>/dev/null). Contributed by @kkroo.
+- Auto-upgrade pulls with --autostash over locally-patched installs and
+  logs the real failure reason.
+- gstack-slug resolves the project root by marker walk-up (@ajeenkya),
+  canonicalizes slash branches (@ShuratCode), and keeps cached identity
+  sticky so adding a remote never renames your project.
+- Design image generation: the gpt-image-2 tool pairing that 400'd every
+  call is fixed (@Pablosinyores), with honest timeout reporting (@vryahn).
+
+#### Fixed — Windows
+- icacls grants by SID — hostname==username no longer bricks ~/.gstack
+  (@asizux2; independently fixed by @Icandi40, @chiragborse1, @IntegriGit,
+  @voltapix26).
+- windowsHide forwarded through every spawn shim (@jerrynicholsai;
+  subsets by @jwilk-hrep, @rroojrooj, @WimvandenHeijkant); watchdog uses
+  signal-0 liveness with a reachable circuit breaker (@SYKhayyat); terminal
+  agents tie their lifetime to the owner PID (@csarigoz).
+- All three plan-tune hooks spawn their bins through a shared
+  Windows-aware helper (@rafassousa); setup registers the SessionStart
+  hook with a bash prefix (@NikhileshNanduri); BROWSE_BIN gets its .exe
+  (@rroojrooj); the polyfill exposes an exited promise (@punksterlabs)
+  and the CJK terminal issues are gone (double-send fixed by
+  @mindsurf0176, full-width font cells by @tomfluff).
+- New Windows regression tests run on windows-latest CI, not just as
+  static checks on macOS.
+
+#### Fixed — /codex
+- mktemp templates keep the X-run trailing — /codex works past the first
+  run on macOS (@ShuratCode and @noron12234; also @cathrynlavery).
+- codex review receives explicit diff args instead of silently reviewing
+  the dirty tree (@fangearhq-boop), wrapped in timeouts so truncation
+  stops reading as no-findings (@aegixx).
+- Review mode runs sandboxed read-only; the P0/P1/P2 gate fails closed on
+  empty, untagged, or non-zero output; model-entitlement 400s get
+  actionable guidance.
+
+#### Fixed — everything else
+- Artifacts Sync and telemetry-finalize un-deadened in 49 skills (quoted
+  tilde never expands — @jawadakram20). update_check:false now silences
+  the preamble prose too (@jc0d35). Codex hosts read AGENTS.md, not
+  CLAUDE.md (@exGeni). setup --help prints help (@saen-ai). Model overlays
+  for the current Claude generation (@chrisquorum). Plus ~20 more small
+  fixes credited in the git log: deploy-config URL parsing, artifacts-init
+  protocol handling, keychain auth detection, catalog description
+  truncation, tracked-file test counts, update-check crash sentinel,
+  Ubuntu 26.04 detection, CRLF-stable generation, telemetry error fields,
+  server-lock diagnostics, shell-quoted paths, benchmark arg validation,
+  and more.
+
+#### For contributors
+- The enumerate-first repair protocol used here (defuse, enumerate, repair
+  before removing) is documented in the PR; the audit records live in the
+  session workflow journals. Four follow-up waves are captured in TODOS.md
+  with full context.
+
 ## [1.63.0.0] - 2026-08-13
 
 **Everything gstack sends off your machine now leaves a receipt you can read.**
