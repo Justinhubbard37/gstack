@@ -149,6 +149,81 @@ describe("sanitizeUntrustedHtml (offline fetch vectors)", () => {
     expect(sanitizeUntrustedHtml(input)).toContain(`srcset="a.png 1x, a@2x.png 2x"`);
   });
 
+  // ── Bypass regressions: SVG remote-fetch vectors ──
+  // The svg handling only stripped <script> and the javascript: scheme, so a
+  // plain https:// href on <image>/<use>/<feImage> survived and Chromium
+  // fetched it at print time.
+
+  test("neutralizes remote <image href> inside <svg> blocks", () => {
+    const out = sanitizeUntrustedHtml(`<svg><image href="https://evil.example/x.png"/></svg>`);
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain(`href="#"`);
+  });
+
+  test("neutralizes remote <use xlink:href> inside <svg> blocks", () => {
+    const out = sanitizeUntrustedHtml(`<svg><use xlink:href="https://evil.example/defs.svg#icon"/></svg>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes protocol-relative and unquoted svg hrefs", () => {
+    const out = sanitizeUntrustedHtml(`<svg><image href=//evil.example/x.png /><use href='//evil.example/d.svg#i'/></svg>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes remote svg-element href even when the <svg> is never closed", () => {
+    // Chromium auto-closes an unclosed <svg> at EOF and still fetches.
+    const out = sanitizeUntrustedHtml(`<svg><image href="https://evil.example/x.png">`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes entity-obfuscated remote svg href (&#104;ttps)", () => {
+    const out = sanitizeUntrustedHtml(`<svg><image href="&#104;ttps://evil.example/x.png"/></svg>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("keeps local fragment href (#id) inside svg intact", () => {
+    const input = `<svg><defs><circle id="dot" r="2"/></defs><use href="#dot"/><use xlink:href="#dot"/></svg>`;
+    const out = sanitizeUntrustedHtml(input);
+    expect(out).toContain(`href="#dot"`);
+    expect(out).toContain(`xlink:href="#dot"`);
+  });
+
+  test("keeps local-file svg <image href> intact", () => {
+    expect(sanitizeUntrustedHtml(`<svg><image href="local.png"/></svg>`)).toContain(`href="local.png"`);
+  });
+
+  test("leaves regular <a href=\"https://…\"> hyperlinks alone (links don't fetch at print)", () => {
+    const input = `<a href="https://example.com/docs">docs</a>`;
+    expect(sanitizeUntrustedHtml(input)).toContain(`href="https://example.com/docs"`);
+  });
+
+  // ── Bypass regressions: image-set() with bare quoted URL strings ──
+  // `image-set("https://…" 1x)` carries no url() token and no backslash, so
+  // the url()/escape passes never fired on it.
+
+  test("neutralizes remote image-set(...) in <style> blocks", () => {
+    const input = `<style>body { background: image-set("https://evil.example/a.png" 1x); color: blue; }</style>`;
+    const out = sanitizeUntrustedHtml(input);
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain("url(#)");
+    expect(out).toContain("color: blue");
+  });
+
+  test("neutralizes remote image-set(...) in style attributes", () => {
+    const out = sanitizeUntrustedHtml(`<div style="background: image-set('https://evil.example/a.png' 1x)">x</div>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("neutralizes -webkit-image-set with a remote string argument", () => {
+    const out = sanitizeUntrustedHtml(`<style>body{background:-webkit-image-set("//evil.example/a.png" 1x)}</style>`);
+    expect(out).not.toContain("evil.example");
+  });
+
+  test("keeps local image-set(...) functional", () => {
+    const input = `<style>body { background: image-set("local.png" 1x, "local@2x.png" 2x); }</style>`;
+    expect(sanitizeUntrustedHtml(input)).toContain(`image-set("local.png" 1x, "local@2x.png" 2x)`);
+  });
+
   test("neutralizes remote <video poster> and <source src>", () => {
     const input = `<video poster="https://evil.example/p.jpg"><source src="https://evil.example/v.mp4"></video>`;
     const out = sanitizeUntrustedHtml(input);
@@ -173,6 +248,8 @@ describe("sanitizeUntrustedHtml (offline fetch vectors)", () => {
       `<style>@import url("https://evil.example/t.css"); h1{color:red}</style>`,
       `<div style="background:url('https://evil.example/px.gif')">hi</div>`,
       `<img src="a.png" srcset="https://evil.example/a.png 2x">`,
+      `<svg><image href="https://evil.example/s.png"/><use xlink:href="https://evil.example/d.svg#i"/></svg>`,
+      `<div style="background:image-set('https://evil.example/is.png' 1x)">x</div>`,
     ].join("\n\n");
     const { bodyHtml } = render({ markdown: md });
     expect(bodyHtml).not.toContain("evil.example");

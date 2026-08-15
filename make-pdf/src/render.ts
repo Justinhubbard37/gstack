@@ -206,6 +206,10 @@ function decodeTypographicEntities(html: string): string {
  *   - on* event handler attributes (onclick, ONCLICK, etc.).
  *   - href/src with javascript: scheme.
  *   - <svg> tags with <script> inside them.
+ *   - remote href/xlink:href inside <svg> (and on svg-only elements anywhere)
+ *     → "#" (offline posture: no fetch at print time).
+ *   - remote CSS fetch vectors in <style> blocks and style attributes
+ *     (@import, url(), image-set() with remote string candidates).
  */
 export function sanitizeUntrustedHtml(html: string): string {
   let s = html;
@@ -284,6 +288,13 @@ export function sanitizeUntrustedHtml(html: string): string {
     out = out.replace(
       /url\(\s*(?:&quot;|&#0?39;|&#x27;|["'])?\s*(?:https?:)?\/\/[^)]*(?:\)|$)/gi,
       "url(#)");
+    // (e) image-set() / -webkit-image-set() accept BARE quoted URL strings —
+    //     no url() token, no backslash — so passes (c)/(d) never fire on
+    //     `image-set("https://…" 1x)`. Any image-set whose arguments carry a
+    //     remote-scheme quoted string → url(#) (fail closed). Local string
+    //     candidates stay; url()-form arguments are already covered by (c)/(d).
+    out = out.replace(/(?:-webkit-)?image-set\(\s*[^)]*(?:\)|$)/gi, (m) =>
+      /(?:&quot;|&#0?39;|&#x27;|["'])\s*(?:https?:)?\/\//i.test(m) ? "url(#)" : m);
     return out;
   };
 
@@ -333,6 +344,31 @@ export function sanitizeUntrustedHtml(html: string): string {
       const cleaned = neutralizeUntrustedCss(decodeStyleAttrEntities(raw));
       return `${pre}"${escapeHtml(cleaned)}"`;
     });
+
+  // SVG remote-fetch vectors: <image href>, <use href>, <feImage href> (and
+  // their xlink:href spellings) fetch at print time — the svg handling above
+  // only strips <script>, and the javascript:-scheme rewrite doesn't touch a
+  // plain https:// href. Fail closed: inside an <svg> block, ANY href /
+  // xlink:href whose entity-decoded value is remote (https?:// or //) is
+  // rewritten to "#"; local fragment refs (href="#id") and local files stay
+  // intact. The tag-scoped second pass catches svg-only elements smuggled
+  // through an UNCLOSED <svg> (Chromium auto-closes at EOF and still
+  // fetches); outside foreign content those tags are inert or parser-mapped
+  // to <img> (href ignored), so the extra pass can't break plain HTML —
+  // regular <a href> hyperlinks are untouched (links don't fetch at print).
+  const neutralizeRemoteSvgHref = (fragment: string): string =>
+    fragment.replace(
+      /(\s(?:xlink:)?href\s*=\s*)("([^"]*)"|'([^']*)'|[^\s>]+)/gi,
+      (m, pre, val, dq, sq) => {
+        // Decode the value the way the HTML parser will (same single-round
+        // decode as style attributes above), then drop the tab/newline/CR
+        // characters URL parsing ignores, so &#104;ttps and h\nttps count.
+        const raw = dq ?? sq ?? String(val);
+        const decoded = decodeStyleAttrEntities(raw).replace(/[\t\n\r]/g, "");
+        return /^\s*(?:https?:)?\/\//i.test(decoded) ? `${pre}"#"` : m;
+      });
+  s = s.replace(/<svg\b[\s\S]*?<\/svg>/gi, neutralizeRemoteSvgHref);
+  s = s.replace(/<(?:image|use|feimage)\b[^>]*>/gi, neutralizeRemoteSvgHref);
 
   // srcset with a remote candidate: Chromium prefers srcset over the inlined
   // src, so a remote candidate fetches at print time. Strip the attribute;
