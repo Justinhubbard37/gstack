@@ -797,6 +797,12 @@ export class BrowserManager {
     this.consecutiveFailures = 0;
   }
 
+  // How long close() waits for a graceful shutdown before falling back to
+  // SIGKILL (launched mode) or abandoning the context close (headed mode).
+  // A field, not a literal, so the SIGKILL fallback is unit-testable without
+  // a 5-second wait.
+  private closeRaceMs = 5000;
+
   async close() {
     // unref'd race timer: without unref, every successful close still pins
     // the caller's event loop for the full window.
@@ -811,7 +817,7 @@ export class BrowserManager {
         if (this.browser) this.browser.removeAllListeners('disconnected');
         await Promise.race([
           this.context ? this.context.close() : Promise.resolve(),
-          raceTimeout(5000),
+          raceTimeout(this.closeRaceMs),
         ]).catch(() => {});
       } else {
         // Launched mode: close the browser we spawned.
@@ -824,7 +830,7 @@ export class BrowserManager {
         const child = this.browser.process?.();
         const closed = await Promise.race([
           this.browser.close().then(() => true as const),
-          raceTimeout(5000),
+          raceTimeout(this.closeRaceMs),
         ]).catch(() => false as const);
         if (closed === false && child && child.exitCode === null && !child.killed) {
           try { child.kill('SIGKILL'); } catch { /* already gone */ }
