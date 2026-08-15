@@ -146,6 +146,11 @@ fi
   else
     log_entry "UP_TO_DATE head=$OLD_HEAD"
   fi
-) &
+# The detached subshell must own its stdio: it inherits the session hook's
+# pipes, and once the hook exits and the caller closes them, any child that
+# writes (git pull's autostash notice, setup output) dies of SIGPIPE —
+# observed as PULL_FAILED exit=141 with an empty stderr capture. All
+# observability goes through LOG_FILE.
+) >/dev/null 2>&1 &
 
 exit 0
