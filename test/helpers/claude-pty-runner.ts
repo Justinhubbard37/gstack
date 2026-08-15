@@ -1254,7 +1254,13 @@ export const ceoStep0Boundary: Step0BoundaryPredicate = (fp) =>
 export const engStep0Boundary: Step0BoundaryPredicate = (fp) =>
   /scope reduction recommendation|cross[\s-]?project learnings/i.test(
     fp.promptSnippet,
-  );
+  ) ||
+  // plan-eng-review's Step 0 may legitimately end with NO scope-reduction /
+  // learnings AUQ. When it does, the first answered review-phase question —
+  // tagged <gstack-qid:eng-review-...> by the question-tuning resolver —
+  // must fire the boundary, or every per-finding AUQ stays classified
+  // preReview and the multi-finding batching counter reads 0.
+  /gstack-qid:\s*eng-review-/i.test(fp.promptSnippet);
 
 export const designStep0Boundary: Step0BoundaryPredicate = (fp) =>
   /design system|design posture|design score|first dimension/i.test(
