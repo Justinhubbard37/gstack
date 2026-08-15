@@ -166,6 +166,28 @@ export function resolveGstackHome(): string {
 }
 
 /**
+ * Read one key from the flat-YAML config store at <gstack home>/config.yaml
+ * (the shape bin/gstack-config writes: `key: value` lines). Tolerates
+ * optional single/double quotes around the value and a trailing `# comment`.
+ * Returns the unquoted value string, or null when the file is missing or
+ * unreadable or the key is absent.
+ *
+ * Single source of truth for flat-YAML key reads — isPairAgentEnabled
+ * (pair_agent) and telemetry.ts (telemetry tier) both route through it so
+ * the two consent gates can never drift on parsing semantics.
+ */
+export function readGstackConfigYamlKey(key: string): string | null {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try {
+    const yaml = fs.readFileSync(path.join(resolveGstackHome(), 'config.yaml'), 'utf-8');
+    const m = yaml.match(new RegExp(`^\\s*${escaped}\\s*:\\s*['"]?([^'"#\\n]*?)['"]?\\s*(?:#.*)?$`, 'm'));
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Is the remote pair-agent (ngrok tunnel) surface opt-in enabled?
  *
  * Fail-closed: the tunnel exposes the local browser to the internet, so it
@@ -182,18 +204,17 @@ export function isPairAgentEnabled(): boolean {
   const env = process.env.GSTACK_PAIR_AGENT;
   if (env === 'on') return true;
   if (env === 'off') return false;
-  const home = resolveGstackHome();
   // Canonical store: ~/.gstack/config.yaml (flat `key: value` lines, written
   // by bin/gstack-config — which is what the /pair-agent consent step runs).
   // The fork read config.json; porting that verbatim would have made the gate
   // silently un-enableable on main. JSON kept as a fallback shape only.
+  // Anything other than exactly on/off (missing key, malformed value) falls
+  // through to the JSON fallback and ultimately fails closed.
+  const yamlValue = readGstackConfigYamlKey('pair_agent');
+  if (yamlValue === 'on') return true;
+  if (yamlValue === 'off') return false;
   try {
-    const yaml = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8');
-    const m = yaml.match(/^\s*pair_agent\s*:\s*['"]?(on|off)['"]?\s*(?:#.*)?$/m);
-    if (m) return m[1] === 'on';
-  } catch { /* fall through */ }
-  try {
-    const raw = fs.readFileSync(path.join(home, 'config.json'), 'utf-8');
+    const raw = fs.readFileSync(path.join(resolveGstackHome(), 'config.json'), 'utf-8');
     return JSON.parse(raw)?.pair_agent === 'on';
   } catch {
     return false;

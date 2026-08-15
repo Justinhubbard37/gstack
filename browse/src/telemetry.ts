@@ -21,6 +21,7 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { readGstackConfigYamlKey } from './config';
 
 function gstackHome(): string {
   return process.env.GSTACK_HOME || path.join(os.homedir(), '.gstack');
@@ -43,32 +44,51 @@ async function ensureDir(): Promise<void> {
 }
 
 let telemetryDisabled: boolean | null = null;
-function isDisabled(): boolean {
+/**
+ * Is telemetry disabled for this process? Telemetry is OPT-IN: the consent
+ * prompt writes a granted tier ('community' | 'anonymous') to
+ * ~/.gstack/config.yaml, and only a granted tier enables emission. Tiers,
+ * checked in order:
+ *
+ *   1. Env hint GSTACK_TELEMETRY_OFF=1 (set by preambles and test
+ *      harnesses): always disabled, even over a granted config tier.
+ *   2. Persistent tier via the shared flat-YAML helper in config.ts (same
+ *      parser as the pair-agent gate, so the two consent gates never drift):
+ *      explicit `telemetry: off` disables; 'community'/'anonymous' enable.
+ *   3. Default: DISABLED. An absent key, absent file, or unrecognized value
+ *      means consent was never granted — matching bin/gstack-config's
+ *      DEFAULTS table, which reports 'off' for an unset telemetry key.
+ *      Anything else would be a split-brain where `gstack-config get
+ *      telemetry` tells the user 'off' while a direct-$B daemon emits.
+ *      One escape hatch: GSTACK_TELEMETRY_OFF=0 is a harness-side consent
+ *      assertion that flips this DEFAULT only (test harnesses exercising the
+ *      write path against a scratch GSTACK_HOME) — it never overrides an
+ *      explicit `telemetry: off` the user wrote.
+ *
+ * Exported so tests can pin the consent gate directly; the cached verdict
+ * resets via _resetTelemetryCache.
+ */
+export function isTelemetryDisabled(): boolean {
   if (telemetryDisabled !== null) return telemetryDisabled;
-  // Check env (set by preamble or test harnesses).
+  // Env kill switch (set by preamble or test harnesses): beats everything.
   if (process.env.GSTACK_TELEMETRY_OFF === '1') {
     telemetryDisabled = true;
     return true;
   }
-  // Persistent tier: gstack-config set telemetry off must hold even when the
-  // daemon is spawned outside a skill preamble (direct $B use, embedders) and
-  // the env hint was never set (fork port wave 2 polish).
-  try {
-    const fs = require('fs') as typeof import('fs');
-    const path = require('path') as typeof import('path');
-    const os = require('os') as typeof import('os');
-    const home = process.env.GSTACK_HOME || path.join(os.homedir(), '.gstack');
-    const yaml = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8');
-    if (/^\s*telemetry\s*:\s*['"]?off['"]?\s*(?:#.*)?$/m.test(yaml)) {
-      telemetryDisabled = true;
-      return true;
-    }
-  } catch { /* no config — fall through to default */ }
-  // Conservative default: telemetry ON unless explicitly off. Users opt out via
-  // gstack-config set telemetry off (env hint from the preamble OR the
-  // persistent tier read above).
-  telemetryDisabled = false;
-  return false;
+  // Persistent tier: an explicit user-written value always wins next.
+  const tier = readGstackConfigYamlKey('telemetry');
+  if (tier === 'off') {
+    telemetryDisabled = true;
+    return true;
+  }
+  if (tier === 'community' || tier === 'anonymous') {
+    telemetryDisabled = false;
+    return false;
+  }
+  // No granted consent on record (absent key/file, unrecognized value):
+  // disabled — unless the harness asserted consent via the env seam.
+  telemetryDisabled = process.env.GSTACK_TELEMETRY_OFF !== '0';
+  return telemetryDisabled;
 }
 
 export interface TelemetryEvent {
@@ -78,7 +98,7 @@ export interface TelemetryEvent {
 
 /** Fire-and-forget log. Never throws. */
 export function logTelemetry(payload: TelemetryEvent): void {
-  if (isDisabled()) return;
+  if (isTelemetryDisabled()) return;
   const enriched = { ...payload, ts: new Date().toISOString() };
   ensureDir()
     .then(() => fs.appendFile(telemetryFile(), JSON.stringify(enriched) + '\n', 'utf8'))
