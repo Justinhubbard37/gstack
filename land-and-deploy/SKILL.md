@@ -789,11 +789,15 @@ fi
 if [ "$_TEL" != "off" ] && [ -x ~/.claude/skills/gstack/bin/gstack-telemetry-log ]; then
   ~/.claude/skills/gstack/bin/gstack-telemetry-log \
     --skill "SKILL_NAME" --duration "$_TEL_DUR" --outcome "OUTCOME" \
-    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" 2>/dev/null &
+    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" \
+    --error-message "ERROR_MESSAGE" --failed-step "FAILED_STEP" 2>/dev/null &
 fi
 ```
 
 Replace `SKILL_NAME`, `OUTCOME`, and `USED_BROWSE` before running.
+Replace `ERROR_MESSAGE` with a short description of the error (if outcome is error,
+otherwise use empty string ""), and `FAILED_STEP` with the step name or number where
+the failure occurred (if outcome is error, otherwise use empty string "").
 
 ## Plan Status Footer
 
@@ -1008,8 +1012,11 @@ echo "$DEPLOY_CONFIG"
 
 # If config exists, parse it
 if [ "$DEPLOY_CONFIG" != "NO_CONFIG" ]; then
-  PROD_URL=$(echo "$DEPLOY_CONFIG" | grep -i "production.*url" | head -1 | sed 's/.*: *//')
-  PLATFORM=$(echo "$DEPLOY_CONFIG" | grep -i "platform" | head -1 | sed 's/.*: *//')
+  # Cut at the FIRST ": ", not the last. A greedy 's/.*: *//' ate the scheme of
+  # any URL: "Production URL: https://x.com" became "//x.com", because the last
+  # ":" belongs to "https:".
+  PROD_URL=$(echo "$DEPLOY_CONFIG" | grep -i "production.*url" | head -1 | sed 's/^[^:]*: *//')
+  PLATFORM=$(echo "$DEPLOY_CONFIG" | grep -i "platform" | head -1 | sed 's/^[^:]*: *//')
   echo "PERSISTED_PLATFORM:$PLATFORM"
   echo "PERSISTED_URL:$PROD_URL"
 fi
@@ -1606,8 +1613,11 @@ echo "$DEPLOY_CONFIG"
 
 # If config exists, parse it
 if [ "$DEPLOY_CONFIG" != "NO_CONFIG" ]; then
-  PROD_URL=$(echo "$DEPLOY_CONFIG" | grep -i "production.*url" | head -1 | sed 's/.*: *//')
-  PLATFORM=$(echo "$DEPLOY_CONFIG" | grep -i "platform" | head -1 | sed 's/.*: *//')
+  # Cut at the FIRST ": ", not the last. A greedy 's/.*: *//' ate the scheme of
+  # any URL: "Production URL: https://x.com" became "//x.com", because the last
+  # ":" belongs to "https:".
+  PROD_URL=$(echo "$DEPLOY_CONFIG" | grep -i "production.*url" | head -1 | sed 's/^[^:]*: *//')
+  PLATFORM=$(echo "$DEPLOY_CONFIG" | grep -i "platform" | head -1 | sed 's/^[^:]*: *//')
   echo "PERSISTED_PLATFORM:$PLATFORM"
   echo "PERSISTED_URL:$PROD_URL"
 fi

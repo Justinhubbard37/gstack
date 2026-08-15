@@ -782,15 +782,11 @@ fi
 if [ "$_TEL" != "off" ] && [ -x $GSTACK_ROOT/bin/gstack-telemetry-log ]; then
   $GSTACK_ROOT/bin/gstack-telemetry-log \
     --skill "SKILL_NAME" --duration "$_TEL_DUR" --outcome "OUTCOME" \
-    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" \
-    --error-message "ERROR_MESSAGE" --failed-step "FAILED_STEP" 2>/dev/null &
+    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" 2>/dev/null &
 fi
 ```
 
 Replace `SKILL_NAME`, `OUTCOME`, and `USED_BROWSE` before running.
-Replace `ERROR_MESSAGE` with a short description of the error (if outcome is error,
-otherwise use empty string ""), and `FAILED_STEP` with the step name or number where
-the failure occurred (if outcome is error, otherwise use empty string "").
 
 ## Plan Status Footer
 
@@ -1397,7 +1393,7 @@ ls -d test/ tests/ spec/ __tests__/ cypress/ e2e/ 2>/dev/null
 
 ```bash
 # Count test files before any generation
-find . -name '*.test.*' -o -name '*.spec.*' -o -name '*_test.*' -o -name '*_spec.*' | grep -v node_modules | wc -l
+git ls-files 2>/dev/null | grep -E '(\.test\.|\.spec\.|_test\.|_spec\.)' | wc -l
 ```
 
 Store this number for the PR body.
@@ -1535,7 +1531,7 @@ If no test framework AND user declined bootstrap → diagram only, no generation
 
 ```bash
 # Count test files after generation
-find . -name '*.test.*' -o -name '*.spec.*' -o -name '*_test.*' -o -name '*_spec.*' | grep -v node_modules | wc -l
+git ls-files 2>/dev/null | grep -E '(\.test\.|\.spec\.|_test\.|_spec\.)' | wc -l
 ```
 
 For PR body: `Tests: {before} → {after} (+{delta} new)`
