@@ -113,7 +113,8 @@ RUN bun --version && node --version && claude --version && jq --version && gh --
 # if we move it out of the way and symlink back
 # Save node_modules + package.json snapshot for cache validation at runtime
 RUN mv /workspace/node_modules /opt/node_modules_cache \
-    && cp /workspace/package.json /opt/node_modules_cache/.package.json
+    && cp /workspace/package.json /opt/node_modules_cache/.package.json \
+    && cp /workspace/bun.lock /opt/node_modules_cache/.bun.lock
 
 # Claude CLI refuses --dangerously-skip-permissions as root.
 # Create a non-root user for eval runs (GH Actions overrides USER, so
