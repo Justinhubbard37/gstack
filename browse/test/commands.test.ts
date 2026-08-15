@@ -884,7 +884,10 @@ describe('CLI lifecycle', () => {
     cliEnv.BROWSE_STATE_FILE = stateFile;
     const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
       const proc = spawn('bun', ['run', cliPath, 'status'], {
-        timeout: 15000,
+        // Must exceed the CLI's startup budget (resolveStartTimeout, 15s
+        // non-CI POSIX) or a slow cold boot under full-suite load gets the
+        // child killed at the exact moment the CLI would have succeeded.
+        timeout: 18000,
         env: cliEnv,
       });
       let stdout = '';
