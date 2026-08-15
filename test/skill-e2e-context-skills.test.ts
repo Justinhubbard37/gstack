@@ -447,8 +447,13 @@ Do NOT use AskUserQuestion.`,
     // Match by filename timestamp (stable, unambiguous) plus a looser
     // prose check.
     const showsMain = /20260101-120000|main-work/.test(out);
-    const hidesAlpha = !/20260202-120000/.test(out);
-    const hidesBeta = !/20260303-120000/.test(out);
+    // Hide checks scope to the FINAL text output only: fullOutputSurface
+    // includes bash tool_results, and a legitimate `ls` of the checkpoint
+    // dir lists every branch's filename. The filtering under test happens
+    // in the user-facing list, not in the agent's intermediate reads.
+    const finalText = result.output ?? '';
+    const hidesAlpha = !/20260202-120000|LISTCURR_ALPHA_TOKEN/.test(finalText);
+    const hidesBeta = !/20260303-120000|LISTCURR_BETA_TOKEN/.test(finalText);
     const routed = skillCalls(result).includes('context-save');
     const exitOk = ['success', 'error_max_turns'].includes(result.exitReason);
 
