@@ -1,0 +1,75 @@
+name: Free Tests
+
+# The free suite (~400 files: test/, browse/test/, make-pdf/test/, design/test/)
+# had ZERO Linux CI coverage before this lane — only a curated Windows subset
+# ran anywhere. This job runs the whole thing through the canonical runner
+# (scripts/test-free-shards.ts): one `bun test --parallel` invocation with
+# strict-output classification, so a truncated or summary-less run can never
+# report green.
+#
+# Deliberately SECRETLESS: free tests make no API calls, so this lane gets no
+# provider keys at all — least privilege, and fork PRs get real test signal
+# here (the eval matrix skips fork PRs because repository secrets can't reach
+# them). test/free-tests-workflow-wiring.test.ts fails CI if a secret sneaks in.
+#
+# This is a REQUIRED check from day one (branch protection lists it). If it's
+# red, fix or quarantine-with-issue — don't make it advisory; an advisory lane
+# is permanent false comfort.
+#
+# Sizing note (decision V3): single --parallel job first. If PR runs show it
+# slower than the eval matrix wall, switch to a matrix of
+# `--shards N --shard i` jobs (indices are stable, empty shards no-op).
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: free-tests-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  free-tests:
+    runs-on: ubicloud-standard-8
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: linux-bun-${{ hashFiles('bun.lock') }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: linux-playwright-${{ hashFiles('bun.lock') }}
+
+      # Cache restores browser binaries; install is still required for system
+      # deps and is a fast no-op for already-present browsers.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Configure git identity (tests init temp repos)
+        run: |
+          git config --global user.email "free-tests-ci@gstack.test"
+          git config --global user.name "Free Tests CI"
+          git config --global init.defaultBranch main
+
+      - name: Generate host SKILL.md outputs (.agents, .factory)
+        # Golden-file tests read generated host outputs that are gitignored.
+        run: bun run gen:skill-docs --host all
+
+      - name: Build server-node bundle (loaded by browse cli imports)
+        run: bash browse/scripts/build-node-server.sh
+
+      - name: Run free suite
+        run: bun run test:free
