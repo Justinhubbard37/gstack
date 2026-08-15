@@ -6,6 +6,7 @@ import {
   copyDirSync, setupBrowseShims, logCost, recordE2E,
   createEvalCollector, finalizeEvalCollector,
 } from './helpers/e2e-helpers';
+import { extractSkillSections, REVIEW_E2E_SECTIONS } from './helpers/skill-fixture';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -41,8 +42,12 @@ describeIfSelected('Review skill E2E', ['review-sql-injection'], () => {
     run('git', ['add', 'user_controller.rb']);
     run('git', ['commit', '-m', 'add user controller']);
 
-    // Copy review skill files
-    fs.copyFileSync(path.join(ROOT, 'review', 'SKILL.md'), path.join(reviewDir, 'review-SKILL.md'));
+    // Review skill files — extract only the core review workflow sections
+    // (CLAUDE.md: "E2E test fixtures: extract, don't copy").
+    fs.writeFileSync(
+      path.join(reviewDir, 'review-SKILL.md'),
+      extractSkillSections(path.join(ROOT, 'review'), REVIEW_E2E_SECTIONS),
+    );
     fs.copyFileSync(path.join(ROOT, 'review', 'checklist.md'), path.join(reviewDir, 'review-checklist.md'));
     fs.copyFileSync(path.join(ROOT, 'review', 'greptile-triage.md'), path.join(reviewDir, 'review-greptile-triage.md'));
   });
@@ -115,8 +120,11 @@ describeIfSelected('Review enum completeness E2E', ['review-enum-completeness'],
     run('git', ['add', 'order.rb']);
     run('git', ['commit', '-m', 'add returned status']);
 
-    // Copy review skill files
-    fs.copyFileSync(path.join(ROOT, 'review', 'SKILL.md'), path.join(enumDir, 'review-SKILL.md'));
+    // Review skill files — extracted sections, not the full 1870-line file.
+    fs.writeFileSync(
+      path.join(enumDir, 'review-SKILL.md'),
+      extractSkillSections(path.join(ROOT, 'review'), REVIEW_E2E_SECTIONS),
+    );
     fs.copyFileSync(path.join(ROOT, 'review', 'checklist.md'), path.join(enumDir, 'review-checklist.md'));
     fs.copyFileSync(path.join(ROOT, 'review', 'greptile-triage.md'), path.join(enumDir, 'review-greptile-triage.md'));
   });
@@ -189,8 +197,13 @@ describeIfSelected('Review design lite E2E', ['review-design-lite'], () => {
     run('git', ['add', '.']);
     run('git', ['commit', '-m', 'add landing page']);
 
-    // Copy review skill files
-    fs.copyFileSync(path.join(ROOT, 'review', 'SKILL.md'), path.join(designDir, 'review-SKILL.md'));
+    // Review skill files — extracted sections, not the full 1870-line file.
+    // The design checks come from review-design-checklist.md (copied whole,
+    // it is a 134-line checklist, not a generated SKILL.md).
+    fs.writeFileSync(
+      path.join(designDir, 'review-SKILL.md'),
+      extractSkillSections(path.join(ROOT, 'review'), REVIEW_E2E_SECTIONS),
+    );
     fs.copyFileSync(path.join(ROOT, 'review', 'checklist.md'), path.join(designDir, 'review-checklist.md'));
     fs.copyFileSync(path.join(ROOT, 'review', 'design-checklist.md'), path.join(designDir, 'review-design-checklist.md'));
     fs.copyFileSync(path.join(ROOT, 'review', 'greptile-triage.md'), path.join(designDir, 'review-greptile-triage.md'));
