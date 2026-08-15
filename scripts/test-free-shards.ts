@@ -221,6 +221,23 @@ export const WORKER_HOSTILE: Record<string, string> = {
     + 'wedges the whole invocation past the wall clock. Passes serially.',
 };
 
+/**
+ * Tests that REGENERATE shared repo artifacts in place (skill SKILL.md files
+ * or the .agents/ host outputs). Any shard reading those files concurrently
+ * sees a moving target — this one family produced today's exactly-doubled
+ * catalog estimate, golden-file drift, and the spec-sync mismatch. Full-suite
+ * mode runs them in ONE serial shard AFTER the parallel shards finish, so
+ * readers never race a mutator. (CI's --shards matrix is unaffected: each CI
+ * shard has its own checkout.) Each mutator restores default state itself.
+ */
+export const TREE_MUTATING: Record<string, string> = {
+  'test/catalog-mode-full.test.ts': 'regenerates ALL SKILL.md in full-catalog mode, then restores',
+  'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
+  'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
+  'test/gen-skill-docs.test.ts': 'regenerates .agents/ (codex host) golden artifacts in place',
+  'test/skill-validation.test.ts': 'regenerates .agents/ (codex host) artifacts in place (3 sites)',
+};
+
 export function normalizeRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
@@ -997,15 +1014,29 @@ async function main(): Promise<number> {
   // wedge only ever costs its own shard. WORKER_HOSTILE files are moot in
   // process shards (no workers) and fold back into normal assignment.
   const jobs = Math.max(1, Math.min(6, os.cpus().length - 2));
-  const shards = assignFilesToShards(files, jobs);
-  console.log(`[test:free] full suite: ${files.length} files across ${jobs} shard processes`);
+  // Phase split: tree-mutating tests run AFTER the parallel shards, in one
+  // serial shard, so no concurrent shard ever reads a half-regenerated tree.
+  const mutators = files.filter((f) => f in TREE_MUTATING);
+  const readers = files.filter((f) => !(f in TREE_MUTATING));
+  const shards = assignFilesToShards(readers, jobs);
+  const totalShards = jobs + (mutators.length > 0 ? 1 : 0);
+  console.log(`[test:free] full suite: ${readers.length} files across ${jobs} shard processes`
+    + (mutators.length > 0 ? `, then ${mutators.length} tree-mutating file(s) serially` : ''));
   const outcomes = await Promise.all(
-    shards.map((shardFiles, index) => runFreeShard(shardFiles, index + 1, jobs, {
+    shards.map((shardFiles, index) => runFreeShard(shardFiles, index + 1, totalShards, {
       wallTimeoutMs: options.wallTimeoutMs,
       verbose: options.verbose,
     })),
   );
-  return Math.max(...outcomes.map((o) => exitCodeFor(o.status)));
+  let worst = Math.max(...outcomes.map((o) => exitCodeFor(o.status)));
+  if (mutators.length > 0) {
+    const mutatorOutcome = await runFreeShard(mutators, totalShards, totalShards, {
+      wallTimeoutMs: options.wallTimeoutMs,
+      verbose: options.verbose,
+    });
+    worst = Math.max(worst, exitCodeFor(mutatorOutcome.status));
+  }
+  return worst;
 }
 
 if (import.meta.main) {

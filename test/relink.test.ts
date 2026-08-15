@@ -25,7 +25,15 @@ function run(cmd: string, env: Record<string, string> = {}, expectFail = false):
   try {
     return execSync(cmd, {
       cwd: ROOT,
-      env: { ...process.env, GSTACK_STATE_DIR: tmpDir, ...env },
+      // A sibling test file in the same shard PROCESS can leave GSTACK_HOME
+      // set on process.env; relink/config children must resolve state ONLY
+      // via the dirs this test passes (observed: 'fresh install' test saw a
+      // neighbor's skill_prefix and produced prefixed names).
+      env: (() => {
+        const child: Record<string, string | undefined> = { ...process.env, GSTACK_STATE_DIR: tmpDir, ...env };
+        if (!('GSTACK_HOME' in env)) delete child.GSTACK_HOME;
+        return child;
+      })(),
       encoding: 'utf-8',
       timeout: 10000,
       stdio: ['pipe', 'pipe', 'pipe'],
