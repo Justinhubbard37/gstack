@@ -1720,7 +1720,13 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
   // validateAuth was deleted in v1.35.0.0.
   function validateAuth(req: Request): boolean {
     const header = req.headers.get('authorization');
-    return header === `Bearer ${authToken}`;
+    if (header === null) return false;
+    // Constant-time compare so a byte-by-byte early-exit can't leak the token
+    // prefix via response timing. timingSafeEqual requires equal-length inputs,
+    // so the length check gates it (the length itself is not secret).
+    const got = Buffer.from(header);
+    const want = Buffer.from(`Bearer ${authToken}`);
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
   }
 
   // Factory-scoped shutdown. Closes the cfg-provided browserManager so
