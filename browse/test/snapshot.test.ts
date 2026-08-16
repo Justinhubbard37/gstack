@@ -321,6 +321,33 @@ describe('Annotated screenshots', () => {
     fs.unlinkSync(screenshotPath);
   });
 
+  // PR #2601 (@namtrok): one ambiguous ref must not kill the whole annotated
+  // screenshot. "Save" is a substring of "Save As", so the Save ref's locator
+  // matches two buttons — pre-fix, Playwright strict mode aborted every
+  // remaining annotation and no file was written.
+  test('snapshot -a survives ambiguous refs and reports them visibly (#2601)', async () => {
+    const screenshotPath = '/tmp/browse-test-annotated-ambiguous.png';
+    await handleWriteCommand('goto', [baseUrl + '/snapshot-ambiguous.html'], bm);
+    const result = await handleMetaCommand('snapshot', ['-a', '-o', screenshotPath], bm, shutdown);
+    // The screenshot landed despite the ambiguity...
+    expect(result).toContain('[annotated screenshot:');
+    expect(fs.existsSync(screenshotPath)).toBe(true);
+    expect(fs.statSync(screenshotPath).size).toBeGreaterThan(1000);
+    // ...refs after the ambiguous one are still in the snapshot...
+    expect(result).toContain('Save As');
+    expect(result).toContain('Cancel');
+    // ...and the first-match fallback is visible, never silent.
+    expect(result).toContain('ambiguous (first-match)');
+    fs.unlinkSync(screenshotPath);
+  });
+
+  test('snapshot -o without -a/-H warns instead of silently ignoring (#2601)', async () => {
+    await handleWriteCommand('goto', [baseUrl + '/snapshot.html'], bm);
+    const result = await handleMetaCommand('snapshot', ['-o', '/tmp/browse-test-ignored.png'], bm, shutdown);
+    expect(result).toContain('[warning] -o/--output was ignored');
+    expect(fs.existsSync('/tmp/browse-test-ignored.png')).toBe(false);
+  });
+
   test('snapshot -a uses default path', async () => {
     const defaultPath = '/tmp/browse-annotated.png';
     await handleWriteCommand('goto', [baseUrl + '/snapshot.html'], bm);
