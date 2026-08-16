@@ -2,6 +2,49 @@
 
 ## NEXT PRIORITY
 
+### P1: ZeroEntropy sunset — gbrain's default embedding provider dies Sept 4, 2026 (#2365)
+
+**What:** ZeroEntropy (acquired by Notion) shuts down September 4, 2026. gbrain's
+default embedding provider needs a migration path before then; gstack's
+setup-gbrain flow should stop recommending it and detect/warn existing installs.
+
+**Why:** Hard external deadline. After Sept 4, fresh setup-gbrain runs against the
+default provider fail, and existing brains stop embedding new pages silently.
+
+**Effort:** M (human ~2d, CC ~1h — mostly gbrain-side; gstack side is detect+warn).
+**Priority:** P1 (calendar-driven). **Depends on:** gbrain upstream provider support.
+
+### P2: v1.67 fix-wave deferrals — next-wave queue
+
+Filed at v1.67.0.0 implementation time (see the wave plan's "Cut from this
+wave"). Each was explicitly deferred with rationale, not dropped:
+
+- **#2522 Windows omnibus mining** — the targeted Windows fixes landed in
+  v1.67 (#2414/#2510/#2561/#2542/#2452-half); the omnibus PR still carries a
+  doctor/migration surface worth extracting. Effort M→S with CC.
+- **#2443 AskUserQuestion numbering redesign** — real mismatch (brief letters
+  vs host-rendered numbers), but a prompt-behavior redesign that shifts eval
+  baselines; needs its own PR with baseline refresh. Effort S.
+- **#2447 typecheck infra** — tsconfig + repo-wide typecheck script + latent
+  type fixes. High-value, repo-wide blast radius, own PR with bake time.
+  Effort M. Re-derive on current main (several of its fixes landed since).
+- **#2492 per-project Chromium profile** — needs an on-disk migration story
+  for the machine-wide profile default and SingletonLock scoping. Effort M.
+- **#2286 `triggers:` frontmatter** — the Claude Code router never reads the
+  key; folding voice-triggers into description costs catalog tokens. Needs a
+  maintainer token-budget decision (catalog cap is enforced). Effort S.
+- **#2378 release-tag upgrade semantics** — update-check gates on
+  main:VERSION while upgrade installs main HEAD; installs sit between
+  releases. Design decision: tag-pinned installs vs HEAD. Effort M.
+- **Feature-PR triage queue** — #2564 (/deck), #2497 (browse record — best of
+  the batch), #2476 (a11y review, unblocked by the CDP media-emulation entry
+  landed in v1.67), #2446 (Cua), #2448 (tiered outside voice), #2412 (lens
+  layer), #2241 (/grok), #2507 (pi host), #2298 (Kimi host), #2438+#2436
+  (gbrain doc-sync pair, ordered), #2442 (portable skill roots), #2534
+  (gbrain MCP routing), #2535 (outside voice for /investigate,/cso,/devex),
+  #2576 (fast-ship rework — re-evaluate against v1.66's CI speedup),
+  #2580 (land-and-deploy CI tiers — human-gate UX needs maintainer call).
+
 ### P2: Persona-fleet hostile-user harness (fork port wave 2 deferral)
 
 **What:** Port the methodology behind time-attack/gstack's 87-hostile-user
