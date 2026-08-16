@@ -491,3 +491,89 @@ describe('npm-valid drift contract (decision 11)', () => {
     expect(classifyState('1.66.0.0', '1.66.0.0', true, '9.9.9', '1.66.0')).toBe('DRIFT_UNEXPECTED');
   });
 });
+
+describe('path containment: pins and flags cannot escape the repo', () => {
+  // .gstack/version-path and .gstack/package-json-path are repo-controlled
+  // content. A cloned repo pinning '../../victim.json' — or an in-repo
+  // symlink pointing outside — must never turn a bump into an arbitrary
+  // file overwrite outside the repository.
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-contain-'));
+  const dir = path.join(outer, 'repo');
+  const victim = path.join(outer, 'victim.json');
+  afterAll(() => { try { fs.rmSync(outer, { recursive: true, force: true }); } catch { /* noop */ } });
+
+  function runFail(args: string[]): { code: number; stderr: string } {
+    try {
+      execFileSync('bun', [BIN, ...args], { cwd: dir, stdio: 'pipe' });
+      return { code: 0, stderr: '' };
+    } catch (e: any) {
+      return { code: e.status, stderr: (e.stderr || '').toString() };
+    }
+  }
+
+  function resetRepo() {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(path.join(dir, '.gstack'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'VERSION'), '1.0.0.0\n');
+    fs.writeFileSync(victim, JSON.stringify({ version: '9.9.9' }, null, 2) + '\n');
+  }
+
+  test('a ../ escape in .gstack/version-path fails exit 2 and writes nothing', () => {
+    resetRepo();
+    fs.writeFileSync(path.join(dir, '.gstack', 'version-path'), '../victim.json\n');
+    const r = runFail(['write', '--version', '1.1.0.0']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('outside the repository');
+    expect(JSON.parse(fs.readFileSync(victim, 'utf-8')).version).toBe('9.9.9');
+  });
+
+  test('an absolute path in .gstack/package-json-path fails exit 2', () => {
+    resetRepo();
+    fs.writeFileSync(path.join(dir, '.gstack', 'package-json-path'), victim + '\n');
+    const r = runFail(['write', '--version', '1.1.0.0']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('outside the repository');
+    expect(JSON.parse(fs.readFileSync(victim, 'utf-8')).version).toBe('9.9.9');
+  });
+
+  test('an in-repo symlink pointing outside fails exit 2 and never follows', () => {
+    if (process.platform === 'win32') return; // symlink creation needs privileges there
+    resetRepo();
+    fs.symlinkSync(victim, path.join(dir, 'link.json'));
+    fs.writeFileSync(path.join(dir, '.gstack', 'version-path'), 'link.json\n');
+    const r = runFail(['write', '--version', '1.1.0.0']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('outside the repository');
+    expect(JSON.parse(fs.readFileSync(victim, 'utf-8')).version).toBe('9.9.9');
+  });
+
+  test('classify refuses the same escapes (no read outside the repo)', () => {
+    resetRepo();
+    fs.writeFileSync(path.join(dir, '.gstack', 'version-path'), '../victim.json\n');
+    const r = runFail(['classify', '--base', 'main']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('outside the repository');
+  });
+
+  test('a lockfile symlinked outside the repo is skipped with a warning, not written', () => {
+    if (process.platform === 'win32') return;
+    resetRepo();
+    const outerLock = path.join(outer, 'outer-lock.json');
+    fs.writeFileSync(outerLock, JSON.stringify({ version: '1.0.0', packages: { '': { version: '1.0.0' } } }, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0' }, null, 2) + '\n');
+    fs.symlinkSync(outerLock, path.join(dir, 'package-lock.json'));
+    const res = execFileSync('bun', [BIN, 'write', '--version', '1.1.0.0'], { cwd: dir, stdio: 'pipe' });
+    expect(JSON.parse(res.toString()).packageLock).toBe(false);
+    expect(JSON.parse(fs.readFileSync(outerLock, 'utf-8')).version).toBe('1.0.0');
+  });
+
+  test('legitimate subdirectory pins still work (containment is not over-broad)', () => {
+    resetRepo();
+    fs.mkdirSync(path.join(dir, 'frontend'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'frontend', 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0' }, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, '.gstack', 'version-path'), 'frontend/package.json\n');
+    const out = execFileSync('bun', [BIN, 'write', '--version', '1.1.0'], { cwd: dir }).toString();
+    expect(JSON.parse(out).wrote).toBe('1.1.0');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'frontend', 'package.json'), 'utf-8')).version).toBe('1.1.0');
+  });
+});

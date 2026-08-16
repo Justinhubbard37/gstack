@@ -49,9 +49,9 @@
 // (1.67.0.0 → 1.67.0). classify judges drift against the translated form
 // (accepting the pre-v1.67 1:1 mirror as in-sync until the next write).
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { extractVersion, isJsonVersionPath, npmVersion, setVersionInJson } from "../lib/version-source";
 
 // 3- or 4-digit (#2501). gstack's own VERSION stays 4-digit MAJOR.MINOR.PATCH.
@@ -74,6 +74,39 @@ function argVal(args: string[], flag: string): string | undefined {
 }
 
 /**
+ * Containment guard: `.gstack/version-path` and `.gstack/package-json-path`
+ * are repo-controlled content. Without this, a cloned repo pinning
+ * `../../victim.json` — or an in-repo symlink pointing outside — turns a
+ * routine bump into an arbitrary file overwrite outside the repository.
+ * Rejects absolute paths, lexical `..` escapes, and symlink escapes (the
+ * deepest EXISTING ancestor is realpath'd, so a not-yet-created VERSION
+ * file is still checked through its parent directory).
+ */
+function assertRepoContained(cwd: string, rel: string, source: string): void {
+  const root = realpathSync(cwd);
+  const abs = resolve(root, rel);
+  const lex = relative(root, abs);
+  if (isAbsolute(rel) || lex === "" || lex.startsWith("..") || isAbsolute(lex)) {
+    fail(`${source} ('${rel}') resolves outside the repository. Refusing to read or write it.`, 2);
+  }
+  let probe = abs;
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  let real: string;
+  try {
+    real = realpathSync(probe);
+  } catch {
+    return; // vanished between existsSync and realpath — the read/write will fail honestly on its own
+  }
+  if (real !== root && !real.startsWith(root + sep)) {
+    fail(`${source} ('${rel}') resolves through a symlink to outside the repository. Refusing to read or write it.`, 2);
+  }
+}
+
+/**
  * Resolve the version file's path RELATIVE to the repo root: --version-path,
  * else .gstack/version-path, else "VERSION".
  *
@@ -87,11 +120,18 @@ function argVal(args: string[], flag: string): string | undefined {
  * Resolving once, here, keeps base and current reads in step.
  */
 function resolveVersionRel(cwd: string, explicit?: string): string {
-  if (explicit) return explicit.trim();
+  if (explicit) {
+    const rel = explicit.trim();
+    assertRepoContained(cwd, rel, "--version-path");
+    return rel;
+  }
   const pin = join(cwd, ".gstack", "version-path");
   if (existsSync(pin)) {
     const p = readFileSync(pin, "utf-8").split("\n")[0]?.trim() ?? "";
-    if (p) return p;
+    if (p) {
+      assertRepoContained(cwd, p, ".gstack/version-path");
+      return p;
+    }
   }
   return "VERSION";
 }
@@ -118,11 +158,18 @@ function readVersionFile(p: string, versionRel = "VERSION"): string {
  * hand, which is exactly the drift this tool exists to prevent.
  */
 function resolvePkgPath(cwd: string, explicit?: string): string {
-  if (explicit) return join(cwd, explicit);
+  if (explicit) {
+    const rel = explicit.trim();
+    assertRepoContained(cwd, rel, "--package-json-path");
+    return join(cwd, rel);
+  }
   const pin = join(cwd, ".gstack", "package-json-path");
   if (existsSync(pin)) {
     const p = readFileSync(pin, "utf-8").split("\n")[0]?.trim() ?? "";
-    if (p) return join(cwd, p);
+    if (p) {
+      assertRepoContained(cwd, p, ".gstack/package-json-path");
+      return join(cwd, p);
+    }
   }
   return join(cwd, "package.json");
 }
@@ -168,11 +215,25 @@ function writePkgVersion(pkgPath: string, version: string): void {
  * actually honors, so both names are covered. Returns the names synced.
  */
 const NPM_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json"];
-function syncNpmLockfiles(dir: string, version: string): string[] {
+function syncNpmLockfiles(dir: string, version: string, root: string): string[] {
   const synced: string[] = [];
   for (const name of NPM_LOCKFILES) {
     const lockPath = join(dir, name);
     if (!existsSync(lockPath)) continue;
+    // A lockfile that is a symlink out of the repo would make this write an
+    // arbitrary-file overwrite (same class as the version-path pin escape).
+    // Skip with a warning — unlike the pins, a weird lockfile shouldn't
+    // brick the whole bump.
+    try {
+      const realRoot = realpathSync(root);
+      const realLock = realpathSync(lockPath);
+      if (realLock !== realRoot && !realLock.startsWith(realRoot + sep)) {
+        process.stderr.write(`WARNING: ${name} resolves outside the repository (symlink); not synced.\n`);
+        continue;
+      }
+    } catch {
+      continue;
+    }
     const parsed = JSON.parse(readFileSync(lockPath, "utf-8")) as Record<string, unknown>;
     parsed.version = version;
     const packages = parsed.packages as Record<string, Record<string, unknown>> | undefined;
@@ -298,7 +359,7 @@ function cmdWrite(args: string[], cwd: string): void {
       writeFileSync(versionPath, setVersionInJson(readFileSync(versionPath, "utf-8"), jsonV));
       manifestWritten = true;
       // The pinned manifest's OWN lockfiles (beside it) stay in step too.
-      lockSynced = syncNpmLockfiles(dirname(versionPath), jsonV);
+      lockSynced = syncNpmLockfiles(dirname(versionPath), jsonV, cwd);
     } catch {
       fail(
         manifestWritten
@@ -342,7 +403,7 @@ function cmdWrite(args: string[], cwd: string): void {
     try {
       writePkgVersion(pkgPath, manifestV);
       pkgWritten = true;
-      lockSynced = syncNpmLockfiles(dirname(pkgPath), manifestV);
+      lockSynced = syncNpmLockfiles(dirname(pkgPath), manifestV, cwd);
     } catch {
       // Accurate recovery per failure point: classify only reads
       // package.json (never lockfiles), so "re-run and repair" is only true
@@ -398,7 +459,7 @@ function cmdRepair(args: string[], cwd: string): void {
   const manifestV = npmVersion(current);
   try {
     writePkgVersion(pkgPath, manifestV);
-    syncNpmLockfiles(dirname(pkgPath), manifestV);
+    syncNpmLockfiles(dirname(pkgPath), manifestV, cwd);
   } catch {
     fail("drift repair failed — could not update package.json/npm lockfiles.", 3);
   }
