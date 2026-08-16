@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# gstack-wtree — print a working-tree CONTENT fingerprint (a git tree hash).
+#
+# Builds a temp index seeded from HEAD, stages the full working tree into it
+# (`git add -A`, so .gitignore'd scratch stays out and UNTRACKED source is
+# included), and prints `git write-tree` of that index. Properties that make
+# this the right staleness fingerprint, vs `git rev-parse HEAD^{tree}`:
+#
+#   - Committing identical content does NOT change the fingerprint, so a
+#     record made on a dirty tree stays valid after the exact same content is
+#     committed (the /ship Step 5 -> Step 16 case).
+#   - Untracked new source files DO change the fingerprint, so "tests passed"
+#     can't stay FRESH after a new file appears.
+#   - Rebase/amend/squash that preserve content do not change it.
+#
+# The real repo index is never touched. Staged blobs land in the object store
+# as unreachable objects and get gc'd like stash churn. Exit 1 outside a git
+# repo or in a repo with no commits — callers treat that as "no fingerprint".
+set -euo pipefail
+
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+TMPIDX=$(mktemp "${TMPDIR:-/tmp}/gstack-wtree-XXXXXX")
+trap 'rm -f "$TMPIDX"' EXIT
+export GIT_INDEX_FILE="$TMPIDX"
+git -C "$TOP" read-tree HEAD 2>/dev/null || exit 1
+git -C "$TOP" add -A 2>/dev/null || exit 1
+git -C "$TOP" write-tree 2>/dev/null

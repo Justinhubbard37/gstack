@@ -394,13 +394,25 @@ plan-design-review, design-review-lite, codex-review, review, adversarial-review
 codex-plan-review):
 
 1. Find the most recent entry within the last 7 days.
-2. Extract its `commit` field.
-3. Compare against current HEAD: `git rev-list --count STORED_COMMIT..HEAD`
+2. **Content-first rule (diff-scoped rows only: `review`, `adversarial-review`,
+   `codex-review`, ship-stage entries).** If the entry has a `wtree` field AND it
+   equals the `---WTREE---` section of the output AND the entry's `dirty` is false
+   AND `---DIRTY---` is false → **CURRENT**, full stop. Identical working-tree
+   content, regardless of commit count, rebase, or amend — skip steps 3-4 for
+   this entry. Never apply the wtree rule to plan-tier rows (plan-eng-review,
+   plan-ceo-review, plan-design-review): those grade a plan file, not the repo
+   tree — they keep the 7-day logic and the commit heuristic below.
+3. Extract its `commit` field.
+4. Compare against current HEAD: `git rev-list --count STORED_COMMIT..HEAD`.
+   **If this command fails** (the stored commit was rebased away and is
+   unreachable) → grade **UNKNOWN** and treat as STALE. Do not error out of the
+   readiness check.
 
-**Staleness rules:**
+**Staleness rules (fallback path):**
 - 0 commits since review → CURRENT
 - 1-3 commits since review → RECENT (yellow if those commits touch code, not just docs)
 - 4+ commits since review → STALE (red — review may not reflect current code)
+- rev-list failed → UNKNOWN (treat as STALE)
 - No review found → NOT RUN
 
 **Critical check:** Look at what changed AFTER the last review. Run:
@@ -410,6 +422,8 @@ git log --oneline STORED_COMMIT..HEAD
 If any commits after the review contain words like "fix", "refactor", "rewrite",
 "overhaul", or touch more than 5 files — flag as **STALE (significant changes
 since review)**. The review was done on different code than what's about to merge.
+(Skip this check for entries already graded CURRENT by the content-first rule —
+same content is same content.)
 
 **Also check for adversarial review (`codex-review`).** If codex-review has been run
 and is CURRENT, mention it in the readiness report as an extra confidence signal.
