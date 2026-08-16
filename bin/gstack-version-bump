@@ -272,7 +272,7 @@ function cmdWrite(args: string[], cwd: string): void {
   const version = argVal(args, "--version");
   if (!version) fail("write requires --version <X.Y.Z.W>", 2);
   if (!VERSION_RE.test(version!)) {
-    fail(`NEW_VERSION (${version}) does not match MAJOR.MINOR.PATCH.MICRO. Aborting.`, 2);
+    fail(`NEW_VERSION (${version}) does not match MAJOR.MINOR.PATCH[.MICRO]. Aborting.`, 2);
   }
   const versionRel = resolveVersionRel(cwd, argVal(args, "--version-path"));
   const versionPath = join(cwd, versionRel);
@@ -286,17 +286,40 @@ function cmdWrite(args: string[], cwd: string): void {
     if (!existsSync(versionPath)) {
       fail(`write: ${versionRel} does not exist. Check --version-path / .gstack/version-path.`, 2);
     }
+    // Decision 11: a JSON manifest can only carry npm-valid semver. A repo
+    // whose package.json still mirrors the legacy 4-digit form and pins it as
+    // the version-path would otherwise get "1.67.0.1" written into a manifest
+    // npm rejects forever — with no drift state to catch it (a JSON source is
+    // self-consistent by construction).
+    const jsonV = npmVersion(version!);
+    let manifestWritten = false;
     let lockSynced: string[] = [];
     try {
-      writeFileSync(versionPath, setVersionInJson(readFileSync(versionPath, "utf-8"), version!));
+      writeFileSync(versionPath, setVersionInJson(readFileSync(versionPath, "utf-8"), jsonV));
+      manifestWritten = true;
       // The pinned manifest's OWN lockfiles (beside it) stay in step too.
-      lockSynced = syncNpmLockfiles(dirname(versionPath), version!);
+      lockSynced = syncNpmLockfiles(dirname(versionPath), jsonV);
     } catch {
-      fail(`write: failed to update ${versionRel} (is it valid JSON?).`, 3);
+      fail(
+        manifestWritten
+          ? `write: ${versionRel} was updated but its npm lockfiles were not (corrupt lockfile?). ` +
+            "Fix or delete the lockfile beside it, then re-run write with the same --version."
+          : `write: failed to update ${versionRel} (is it valid JSON?).`,
+        3,
+      );
+    }
+    if (jsonV !== version) {
+      process.stderr.write(
+        `write: ${versionRel} carries the npm-valid translation ${jsonV} (a JSON manifest cannot hold 4-digit ${version}). ` +
+          "Consecutive MICRO releases translate to the SAME manifest version — pin a plain VERSION file if that matters.\n",
+      );
     }
     process.stdout.write(
       JSON.stringify({
-        wrote: version,
+        wrote: jsonV,
+        // Only surfaced when a 4-digit request was translated (the healthy
+        // 3-digit-pinned path is an identity write).
+        ...(jsonV !== version ? { requestedVersion: version } : {}),
         versionPath: versionRel,
         packageJson: true,
         packageLock: lockSynced.length > 0,
@@ -315,13 +338,22 @@ function cmdWrite(args: string[], cwd: string): void {
   // VERSION keeps the full 4-digit form; it stays the source of truth.
   const manifestV = npmVersion(version!);
   if (hasPkg) {
+    let pkgWritten = false;
     try {
       writePkgVersion(pkgPath, manifestV);
+      pkgWritten = true;
       lockSynced = syncNpmLockfiles(dirname(pkgPath), manifestV);
     } catch {
+      // Accurate recovery per failure point: classify only reads
+      // package.json (never lockfiles), so "re-run and repair" is only true
+      // when package.json itself is the stale file.
       fail(
-        `failed to update ${relative(cwd, pkgPath)}/npm lockfiles. VERSION was written but the npm ` +
-          "manifests are now stale. Re-run — classify will report DRIFT_STALE_PKG and repair will sync them.",
+        pkgWritten
+          ? `VERSION and ${relative(cwd, pkgPath)} were written but the npm lockfiles were not ` +
+            "(corrupt lockfile?). classify cannot see lockfile drift — fix or delete the lockfile, " +
+            "then re-run write with the same --version."
+          : `failed to update ${relative(cwd, pkgPath)}. VERSION was written but package.json is now ` +
+            "stale. Re-run — classify will report DRIFT_STALE_PKG and repair will sync it.",
         3,
       );
     }
@@ -352,7 +384,7 @@ function cmdRepair(args: string[], cwd: string): void {
   const current = readVersionFile(versionPath, versionRel);
   if (!VERSION_RE.test(current)) {
     fail(
-      `VERSION file contents (${current}) do not match MAJOR.MINOR.PATCH.MICRO. ` +
+      `VERSION file contents (${current}) do not match MAJOR.MINOR.PATCH[.MICRO]. ` +
         "Refusing to propagate invalid semver into package.json. Fix VERSION, then re-run /ship.",
       2,
     );
