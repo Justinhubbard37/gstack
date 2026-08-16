@@ -115,6 +115,30 @@ describe('timeline-stop-hook (#2553, F5 fail-open)', () => {
     expect(timelineEntries().length).toBe(afterFirst);
   });
 
+  test('count semantics: two runs under one key, one completed — the dangler is still repaired', () => {
+    // Legacy entries carry no session field, so both runs share the same
+    // skill+session key (same-second "$$-epoch" ids collide the same way).
+    // With set semantics the first run's completion masked the second run's
+    // dangler forever; counting closes the difference.
+    fs.writeFileSync(
+      timelinePath,
+      [
+        JSON.stringify({ skill: 'review', event: 'started' }),
+        JSON.stringify({ skill: 'review', event: 'completed', outcome: 'success' }),
+        JSON.stringify({ skill: 'review', event: 'started' }),
+      ].join('\n') + '\n',
+    );
+
+    expect(runHook(stopPayload()).exitCode).toBe(0);
+    const repairs = timelineEntries().filter((e) => e.source === 'stop-hook');
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0]).toMatchObject({ skill: 'review', event: 'completed', outcome: 'unknown' });
+
+    // Idempotent under count semantics too: started=2, completed=2 → no-op.
+    expect(runHook(stopPayload()).exitCode).toBe(0);
+    expect(timelineEntries().filter((e) => e.source === 'stop-hook')).toHaveLength(1);
+  });
+
   test('exit 0 on missing timeline (nothing written, nothing created)', () => {
     const r = runHook(stopPayload());
     expect(r.exitCode).toBe(0);

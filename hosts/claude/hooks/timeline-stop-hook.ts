@@ -142,8 +142,18 @@ function main(): void {
   }
 
   // Corrupt LINES are skipped individually; a fully corrupt file repairs nothing.
-  const started = new Map<string, TimelineEntry>();
-  const completed = new Set<string>();
+  //
+  // COUNT started vs completed per key rather than treating completed as a
+  // set: keys are not unique per run — legacy entries with no session field
+  // all share the bare-skill key, and the preamble's "$$-epoch" session ids
+  // can collide within the same second. With set semantics, a key where one
+  // run completed and another dangles was NEVER repaired (the lone
+  // completion masked every dangler forever). Closing the count DIFFERENCE
+  // repairs exactly the open runs and stays idempotent: the appended
+  // completions balance the counts, so the next Stop appends nothing.
+  const startedCount = new Map<string, number>();
+  const firstStarted = new Map<string, TimelineEntry>();
+  const completedCount = new Map<string, number>();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let entry: TimelineEntry;
@@ -154,11 +164,22 @@ function main(): void {
     }
     if (!entry || typeof entry.skill !== 'string') continue;
     const key = `${entry.skill}\u0000${entry.session ?? ''}`;
-    if (entry.event === 'started' && !started.has(key)) started.set(key, entry);
-    if (entry.event === 'completed') completed.add(key);
+    if (entry.event === 'started') {
+      startedCount.set(key, (startedCount.get(key) ?? 0) + 1);
+      if (!firstStarted.has(key)) firstStarted.set(key, entry);
+    }
+    if (entry.event === 'completed') {
+      completedCount.set(key, (completedCount.get(key) ?? 0) + 1);
+    }
   }
 
-  const dangling = [...started.entries()].filter(([key]) => !completed.has(key));
+  const dangling: Array<[string, TimelineEntry]> = [];
+  for (const [key, count] of startedCount) {
+    const open = count - (completedCount.get(key) ?? 0);
+    const entry = firstStarted.get(key);
+    if (!entry) continue;
+    for (let i = 0; i < open; i++) dangling.push([key, entry]);
+  }
   if (dangling.length === 0) return;
 
   if (Date.now() - startedAt > DEADLINE_MS) {
