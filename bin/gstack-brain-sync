@@ -251,7 +251,10 @@ PYEOF
 rewrite_queue() {
   local paths_file="$1"   # staged (drained) paths, one per line
   local class_file="$2"   # classification JSON from compute_paths_to_stage
-  python3 - "$QUEUE" "$paths_file" "$class_file" "$GSTACK_HOME/.brain-sync-drops.json" <<'PYEOF' 2>/dev/null || true
+  # Fail-open by design (a failed rewrite self-corrects next run: re-stage →
+  # nothing-to-commit), but say so — a silent failure here would let the
+  # subsequent "ok/idle" status claim a drain that did not happen.
+  python3 - "$QUEUE" "$paths_file" "$class_file" "$GSTACK_HOME/.brain-sync-drops.json" <<'PYEOF' || echo "BRAIN_SYNC: warning: queue rewrite failed — entries retained; next run re-drains" >&2
 import json, os, sys, time
 queue, paths_file, class_file, drops_file = sys.argv[1:5]
 
@@ -275,14 +278,27 @@ for group in (classified.get("dropped", {}) or {}).values():
 processed = staged | dropped
 
 kept = []
-for line in lines(queue):   # LIVE re-read: concurrent enqueues survive (F3)
+seen_lines = set()
+unparseable = 0
+# LIVE re-read narrows (not fully closes) the concurrent-append window: the
+# lockless enqueue can still land on the old inode between this read and the
+# os.replace below. Vastly better than the old whole-queue truncation.
+for line in lines(queue):
+    if line in seen_lines:
+        continue            # identical duplicate lines collapse on rewrite
     try:
         p = json.loads(line).get("file")
     except Exception:
+        unparseable += 1
         kept.append(line)   # unparseable line: keep, never destroy
+        seen_lines.add(line)
         continue
     if not isinstance(p, str) or p in retained or p not in processed:
         kept.append(line)
+        seen_lines.add(line)
+if unparseable:
+    import sys as _sys
+    print(f"BRAIN_SYNC: {unparseable} unparseable queue line(s) held (inspect {queue})", file=_sys.stderr)
 
 tmp = queue + ".tmp." + str(os.getpid())
 with open(tmp, "w") as f:
@@ -361,19 +377,46 @@ subcmd_once() {
   # every other push; a receipt REFUSAL skips the retry without blocking the
   # rest of the drain (local staging must not wedge on receipt problems).
   # Guards: origin/<branch> may not exist yet (first sync, deleted remote).
-  local det_branch det_unpushed
+  #
+  # Throttled: the preamble runs --once at EVERY skill boundary, so an
+  # unthrottled retry would pay a full network push attempt per boundary in
+  # exactly the steady states this targets (offline, broken auth) — and a
+  # captive-portal push can block 30-75s against the header's "<1s when
+  # idle" promise. Attempts are recorded (success or fail) and retried at
+  # most every 10 minutes; the push itself never prompts for credentials and
+  # bounds stalled transfers via git's own low-speed limits (portable — stock
+  # macOS ships no `timeout` binary).
+  #
+  # Author-scoped: only commits authored by gstack-brain-sync retry here. A
+  # user's manual commit in ~/.gstack rides along when a real drain pushes,
+  # as before — the detector must not auto-publish work it didn't create.
+  local det_branch det_unpushed det_now det_last
   det_branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   if [ -n "$det_branch" ] && git -C "$GSTACK_HOME" rev-parse --verify --quiet "origin/$det_branch" >/dev/null 2>&1; then
-    det_unpushed=$(git -C "$GSTACK_HOME" rev-list --count "origin/$det_branch..HEAD" 2>/dev/null || echo 0)
+    det_unpushed=$(git -C "$GSTACK_HOME" rev-list --count --author="gstack-brain-sync" "origin/$det_branch..HEAD" 2>/dev/null || echo 0)
     case "$det_unpushed" in ''|*[!0-9]*) det_unpushed=0 ;; esac
-    if [ "$det_unpushed" -gt 0 ]; then
+    det_now=$(date +%s)
+    det_last=$(cat "$GSTACK_HOME/.brain-last-push-attempt" 2>/dev/null || echo 0)
+    case "$det_last" in ''|*[!0-9]*) det_last=0 ;; esac
+    if [ "$det_unpushed" -gt 0 ] && [ $(( det_now - det_last )) -ge 600 ]; then
+      echo "$det_now" > "$GSTACK_HOME/.brain-last-push-attempt" 2>/dev/null || true
       local det_host
       det_host=$(remote_host)
       if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$det_host" curated-memory-git-push "artifacts_sync_mode!=off" \
-          bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
+          bash -c 'GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
         date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
       fi
     fi
+  fi
+
+  # Empty-queue fast path: this is the steady state at every skill boundary.
+  # Skipping compute/rewrite here is safe — with zero queue lines there is
+  # nothing to classify, retain, or drop, and a concurrent append after this
+  # check simply waits for the next boundary. (The detector above already ran:
+  # its whole point is re-pushing stranded commits when the queue is empty.)
+  if [ ! -s "$QUEUE" ]; then
+    write_status "idle" "queue empty"
+    exit 0
   fi
 
   local paths_file class_file

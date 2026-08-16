@@ -596,7 +596,51 @@ describe('#2549 queue integrity', () => {
       fs.chmodSync(path.join(tmpHome, 'security'), 0o700);
     }
 
-    // Receipts healthy: detector delivers.
+    // Receipts healthy: detector delivers. The refused attempt above stamped
+    // the 10-minute throttle (deliberately — refusals must not busy-loop the
+    // network at every skill boundary), so model the interval passing.
+    fs.writeFileSync(path.join(tmpHome, '.brain-last-push-attempt'), '0');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+  });
+
+  test('detector attempts are throttled to one per interval', () => {
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"a","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+
+    // Strand a commit behind a rejecting remote.
+    const hook = path.join(bareRemote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"b","ts":"2026-01-02T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+
+    // First empty-queue run: detector attempts (stamps the throttle), pushes.
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    const stamp1 = fs.readFileSync(path.join(tmpHome, '.brain-last-push-attempt'), 'utf-8');
+    expect(Number(stamp1)).toBeGreaterThan(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+
+    // Strand another; an immediate second run must NOT attempt (stamp fresh).
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"c","ts":"2026-01-03T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+    const stampBefore = fs.readFileSync(path.join(tmpHome, '.brain-last-push-attempt'), 'utf-8');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    // Throttled: stamp unchanged, commit still stranded.
+    expect(fs.readFileSync(path.join(tmpHome, '.brain-last-push-attempt'), 'utf-8')).toBe(stampBefore);
+    expect(Number(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim())).toBeGreaterThan(0);
+
+    // Interval passed: delivers.
+    fs.writeFileSync(path.join(tmpHome, '.brain-last-push-attempt'), '0');
     expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
     expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
   });
