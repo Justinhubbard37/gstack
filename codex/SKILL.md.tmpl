@@ -57,11 +57,12 @@ source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null && _gstack_cod
 
 ---
 
-## Step 0.5: Auth probe + version check
+## Step 0.5: Auth probe + model probe + version check
 
-Before building expensive prompts, verify Codex has valid auth AND the installed
-CLI version isn't in the known-bad list. Sourcing `gstack-codex-probe` loads the
-shared helpers that both `/codex` and `/autoplan` use.
+Before building expensive prompts, verify Codex has valid auth, that the account
+can actually USE its configured model, AND the installed CLI version isn't in the
+known-bad list. Sourcing `gstack-codex-probe` loads the shared helpers that both
+`/codex` and `/autoplan` use.
 
 ```bash
 _TEL=$(~/.claude/skills/gstack/bin/gstack-config get telemetry 2>/dev/null || echo off)
@@ -70,12 +71,24 @@ source ~/.claude/skills/gstack/bin/gstack-codex-probe
 if ! _gstack_codex_auth_probe >/dev/null; then
   _gstack_codex_log_event "codex_auth_failed"
   echo "AUTH_FAILED"
+else
+  _gstack_codex_model_probe   # ~10s round trip on first run, cached 1h (#2477)
 fi
 _gstack_codex_version_check   # warns if known-bad, non-blocking
 ```
 
 If the output contains `AUTH_FAILED`, stop and tell the user:
 "No Codex authentication found. Run `codex login` or set `$CODEX_API_KEY` / `$OPENAI_API_KEY`, then re-run this skill."
+
+If the output contains `MODEL_UNUSABLE`, stop — auth exists but the account
+cannot use the configured model (a stale `model =` pin in
+`~/.codex/config.toml` is the usual cause). Relay the probe's HINT lines and
+follow the "Model not supported (HTTP 400)" recovery steps in
+`## Error Handling` below. Running the modes anyway just burns four
+invocations on the same 400 (#2477).
+
+`MODEL_PROBE_INCONCLUSIVE` is non-blocking (timeout/transient network): pass
+the warning through and continue.
 
 If the version check printed a `WARN:` line, pass it through to the user verbatim
 (non-blocking — Codex may still work, but the user should upgrade).

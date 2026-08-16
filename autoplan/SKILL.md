@@ -1157,6 +1157,12 @@ elif ! _gstack_codex_auth_probe >/dev/null; then
   _gstack_codex_log_event "codex_auth_failed"
   echo "[codex-unavailable: auth missing] — proceeding with Claude subagent only. Run \`codex login\` or set \$CODEX_API_KEY to enable dual-voice review."
   _CODEX_AVAILABLE=false
+# Round-trip model probe (#2477): auth can pass while the account's configured
+# model is rejected with an HTTP 400 (stale `model =` pin in ~/.codex/config.toml).
+# ~10s on first run, cached 1h; timeouts fail open (probe returns 0).
+elif ! _gstack_codex_model_probe; then
+  echo "[codex-unavailable: configured model rejected] — proceeding with Claude subagent only. Fix the \`model =\` pin in ~/.codex/config.toml (see [notice.model_migrations] there for the replacement)."
+  _CODEX_AVAILABLE=false
 else
   _gstack_codex_version_check   # non-blocking warn if known-bad
   _CODEX_AVAILABLE=true
