@@ -45,6 +45,95 @@ wave"). Each was explicitly deferred with rationale, not dropped:
   #2576 (fast-ship rework — re-evaluate against v1.66's CI speedup),
   #2580 (land-and-deploy CI tiers — human-gate UX needs maintainer call).
 
+### P2: v1.67 adversarial-review residuals (verified, deferred with rationale)
+
+Filed at v1.67 ship time from the Codex + Claude adversarial passes. Each was
+verified real but needs design input or device access the wave lacked:
+
+- **brain-sync enqueue lock** — the drain's surgical rewrite closes the reader
+  side, but a lockless producer appending between the live re-read and the
+  tmp+mv can still orphan one record. Needs a shared enqueue/drain lock
+  (mkdir-style, like the drain's). Effort S.
+- **iOS tap routing across windows** — Bridges template's frontmostWindow can
+  swallow taps when a keyboard/menu/transparent overlay window is topmost but
+  doesn't handle the coordinate. Needs hit-test-aware routing + real-device
+  verification. Effort M. (Related: the multi-window rewrite has no static
+  pins — see the test-gap backlog below.)
+- **pair-agent implicit --force-restart** — pair-agent auto-kills a healthy
+  headless daemon (tabs/cookies) with no consent, contradicting the #2219
+  iron rule it now sits beside. Needs a consent prompt or explicit-flag
+  requirement; UX call. Effort S.
+- **bin-context slugFromEnvironment walk-up parity (win32)** — the native
+  fallback slugs the INNERMOST repo while bash gstack-slug walks to the
+  outermost canonical remote; nested/vendored repos split stores. Effort S.
+- **hasRemoteOnlyGbrainMcp is machine-global** — one project's remote gbrain
+  registration reclassifies broken local engines as thin-client everywhere;
+  also confirm Claude Code's user-vs-project MCP precedence against
+  brain-cache's user-first assumption. Effort S.
+- **next-version git-fallback breadth** — the degraded path counts every
+  remote-tracking ref on every remote (stale experiment branches inflate the
+  allocation) and a failed 3-digit base read flips width to 4. Warned today;
+  tighten to origin + width-pin. Effort S.
+- **Stop-hook registration pins the setup-time absolute path** — registering
+  from a dev worktree bakes that path into settings.json; deleting the
+  worktree leaves a dead hook erroring on every session stop until removed.
+  Register the global-install path or re-point on upgrade. Effort S.
+- **Accepted threat-model notes (documented, no action planned):**
+  redact-prepush treats content pushed to ANY private remote as already-left
+  (accident-only threat model); a parcel-shaped twin within 400 chars can
+  suppress phone redaction (WARN-tier pattern, attacker-influence accepted);
+  codex-probe's 400-signature grep can misread a transient proxy 400 as
+  MODEL_UNUSABLE (bounded by the 15-min negative-cache TTL).
+
+### P2: v1.67 coverage-audit test-gap backlog (5-agent sweep, ranked)
+
+The wave's Step-7 coverage audit (5 subsystem agents, ~700 changed paths,
+~84% covered) ranked these residual gaps. None block v1.67 (the behaviors
+shipped verified by hand or adjacent tests); each is a cheap pin against
+silent regression:
+
+- **setup Playwright bootstrap block** — `_clear_playwright_quarantine`,
+  `_PW_LOCK` stale-holder reclaim, `_kill_tree`/`_wait_with_deadline`, Ubuntu
+  26.04 platform override: zero test references. The P0 #2554 heal's shell
+  half. Effort S each.
+- **redact-prepush `scanAddedLines` slicing** — the >1MiB catch-up-diff chunk
+  path (the reason the function exists) is unexercised; a regression
+  reintroduces blocking-while-unscanned. Effort S.
+- **supabase telemetry-ingest edge function** — zero tests; producer caps at
+  200 chars vs ingest's 500 (dead server cap); no column↔migration pin.
+- **gbrain-repo-policy-client** — no direct test file; the spawn-failed vs
+  unreadable split (its raison d'être) and win32 bash-wrapping unpinned.
+- **extension client half of token bootstrap** — `POST /extension-token` 403
+  → disconnected path untested (server half is exhaustively pinned); also
+  pin manifest `key` ↔ `GSTACK_EXTENSION_ID` via extension-id.ts. Effort S.
+- **`assertJsOriginAllowed`** — this wave made the js/eval origin gate
+  mandatory; the gate itself has zero direct tests. Effort S.
+- **`runBoundedChromiumReinstall`** — every heal test stubs it; the 120s
+  deadline + process-group SIGKILL + spawn-error branch never execute.
+- **CI three-way image-tag drift** — ci-image.yml + evals.yml +
+  evals-periodic.yml each carry the hashFiles tag expression, synced by
+  comment only. One test reading all three. Effort S.
+- **evals.yml matrix census** — the silent-never-ran class (see the two
+  files this wave had to re-add) has no membership test.
+- **design-doc-discovery resolver** — new anti-drift block, zero tests for
+  the -nt freshness rule or cross-render identity.
+- **Bridges.swift multi-window rewrite** — no static pins for
+  orderedWindows/searchRoots ordering; DebugBridgeTouch's `#if !defined(DEBUG)`
+  guard and Package.swift's `.define("DEBUG")` have no tripwire (Guideline
+  2.5.1 exposure on revert); parity test runs periodic-lane only.
+- **Smaller pins:** gstack-egress `sanitizeForDisplay`; freeze-dir tilde
+  expansion; gstack-config `pair_agent` key + space-bearing values;
+  session-cookie-store tripwire scope (points at the wrapper, not the
+  factory); redact-patterns `/^pass(word)?$/i` placeholder loosening +
+  compact-timestamp negative; fs-atomic adoption tripwire; tracker-guard
+  `safeSource`; eval-watch `PARTIAL_PATH`; `killProcessGroup`;
+  make-pdf orchestrator `PAYLOAD_TMP_DIR` + CJK stack + smartypants NUL;
+  gbrain-guards `gbrainHome()`; gbrain-local-status `"timeout"` exclusion;
+  meta-commands state-load tripwire re-point; flushBuffers/audit 0600 census;
+  openclaw `version:` frontmatter drop (pre-wave, main-side — restore
+  extraFields or record as intentional); terse-build's stale "all 4" set
+  (main-side 5th terse-gated resolver).
+
 ### P2: Persona-fleet hostile-user harness (fork port wave 2 deferral)
 
 **What:** Port the methodology behind time-attack/gstack's 87-hostile-user
