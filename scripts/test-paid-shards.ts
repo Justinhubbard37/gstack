@@ -59,6 +59,7 @@ import {
   exactTestFileSelectors,
   forwardAndClassify,
   installChildSignalForwarding,
+  isTerminationRequested,
   killProcessGroup,
   strictTestExitCode,
 } from './test-strict-output';
@@ -517,6 +518,10 @@ export async function runPaidShards(
   let next = 0;
   const worker = async (): Promise<void> => {
     while (true) {
+      // Cancellation (SIGINT/SIGTERM) must stop the RUN: the signal
+      // forwarders kill in-flight children, and this guard stops the pool
+      // from launching replacement shards that would keep burning API spend.
+      if (isTerminationRequested()) return;
       const index = next;
       next += 1;
       if (index >= shards.length) return;

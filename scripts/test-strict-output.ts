@@ -52,24 +52,68 @@ const DEFAULT_TERMINATION_TIMER: TerminationTimerApi = {
 };
 
 /**
+ * Per-source termination bookkeeping, shared across every forwarder bound to
+ * the same source. Installing ANY signal listener suppresses Node's default
+ * terminate-on-SIGINT/SIGTERM, so without this the parent runner survived
+ * cancellation: it killed the current child, then kept LAUNCHING new shards
+ * (observed: paid runs continuing to burn API spend after Ctrl-C). The first
+ * signal now also schedules the parent's own exit after the children's
+ * SIGKILL grace, and runners consult isTerminationRequested() before
+ * launching more work.
+ */
+interface SourceTerminationState {
+  requested: boolean;
+  exitScheduled: boolean;
+}
+const SOURCE_TERMINATION_STATE = new WeakMap<TerminationSignalSource, SourceTerminationState>();
+function terminationStateFor(source: TerminationSignalSource): SourceTerminationState {
+  let state = SOURCE_TERMINATION_STATE.get(source);
+  if (!state) {
+    state = { requested: false, exitScheduled: false };
+    SOURCE_TERMINATION_STATE.set(source, state);
+  }
+  return state;
+}
+export function isTerminationRequested(source: TerminationSignalSource = process): boolean {
+  return SOURCE_TERMINATION_STATE.get(source)?.requested ?? false;
+}
+const signalExitCode = (signal: ForwardedTerminationSignal): number =>
+  128 + (signal === 'SIGINT' ? 2 : 15);
+
+/**
  * Bind one active child to the parent's termination lifecycle. SIGINT and
  * SIGTERM get a grace period so Bun can clean up; a repeated signal, timeout,
  * or synchronous parent exit uses SIGKILL so the child cannot be orphaned.
+ * The parent itself exits shortly after the grace window (or immediately on
+ * a repeated signal) — cancellation must terminate the RUN, not just the
+ * currently-running children.
  */
 export function installChildSignalForwarding(
   child: Pick<ChildProcess, 'kill'>,
   source: TerminationSignalSource = process,
   timer: TerminationTimerApi = DEFAULT_TERMINATION_TIMER,
   graceMs = 5_000,
+  exitImpl: (code: number) => void = (code) => process.exit(code),
 ): ChildSignalForwarding {
   let receivedSignal: ForwardedTerminationSignal | null = null;
   let forceTimer: unknown = null;
   let disposed = false;
 
+  const scheduleParentExit = (signal: ForwardedTerminationSignal, delayMs: number): void => {
+    const state = terminationStateFor(source);
+    state.requested = true;
+    if (state.exitScheduled) return;
+    state.exitScheduled = true;
+    // Never cancelled by dispose(): once cancellation is requested, the run
+    // is going down even if this particular shard finishes cleanly first.
+    timer.schedule(() => exitImpl(signalExitCode(signal)), delayMs);
+  };
+
   const forward = (signal: ForwardedTerminationSignal): void => {
     if (disposed) return;
     if (receivedSignal !== null) {
       child.kill('SIGKILL');
+      scheduleParentExit(signal, 0);
       return;
     }
     receivedSignal = signal;
@@ -78,6 +122,8 @@ export function installChildSignalForwarding(
       forceTimer = null;
       child.kill('SIGKILL');
     }, graceMs);
+    // Exit AFTER the children's SIGKILL grace so the group kills land first.
+    scheduleParentExit(signal, graceMs + 1_000);
   };
   const onSigint = () => forward('SIGINT');
   const onSigterm = () => forward('SIGTERM');

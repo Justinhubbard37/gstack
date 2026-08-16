@@ -77,13 +77,14 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { isPaidTestFile } from '../test/helpers/paid-test-set';
 import {
   BunTestOutputClassifier,
   exactTestFileSelectors,
   installChildSignalForwarding,
+  isTerminationRequested,
   killProcessGroup,
   strictTestExitCode,
   stripAnsiLine,
@@ -1081,14 +1082,36 @@ async function main(): Promise<number> {
     })),
   );
   let worst = Math.max(...outcomes.map((o) => exitCodeFor(o.status)));
-  if (mutators.length > 0) {
+  // Cancellation stops the run: don't launch the serial tree-mutating shard
+  // after a SIGINT/SIGTERM already killed the parallel phase.
+  if (mutators.length > 0 && !isTerminationRequested()) {
     const mutatorOutcome = await runFreeShard(mutators, totalShards, totalShards, {
       wallTimeoutMs: shardTimeout(mutators.length),
       verbose: options.verbose,
     });
     worst = Math.max(worst, exitCodeFor(mutatorOutcome.status));
+    if (mutatorOutcome.status !== 'passed') {
+      // Mutator safety rests on each test restoring default state itself; a
+      // SIGKILL at the wall deadline (or a mid-regeneration crash) defeats
+      // that by construction. Say so, loudly, before someone commits
+      // regenerated SKILL.md / .agents artifacts by accident.
+      const dirty = spawnSyncGitStatusGenerated();
+      if (dirty.length > 0) {
+        console.error('[test:free] ⚠ tree-mutating shard did not finish cleanly — generated artifacts may be mid-regeneration:');
+        for (const line of dirty.slice(0, 20)) console.error(`[test:free]   ${line}`);
+        console.error('[test:free]   restore with: bun run gen:skill-docs (or git checkout -- <paths>)');
+      }
+    }
   }
   return worst;
+}
+
+/** Dirty generated artifacts (SKILL.md / host outputs) after a failed mutator shard. */
+function spawnSyncGitStatusGenerated(): string[] {
+  const result = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' });
+  if (result.status !== 0 || !result.stdout) return [];
+  return result.stdout.split('\n').filter((line) =>
+    /SKILL\.md$/.test(line) || line.includes('.agents/') || line.includes('.factory/'));
 }
 
 if (import.meta.main) {

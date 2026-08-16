@@ -8,7 +8,14 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { BunTestOutputClassifier, strictTestExitCode } from '../scripts/test-strict-output';
+import {
+  BunTestOutputClassifier,
+  installChildSignalForwarding,
+  isTerminationRequested,
+  strictTestExitCode,
+  type TerminationSignalSource,
+  type TerminationTimerApi,
+} from '../scripts/test-strict-output';
 
 describe('strictTestExitCode', () => {
   it('trusts a clean zero exit when the expected file count ran', () => {
@@ -81,5 +88,76 @@ describe('BunTestOutputClassifier', () => {
     const summary = c.end();
     expect(summary.terminalFileCounts).toEqual([2]);
     expect(strictTestExitCode(0, summary, 2)).toBe(0);
+  });
+});
+
+describe('installChildSignalForwarding — cancellation terminates the RUN', () => {
+  // Installing any SIGINT/SIGTERM listener suppresses Node's default
+  // terminate-on-signal. Pre-fix, the forwarder killed the current child and
+  // the parent LIVED ON — the paid worker pool kept launching API-burning
+  // shards after Ctrl-C. The parent must schedule its own exit and expose
+  // isTerminationRequested() so launch loops stop taking new work.
+  type Handler = () => void;
+  const makeFakes = () => {
+    const listeners = new Map<string, Handler[]>();
+    const source: TerminationSignalSource = {
+      on: (event, listener) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      },
+      off: (event, listener) => {
+        listeners.set(event, (listeners.get(event) ?? []).filter((l) => l !== listener));
+      },
+    };
+    const emit = (event: string) => (listeners.get(event) ?? []).forEach((l) => l());
+    const scheduled: Array<{ callback: () => void; delayMs: number; cancelled: boolean }> = [];
+    const timer: TerminationTimerApi = {
+      schedule: (callback, delayMs) => {
+        const handle = { callback, delayMs, cancelled: false };
+        scheduled.push(handle);
+        return handle;
+      },
+      cancel: (handle) => {
+        (handle as { cancelled: boolean }).cancelled = true;
+      },
+    };
+    const kills: string[] = [];
+    const child = { kill: (sig?: unknown) => { kills.push(String(sig)); return true; } };
+    const exits: number[] = [];
+    return { source, emit, timer, scheduled, kills, child, exits, exit: (code: number) => { exits.push(code); } };
+  };
+
+  it('first signal kills the child, marks termination, and schedules parent exit after the grace', () => {
+    const f = makeFakes();
+    installChildSignalForwarding(f.child, f.source, f.timer, 5_000, f.exit);
+    expect(isTerminationRequested(f.source)).toBe(false);
+    f.emit('SIGTERM');
+    expect(f.kills).toEqual(['SIGTERM']);
+    expect(isTerminationRequested(f.source)).toBe(true);
+    // Two timers: child SIGKILL grace (5s) and parent exit (grace + 1s).
+    const delays = f.scheduled.map((s) => s.delayMs);
+    expect(delays).toContain(5_000);
+    expect(delays).toContain(6_000);
+    const parentExit = f.scheduled.find((s) => s.delayMs === 6_000)!;
+    parentExit.callback();
+    expect(f.exits).toEqual([143]);
+  });
+
+  it('parent exit fires even when the shard disposes cleanly first', () => {
+    const f = makeFakes();
+    const forwarding = installChildSignalForwarding(f.child, f.source, f.timer, 5_000, f.exit);
+    f.emit('SIGINT');
+    forwarding.dispose();
+    const parentExit = f.scheduled.find((s) => s.delayMs === 6_000)!;
+    expect(parentExit.cancelled).toBe(false);
+    parentExit.callback();
+    expect(f.exits).toEqual([130]);
+  });
+
+  it('one parent exit across many concurrent forwarders on the same source', () => {
+    const f = makeFakes();
+    installChildSignalForwarding(f.child, f.source, f.timer, 5_000, f.exit);
+    installChildSignalForwarding({ kill: () => true }, f.source, f.timer, 5_000, f.exit);
+    f.emit('SIGTERM');
+    expect(f.scheduled.filter((s) => s.delayMs === 6_000).length).toBe(1);
   });
 });
