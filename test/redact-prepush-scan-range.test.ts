@@ -73,6 +73,15 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+// Live-FORMAT fakes assembled at runtime so the pushed diff of THIS file never
+// contains a credential-shaped literal — the pre-push guard scans diff bytes,
+// and the v1.64 wave's dogfood rule stands: assemble the fixture, never bypass
+// the guard. The runtime strings stay live-format for the hook under test.
+const FAKE_DB_URL = ["postgresql://user:pass", "@db.example.com/x"].join("");
+const FAKE_AWS_SECRETX = ["AKIA", "IOSFODNN7SECRETX"].join("");
+const FAKE_AWS_RESOLV = ["AKIA", "IOSFODNN7RESOLV"].join("");
+const FAKE_AWS_NOREMOT = ["AKIA", "IOSFODNN7NOREMOT"].join("");
+
 /** Give the repo an "origin" whose main carries a fixture we did not write. */
 function setUpRemoteWithForeignFixture(): void {
   const remote = mkdtempSync(join(tmpdir(), "gstack-prepush-remote-"));
@@ -80,7 +89,7 @@ function setUpRemoteWithForeignFixture(): void {
   run(["remote", "add", "origin", remote]);
   run(["push", "-q", "origin", "main"]);
   // Someone else lands a placeholder connection string on main.
-  commit("fixtures/db.ts", 'export const URL = "postgresql://user:pass@db.example.com/x";\n', "someone else's fixture");
+  commit("fixtures/db.ts", `export const URL = "${FAKE_DB_URL}";\n`, "someone else's fixture");
   run(["push", "-q", "origin", "main"]);
   run(["fetch", "-q", "origin"]);
 }
@@ -95,7 +104,7 @@ describe("a catch-up merge does not re-scan already-published content", () => {
 
     const scanned = addedOnly(addedLinesFromNewCommits(dir));
     expect(scanned).toContain("export const mine = 1;");
-    expect(scanned).not.toContain("postgresql://user:pass@db.example.com/x");
+    expect(scanned).not.toContain(FAKE_DB_URL);
   });
 
   test("the old two-dot range DID re-scan it — this is the bug", () => {
@@ -107,7 +116,7 @@ describe("a catch-up merge does not re-scan already-published content", () => {
     // origin/feature does not exist yet, so the old code diffed against the
     // remote's main — dragging in every catch-up commit.
     const scanned = addedOnly(addedLinesFromTwoDot(dir, "HEAD~2"));
-    expect(scanned).toContain("postgresql://user:pass@db.example.com/x");
+    expect(scanned).toContain(FAKE_DB_URL);
   });
 });
 
@@ -115,9 +124,9 @@ describe("narrowing the range does not narrow coverage", () => {
   test("a secret in a new commit is still scanned", () => {
     setUpRemoteWithForeignFixture();
     run(["checkout", "-q", "-b", "feature", "main"]);
-    commit("leak.ts", 'const k = "AKIAIOSFODNN7SECRETX";\n', "oops");
+    commit("leak.ts", `const k = "${FAKE_AWS_SECRETX}";\n`, "oops");
 
-    expect(addedOnly(addedLinesFromNewCommits(dir))).toContain("AKIAIOSFODNN7SECRETX");
+    expect(addedOnly(addedLinesFromNewCommits(dir))).toContain(FAKE_AWS_SECRETX);
   });
 
   test("a secret introduced while RESOLVING a merge is still scanned", () => {
@@ -138,15 +147,15 @@ describe("narrowing the range does not narrow coverage", () => {
     run(["fetch", "-q", "origin"]);
     run(["checkout", "-q", "feature"]);
     spawnSync("git", ["merge", "--no-edit", "main"], { cwd: dir, encoding: "utf8" }); // conflicts
-    writeFileSync(join(dir, "conflict.txt"), 'resolved AKIAIOSFODNN7RESOLV\n');
+    writeFileSync(join(dir, "conflict.txt"), `resolved ${FAKE_AWS_RESOLV}\n`);
     run(["add", "conflict.txt"]);
     run(["commit", "-q", "--no-edit"]);
 
-    expect(addedOnly(addedLinesFromNewCommits(dir))).toContain("AKIAIOSFODNN7RESOLV");
+    expect(addedOnly(addedLinesFromNewCommits(dir))).toContain(FAKE_AWS_RESOLV);
   });
 
   test("everything is scanned when no remote exists at all", () => {
-    commit("leak.ts", 'const k = "AKIAIOSFODNN7NOREMOT";\n', "no remote");
-    expect(addedOnly(addedLinesFromNewCommits(dir))).toContain("AKIAIOSFODNN7NOREMOT");
+    commit("leak.ts", `const k = "${FAKE_AWS_NOREMOT}";\n`, "no remote");
+    expect(addedOnly(addedLinesFromNewCommits(dir))).toContain(FAKE_AWS_NOREMOT);
   });
 });
