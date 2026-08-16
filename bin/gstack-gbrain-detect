@@ -288,17 +288,23 @@ function main(): void {
 }
 
 // --is-ok: live engine-status gate. Exits 0 iff gbrain is usable ("ok";
-// "timeout" — a slow-but-healthy engine, #1964; or "thin-client" — remote-HTTP
-// MCP brain with no local engine by design, #2051 — neither slow nor remote
-// must silently suppress brain features), 1 otherwise. Runs detection live
-// (never reads the possibly-stale gbrain-detection.json), so callers — setup,
-// bin/dev-setup, and `gstack-config gbrain-refresh` — can decide whether to
-// render the gbrain :user variant without duplicating the JSON grep.
-// Prints nothing on stdout.
+// "timeout" — a slow-but-healthy engine, #1964; "thin-client" — remote-HTTP
+// MCP brain with no local engine by design, #2051; or "engine-locked" —
+// PGLite is single-writer, so a live `gbrain serve` (typically an MCP
+// server) holds the embedded DB, #2456 — gbrain is installed and healthy in
+// all four; none must silently suppress brain features), 1 otherwise. Runs
+// detection live (never reads the possibly-stale gbrain-detection.json), so
+// callers — setup, bin/dev-setup, and `gstack-config gbrain-refresh` — can
+// decide whether to render the gbrain :user variant without duplicating the
+// JSON grep. Prints nothing on stdout.
 if (process.argv.includes("--is-ok")) {
   const noCache = process.env.GSTACK_DETECT_NO_CACHE === "1";
   const status = localEngineStatus({ noCache });
-  process.exit(status === "ok" || status === "timeout" || status === "thin-client" ? 0 : 1);
+  process.exit(
+    status === "ok" || status === "timeout" || status === "thin-client" || status === "engine-locked"
+      ? 0
+      : 1,
+  );
 }
 
 main();

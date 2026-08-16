@@ -44,14 +44,14 @@ function loadGbrainOverride(): { detected: boolean } {
   try {
     const json = JSON.parse(fs.readFileSync(detectionPath, 'utf-8')) as { gbrain_local_status?: string };
     // "timeout" = slow-but-healthy engine (#1964); "thin-client" = remote-HTTP
-    // MCP brain with no local engine by design (#2051). Both usable — same
-    // treatment as "ok", matching gstack-gbrain-detect --is-ok.
-    return {
-      detected:
-        json.gbrain_local_status === 'ok' ||
-        json.gbrain_local_status === 'timeout' ||
-        json.gbrain_local_status === 'thin-client',
-    };
+    // MCP brain with no local engine by design (#2051); "engine-locked" = same
+    // class (#2456): PGLite is single-writer, so a live `gbrain serve` (e.g.
+    // an MCP server) owns the embedded DB — gbrain is installed and healthy,
+    // a legitimate holder has the lock, so a transient lock must not silently
+    // strip brain blocks from every SKILL.md. All usable — same treatment as
+    // "ok", matching gstack-gbrain-detect --is-ok.
+    const USABLE = ['ok', 'timeout', 'thin-client', 'engine-locked'];
+    return { detected: USABLE.includes(json.gbrain_local_status ?? '') };
   } catch {
     return { detected: false };
   }
