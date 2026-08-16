@@ -1602,7 +1602,26 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       console.log('No daemon running (cleaned stale state) — nothing to stop.');
       process.exit(0);
     }
-    // Live daemon → fall through to the normal sendCommand('stop') path.
+    // stop --force-restart on a LIVE daemon (healthy or busy): kill it and
+    // clean up right here. Falling through would hand ensureServer() the
+    // force-restart flag, which kills the daemon and then BOOTS A FRESH ONE
+    // (daemon + Chromium, multi-second churn) just so sendCommand('stop')
+    // can shut it down again — the #2254 churn in force clothing, and
+    // gstack-upgrade's Step 4.8 sends users down exactly this path when a
+    // stale daemon is busy. The desired end state is "no daemon"; get there
+    // directly.
+    if (isProcessAlive(stopState.pid) && globalFlags.forceRestart) {
+      await killServer(stopState.pid);
+      // Reap the orphaned Chromium child + clear its profile locks so the
+      // NEXT launch is clean (same cleanup as the disconnect force path).
+      await killOrphanChromium();
+      cleanChromiumProfileLocks();
+      safeUnlinkQuiet(config.stateFile);
+      console.log('Daemon stopped (forced — tabs/cookies/logins discarded).');
+      process.exit(0);
+    }
+    // Live daemon without --force-restart → fall through to the normal
+    // sendCommand('stop') path (graceful shutdown; busy semantics apply).
   }
 
   // Special case: chain reads from stdin

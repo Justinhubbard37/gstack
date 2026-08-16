@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { isProcessAlive } from '../src/error-handling';
 
 function runCli(args: string[], env: Record<string, string>, timeoutMs = 30_000):
   Promise<{ code: number; stdout: string; stderr: string }> {
@@ -93,6 +94,50 @@ describe('#2254 stop on a dead daemon', () => {
       expect(result.stderr).not.toContain('Starting server');
       expect(result.stderr).not.toContain('Restarting');
     } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe('stop --force-restart on a LIVE daemon', () => {
+  test('kills it directly — never boots a fresh daemon just to stop it', async () => {
+    // A live-but-BUSY daemon: the pid is alive but nothing answers /health.
+    // Pre-fix, stop --force-restart fell through to ensureServer(), whose
+    // force-restart path killed the daemon and then STARTED a fresh one
+    // (daemon + Chromium) so sendCommand('stop') could stop it again —
+    // exactly what gstack-upgrade Step 4.8 triggers on a stale-busy daemon.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-stop-force-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    // Portable long-lived child standing in for the wedged daemon process.
+    const wedged = spawn('bun', ['-e', 'await Bun.sleep(300000)'], { stdio: 'ignore' });
+    try {
+      const port = await closedPort();
+      fs.writeFileSync(stateFile, JSON.stringify({
+        pid: wedged.pid,
+        port,
+        token: 'busy-token',
+        startedAt: new Date().toISOString(),
+        serverPath: '',
+        mode: 'launched' as const,
+      }, null, 2));
+
+      const result = await runCli(['stop', '--force-restart'], baseEnv(stateFile));
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('Daemon stopped (forced');
+      // The load-bearing half: NO fresh daemon was booted to serve the stop.
+      // A spawned daemon would have re-written the state file.
+      expect(fs.existsSync(stateFile)).toBe(false);
+      expect(result.stderr).not.toContain('Starting server');
+      expect(result.stdout + result.stderr).not.toContain('Restarting');
+      // And the live pid is actually gone.
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && isProcessAlive(wedged.pid!)) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(isProcessAlive(wedged.pid!)).toBe(false);
+    } finally {
+      try { wedged.kill('SIGKILL'); } catch { /* already gone */ }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 30_000);
