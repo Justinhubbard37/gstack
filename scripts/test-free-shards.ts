@@ -256,6 +256,16 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
 // coverage, so auto-excluding them defeats the regression tests they carry.
 const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
   {
+    file: 'test/setup-windows-rerun-refresh.test.ts',
+    // Trips the "spawns bin/ shebang script" pattern via path.join(..., 'bin',
+    // 'tool.sh') fixture paths, but every spawn goes through spawnSync('bash',
+    // ['-c', ...]) — Git Bash executes it fine on windows-latest. This file IS
+    // the #2444 Windows regression coverage (IS_WINDOWS=1 copy-refresh path);
+    // excluding it here would keep the bug class unexercised on the one
+    // platform it bites.
+    reason: 'bin/ hits are fixture path segments; spawns bash explicitly — the IS_WINDOWS=1 refresh path must run on windows-latest',
+  },
+  {
     file: 'browse/test/file-permissions.test.ts',
     // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
     // is platform-guarded (win32 returns early / takes the icacls branch).

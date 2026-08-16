@@ -942,7 +942,11 @@ link_codex_skill_dirs() {
       [ "$skill_name" = "gstack" ] && continue
       target="$skills_dir/$skill_name"
       # Create or update symlink
-      if [ -L "$target" ] || [ ! -e "$target" ]; then
+      # #2444: on Windows the installed target is a REAL directory copy, so
+      # the symlink-or-missing guard skipped every re-run and SKILL.md never
+      # refreshed after `git pull`. IS_WINDOWS bypasses the guard —
+      # _link_or_copy rm -rf's the destination first, refreshing the copy.
+      if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
         _link_or_copy "$skill_dir" "$target"
         linked+=("$skill_name")
       fi
@@ -968,7 +972,9 @@ create_agents_sidecar() {
     local src="$SOURCE_GSTACK_DIR/$asset"
     local dst="$agents_gstack/$asset"
     if [ -d "$src" ] || [ -f "$src" ]; then
-      if [ -L "$dst" ] || [ ! -e "$dst" ]; then
+      # #2444: IS_WINDOWS bypass — real-dir copies never match -L, so re-runs
+      # skipped the refresh. _link_or_copy rm -rf's the destination first.
+      if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$dst" ] || [ ! -e "$dst" ]; then
         _link_or_copy "$src" "$dst"
       fi
     fi
@@ -979,7 +985,9 @@ create_agents_sidecar() {
     local src="$SOURCE_GSTACK_DIR/$file"
     local dst="$agents_gstack/$file"
     if [ -f "$src" ]; then
-      if [ -L "$dst" ] || [ ! -e "$dst" ]; then
+      # #2444: IS_WINDOWS bypass — real-dir copies never match -L, so re-runs
+      # skipped the refresh. _link_or_copy rm -rf's the destination first.
+      if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$dst" ] || [ ! -e "$dst" ]; then
         _link_or_copy "$src" "$dst"
       fi
     fi
@@ -1175,7 +1183,11 @@ link_factory_skill_dirs() {
       skill_name="$(basename "$skill_dir")"
       [ "$skill_name" = "gstack" ] && continue
       target="$skills_dir/$skill_name"
-      if [ -L "$target" ] || [ ! -e "$target" ]; then
+      # #2444: on Windows the installed target is a REAL directory copy, so
+      # the symlink-or-missing guard skipped every re-run and SKILL.md never
+      # refreshed after `git pull`. IS_WINDOWS bypasses the guard —
+      # _link_or_copy rm -rf's the destination first, refreshing the copy.
+      if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
         _link_or_copy "$skill_dir" "$target"
         linked+=("$skill_name")
       fi
@@ -1207,7 +1219,11 @@ link_opencode_skill_dirs() {
       skill_name="$(basename "$skill_dir")"
       [ "$skill_name" = "gstack" ] && continue
       target="$skills_dir/$skill_name"
-      if [ -L "$target" ] || [ ! -e "$target" ]; then
+      # #2444: on Windows the installed target is a REAL directory copy, so
+      # the symlink-or-missing guard skipped every re-run and SKILL.md never
+      # refreshed after `git pull`. IS_WINDOWS bypasses the guard —
+      # _link_or_copy rm -rf's the destination first, refreshing the copy.
+      if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
         _link_or_copy "$skill_dir" "$target"
         linked+=("$skill_name")
       fi
