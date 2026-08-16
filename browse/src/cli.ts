@@ -310,6 +310,7 @@ function raiseHeadedWindowMacOS(): void {
     nodeSpawn('osascript', ['-e', 'tell application "Google Chrome for Testing" to activate'], {
       stdio: 'ignore',
       detached: true,
+      windowsHide: true,
     }).unref();
   } catch {
     // osascript missing or app not present — non-fatal

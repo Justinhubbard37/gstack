@@ -60,6 +60,7 @@ function currentUserSid(): string | null {
     const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
     const out = execFileSync(`${systemRoot}\\System32\\whoami.exe`, ['/user', '/fo', 'csv', '/nh'], {
       encoding: 'utf8',
+      windowsHide: true,
     });
     const match = out.match(/S-1-[\d-]+/);
     cachedSid = match ? match[0] : null;
