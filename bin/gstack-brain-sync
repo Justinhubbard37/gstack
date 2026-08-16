@@ -366,6 +366,13 @@ subcmd_once() {
     fi
   fi
   echo "$$" > "$lock_dir/pid" 2>/dev/null || true
+  # Release the lock on EVERY exit from here on — including the empty-queue
+  # fast path and an INT during the detector's network push. Leaking it would
+  # rely on next-run stale-pid detection, which PID reuse can defeat (kill -0
+  # matching an unrelated live process wedges sync at every boundary). The
+  # mktemp block below re-traps with tempfile cleanup added; both traps keep
+  # the lock removal.
+  trap 'rm -rf "$lock_dir" 2>/dev/null || true' EXIT INT TERM
 
   local mode
   mode=$("$CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || echo off)
@@ -387,18 +394,27 @@ subcmd_once() {
   # bounds stalled transfers via git's own low-speed limits (portable — stock
   # macOS ships no `timeout` binary).
   #
-  # Author-scoped: only commits authored by gstack-brain-sync retry here. A
-  # user's manual commit in ~/.gstack rides along when a real drain pushes,
-  # as before — the detector must not auto-publish work it didn't create.
-  local det_branch det_unpushed det_now det_last
+  # Author-scoped — EXCLUSIVELY: `git push origin HEAD` publishes every
+  # unpushed commit, so the retry fires only when ALL unpushed commits are
+  # gstack-brain-sync's own. One interleaved user commit disables the
+  # auto-retry entirely (adversarial review: an existential check would
+  # silently auto-publish a user's manual ~/.gstack commit the moment a bot
+  # commit sat in front of it). User commits ride along when a REAL drain
+  # pushes, as before — the detector never publishes work it didn't create.
+  local det_branch det_unpushed det_total det_now det_last
   det_branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  # Detached HEAD reads as the literal "HEAD" — origin/HEAD usually resolves,
+  # so without this exclusion the detector would retry a doomed push forever.
+  [ "$det_branch" = "HEAD" ] && det_branch=""
   if [ -n "$det_branch" ] && git -C "$GSTACK_HOME" rev-parse --verify --quiet "origin/$det_branch" >/dev/null 2>&1; then
     det_unpushed=$(git -C "$GSTACK_HOME" rev-list --count --author="gstack-brain-sync" "origin/$det_branch..HEAD" 2>/dev/null || echo 0)
+    det_total=$(git -C "$GSTACK_HOME" rev-list --count "origin/$det_branch..HEAD" 2>/dev/null || echo 0)
     case "$det_unpushed" in ''|*[!0-9]*) det_unpushed=0 ;; esac
+    case "$det_total" in ''|*[!0-9]*) det_total=0 ;; esac
     det_now=$(date +%s)
     det_last=$(cat "$GSTACK_HOME/.brain-last-push-attempt" 2>/dev/null || echo 0)
     case "$det_last" in ''|*[!0-9]*) det_last=0 ;; esac
-    if [ "$det_unpushed" -gt 0 ] && [ $(( det_now - det_last )) -ge 600 ]; then
+    if [ "$det_unpushed" -gt 0 ] && [ "$det_unpushed" -eq "$det_total" ] && [ $(( det_now - det_last )) -ge 600 ]; then
       echo "$det_now" > "$GSTACK_HOME/.brain-last-push-attempt" 2>/dev/null || true
       local det_host
       det_host=$(remote_host)
@@ -414,6 +430,7 @@ subcmd_once() {
   # nothing to classify, retain, or drop, and a concurrent append after this
   # check simply waits for the next boundary. (The detector above already ran:
   # its whole point is re-pushing stranded commits when the queue is empty.)
+  # The lock-release trap installed at acquisition covers this exit.
   if [ ! -s "$QUEUE" ]; then
     write_status "idle" "queue empty"
     exit 0

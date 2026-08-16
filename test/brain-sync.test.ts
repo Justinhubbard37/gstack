@@ -644,4 +644,39 @@ describe('#2549 queue integrity', () => {
     expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
     expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
   });
+
+  test('an interleaved user commit disables the detector push (exclusive author gate)', () => {
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"a","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+
+    // Strand a bot commit behind a rejecting remote.
+    const hook = path.join(bareRemote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"b","ts":"2026-01-02T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+
+    // A user manually commits in ~/.gstack on top of the stranded bot commit.
+    expect(git(['-c', 'user.name=Garry', '-c', 'user.email=garry@example.com',
+                '-c', 'commit.gpgsign=false',
+                'commit', '--allow-empty', '-m', 'manual note']).status).toBe(0);
+
+    // Interval passed, remote healthy, queue empty: the detector must STILL
+    // refuse — `push origin HEAD` would publish the user's commit uninvited.
+    fs.writeFileSync(path.join(tmpHome, '.brain-last-push-attempt'), '0');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(Number(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim())).toBe(2);
+
+    // A REAL drain still rides the user commit along, as before — the gate
+    // scopes only the detector's autonomous retry, not user-initiated syncs.
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"c","ts":"2026-01-03T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+  });
 });
