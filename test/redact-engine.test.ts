@@ -121,6 +121,14 @@ describe("HIGH credential patterns", () => {
     expect(ids("postgres://admin:$" + "hun" + "ter2@db.internal/app")).toContain("db.url_with_password");
     // Mismatched brace is not an interpolation either.
     expect(ids("postgres://admin:${dbPass@db.internal/app")).toContain("db.url_with_password");
+    // A LOWERCASE literal 'password'/'pass' at the URL-password position is a
+    // real (terrible) credential, not a doc placeholder — only the ALL-CAPS
+    // doc convention (USER:PASSWORD) is suppressed. Assembled at runtime so
+    // this file's own bytes never carry a live credential shape.
+    expect(ids("postgres://admin:" + "pass" + "word@10.0.0.5/app")).toContain("db.url_with_password");
+    expect(ids("https://root:" + "pa" + "ss@127.0.0.1/")).toContain("creds.basic_auth_url");
+    // Structural placeholders still suppress at the URL position.
+    expect(ids("postgres://user:<your-password>@host/db")).not.toContain("db.url_with_password");
   });
 
   test("all HIGH patterns block (exit 3)", () => {

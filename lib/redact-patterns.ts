@@ -267,7 +267,15 @@ const INTERPOLATED_PASSWORD_RE = /^(\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Z_][A-Z0-9
 function urlPasswordIsPlaceholder(span: string): boolean {
   const m = span.match(/:\/\/[^:]+:([^@]+)@/);
   const pw = m?.[1] ?? "";
-  return pw === "" || isPlaceholderSpan(pw) || INTERPOLATED_PASSWORD_RE.test(pw);
+  if (pw === "") return true;
+  if (INTERPOLATED_PASSWORD_RE.test(pw)) return true;
+  // URL-password position is STRICTER than generic placeholder detection.
+  // Doc-comment convention writes placeholders in ALL CAPS
+  // (postgres://USER:PASSWORD@host); a lowercase `password` or `pass` at
+  // this position is a real (terrible) credential and must block — the
+  // case-insensitive isPlaceholderSpan words would wave it through.
+  if (/^[A-Z][A-Z0-9_]*$/.test(pw)) return true;
+  return PLACEHOLDER_STRUCTURAL.some((re) => re.test(pw));
 }
 
 export const PATTERNS: RedactPattern[] = [
