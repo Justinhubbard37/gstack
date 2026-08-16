@@ -3,6 +3,12 @@ import type { TemplateContext } from '../types';
 export function generateContextRecovery(ctx: TemplateContext): string {
   const binDir = ctx.paths.binDir; // env-var hosts already resolve to $GSTACK_BIN via types.ts
 
+  // Branch-form discipline (#2550/#1851): FILE-PATH positions use $BRANCH —
+  // the canonical slug form the gstack-slug eval on the first line sets
+  // (tr '/' '-' then tr -cd 'a-zA-Z0-9._-', matching what gstack-review-log
+  // WRITES). The timeline.jsonl greps keep raw $_BRANCH because the timeline
+  // writer (preamble's gstack-timeline-log call) stores the raw branch in the
+  // "branch" field — slugging the reader there would break matching.
   return `## Context Recovery
 
 At session start or after compaction, recover recent project context.
@@ -13,7 +19,7 @@ _PROJ="\${GSTACK_HOME:-$HOME/.gstack}/projects/\${SLUG:-unknown}"
 if [ -d "$_PROJ" ]; then
   echo "--- RECENT ARTIFACTS ---"
   find "$_PROJ/ceo-plans" "$_PROJ/checkpoints" -type f -name "*.md" 2>/dev/null | xargs -r ls -t 2>/dev/null | head -3
-  [ -f "$_PROJ/\${_BRANCH}-reviews.jsonl" ] && echo "REVIEWS: $(wc -l < "$_PROJ/\${_BRANCH}-reviews.jsonl" | tr -d ' ') entries"
+  [ -f "$_PROJ/\${BRANCH:-unknown}-reviews.jsonl" ] && echo "REVIEWS: $(wc -l < "$_PROJ/\${BRANCH:-unknown}-reviews.jsonl" | tr -d ' ') entries"
   [ -f "$_PROJ/timeline.jsonl" ] && tail -5 "$_PROJ/timeline.jsonl"
   if [ -f "$_PROJ/timeline.jsonl" ]; then
     _LAST=$(grep "\\"branch\\":\\"\${_BRANCH}\\"" "$_PROJ/timeline.jsonl" 2>/dev/null | grep '"event":"completed"' | tail -1)

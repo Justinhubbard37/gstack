@@ -16,7 +16,7 @@
 
 ```bash
 setopt +o nomatch 2>/dev/null || true  # zsh compat
-BRANCH=$(git branch --show-current 2>/dev/null | tr '/' '-')
+BRANCH=$(git branch --show-current 2>/dev/null | tr '/' '-' | tr -cd 'a-zA-Z0-9._-')
 REPO=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
 # Compute project slug for ~/.gstack/projects/ lookup
 _PLAN_SLUG=$(git remote get-url origin 2>/dev/null | sed 's|.*[:/]\([^/]*/[^/]*\)\.git$|\1|;s|.*[:/]\([^/]*/[^/]*\)$|\1|' | tr '/' '-' | tr -cd 'a-zA-Z0-9._-') || true
