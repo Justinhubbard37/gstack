@@ -196,6 +196,33 @@ export function bashScriptInvocation(
   return { cmd: bash, argv: [scriptPath.replace(/\\/g, "/"), ...args], shell: false };
 }
 
+/**
+ * Quote one argument for cmd.exe's re-parse (#2471). With `shell: true` on
+ * Windows, Node/Bun JOIN the argv into a single cmd.exe string WITHOUT
+ * quoting, so any argument containing a space — the default
+ * `C:\Users\First Last\repo` home layout — splits into two arguments and the
+ * gbrain call silently targets the wrong path. Pass-through for the safe
+ * charset; everything else is double-quoted with embedded quotes doubled
+ * (cmd.exe's escape). POSIX callers never see this (shell is false there).
+ */
+export function windowsShellQuote(arg: string): string {
+  if (arg !== "" && /^[A-Za-z0-9_\-.:\\/=,@+]+$/.test(arg)) return arg;
+  return '"' + arg.replace(/"/g, '""') + '"';
+}
+
+/**
+ * The single seam for building a gbrain CLI invocation (#2471). Every
+ * spawnSync/execFileSync of the `gbrain` shim must construct its
+ * (cmd, argv, shell) triple here so the Windows quoting fix lives in exactly
+ * one place — a direct spawn of the literal "gbrain" string with a shell
+ * flag reopens the space-in-path split this exists to close.
+ */
+export function gbrainInvocation(args: string[]): { cmd: string; argv: string[]; shell: boolean } {
+  return NEEDS_SHELL_ON_WINDOWS
+    ? { cmd: "gbrain", argv: args.map(windowsShellQuote), shell: true }
+    : { cmd: "gbrain", argv: args, shell: false };
+}
+
 export interface SpawnGbrainOptions {
   /** Timeout in milliseconds. Defaults to 30s. */
   timeout?: number;
@@ -219,13 +246,14 @@ export interface SpawnGbrainOptions {
  * `stderr` exactly as they would with `spawnSync` directly.
  */
 export function spawnGbrain(args: string[], opts: SpawnGbrainOptions = {}): SpawnSyncReturns<string> {
-  return spawnSync("gbrain", args, {
+  const inv = gbrainInvocation(args);
+  return spawnSync(inv.cmd, inv.argv, {
     encoding: "utf-8",
     timeout: opts.timeout ?? 30_000,
     cwd: opts.cwd,
     stdio: opts.stdio || ["ignore", "pipe", "pipe"],
     env: buildGbrainEnv({ baseEnv: opts.baseEnv, announce: opts.announce }),
-    shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
+    shell: inv.shell, // #1731: gbrain is a .cmd shim on Windows (+#2471 quoting)
   });
 }
 
@@ -254,11 +282,12 @@ export function spawnGbrainAsync(
   args: string[],
   opts: { stdio?: SpawnOptions["stdio"]; cwd?: string; baseEnv?: NodeJS.ProcessEnv } = {},
 ): ChildProcess {
-  return spawn("gbrain", args, {
+  const inv = gbrainInvocation(args);
+  return spawn(inv.cmd, inv.argv, {
     stdio: opts.stdio || ["ignore", "pipe", "pipe"],
     cwd: opts.cwd,
     env: buildGbrainEnv({ baseEnv: opts.baseEnv, announce: false }),
-    shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
+    shell: inv.shell, // #1731: gbrain is a .cmd shim on Windows (+#2471 quoting)
   });
 }
 
@@ -267,12 +296,13 @@ export function spawnGbrainAsync(
  * for callers that want to surface gbrain's stderr as the error message.
  */
 export function execGbrainText(args: string[], opts: SpawnGbrainOptions = {}): string {
-  return execFileSync("gbrain", args, {
+  const inv = gbrainInvocation(args);
+  return execFileSync(inv.cmd, inv.argv, {
     encoding: "utf-8",
     timeout: opts.timeout ?? 30_000,
     cwd: opts.cwd,
     stdio: opts.stdio || ["ignore", "pipe", "pipe"],
     env: buildGbrainEnv({ baseEnv: opts.baseEnv, announce: opts.announce }),
-    shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
+    shell: inv.shell, // #1731: gbrain is a .cmd shim on Windows (+#2471 quoting)
   });
 }
