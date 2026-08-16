@@ -785,7 +785,18 @@ link_claude_skill_dirs() {
       mkdir -p "$target"
       # Validate target isn't a symlink before creating the link
       if [ -L "$target/SKILL.md" ]; then rm "$target/SKILL.md"; fi
-      _link_or_copy "$gstack_dir/$dir_name/SKILL.md" "$target/SKILL.md"
+      # #2569: prefer a rendered :user variant when present. gbrain installs
+      # render brain-aware SKILL.md into ${GSTACK_HOME}/render/claude via
+      # gen:skill-docs --out-dir instead of dirtying the tracked source
+      # checkout; when a render exists for this skill, serve it. The rendered
+      # file's section-base paths point into the render dir, so section reads
+      # resolve there too.
+      _skill_md_src="$gstack_dir/$dir_name/SKILL.md"
+      _render_dir="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claude}"
+      if [ -f "$_render_dir/$dir_name/SKILL.md" ]; then
+        _skill_md_src="$_render_dir/$dir_name/SKILL.md"
+      fi
+      _link_or_copy "$_skill_md_src" "$target/SKILL.md"
       # Link every runtime asset the skill ships next to its SKILL.md (#2317,
       # #2454): sections/ for carved skills, review's checklist.md +
       # specialists/, qa's templates/ + references/, gstack-upgrade's
@@ -1411,6 +1422,7 @@ if [ "$INSTALL_CLAUDE" -eq 1 ]; then
     "$SOURCE_GSTACK_DIR/bin/gstack-patch-names" "$SOURCE_GSTACK_DIR" "$SKILL_PREFIX"
     link_claude_skill_dirs "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR"
     link_claude_root_skill_alias "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR"
+    _CLAUDE_SKILLS_LINKED=1
     # Self-healing: re-run gstack-relink to ensure name: fields and directory
     # names are consistent with the config. This catches cases where an interrupted
     # setup, stale git state, or gen:skill-docs left name: fields out of sync.
@@ -1486,6 +1498,7 @@ if [ "$INSTALL_CLAUDE" -eq 1 ]; then
       "$SOURCE_GSTACK_DIR/bin/gstack-patch-names" "$SOURCE_GSTACK_DIR" "$SKILL_PREFIX"
       link_claude_skill_dirs "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR"
       link_claude_root_skill_alias "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR"
+      _CLAUDE_SKILLS_LINKED=1
       GSTACK_RELINK="$SOURCE_GSTACK_DIR/bin/gstack-relink"
       if [ -x "$GSTACK_RELINK" ]; then
         GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" >/dev/null 2>&1 || true
@@ -1728,24 +1741,27 @@ if [ "$NO_TEAM_MODE" -eq 1 ]; then
   log "Team mode disabled: auto-update hook removed."
 fi
 
-# ─── GBrain detection + conditional SKILL.md regen ──────────────────────
+# ─── GBrain detection + conditional SKILL.md render ─────────────────────
 #
 # Detect whether gbrain is installed and persist the result to
 # ~/.gstack/gbrain-detection.json so gen-skill-docs can decide whether to
 # render GBRAIN_CONTEXT_LOAD and GBRAIN_SAVE_RESULTS blocks. If detected,
-# regenerate the Claude-host SKILL.md files with the un-suppressed
-# (compressed) brain-aware blocks via `bun run gen:skill-docs:user`.
+# render the Claude-host :user variant (un-suppressed brain-aware blocks)
+# into an UNTRACKED out-dir — ${GSTACK_HOME}/render/claude — and repoint the
+# installed skills at it (#2569). The old in-place render wrote into TRACKED
+# files of the install checkout, so a global-git install stayed permanently
+# dirty and every upgrade stashed 16 files of generated dirt.
 #
-# If gbrain is not detected, the canonical no-gbrain SKILL.md files
-# (which were just generated above by `gen:skill-docs --host claude` if
-# applicable, or which are checked in) stay as-is. Zero token overhead
-# for non-gbrain users.
+# If gbrain is not detected, the canonical no-gbrain SKILL.md files stay
+# as-is (zero token overhead) and any stale render dir is removed so it
+# can't shadow canonical files on the next relink.
 #
 # Users who install gbrain after running ./setup should re-run setup OR
-# call `gstack-config gbrain-refresh` + `bun run gen:skill-docs:user`.
+# call `gstack-config gbrain-refresh`.
 DETECT_BIN="$SOURCE_GSTACK_DIR/bin/gstack-gbrain-detect"
 GBRAIN_STATE_DIR="${GSTACK_HOME:-$HOME/.gstack}"
 DETECTION_FILE="$GBRAIN_STATE_DIR/gbrain-detection.json"
+_GSTACK_RENDER_DIR="${GSTACK_USER_RENDER_DIR:-$GBRAIN_STATE_DIR/render/claude}"
 # PID-unique tmp so concurrent setups (parallel Conductor workspaces) can't
 # clobber each other's in-flight detection write.
 DETECTION_TMP="$DETECTION_FILE.$$.tmp"
@@ -1758,28 +1774,44 @@ if [ -x "$DETECT_BIN" ]; then
     # all gate on the same check instead of re-grepping the JSON.
     if "$DETECT_BIN" --is-ok 2>/dev/null; then
       if [ -n "${GSTACK_SKIP_GBRAIN_REGEN:-}" ]; then
-        # Dev/source tree (set by bin/dev-setup): never regenerate tracked
-        # SKILL.md in place — that dirties checked-in source. Detection is
-        # still persisted above; the dev workspace renders the :user variant
-        # into an untracked dir, and other projects get blocks via
-        # `gstack-config gbrain-refresh`.
+        # Dev/source tree (set by bin/dev-setup): detection is persisted
+        # above; the dev workspace renders the :user variant into its own
+        # untracked dir (.claude/gstack-rendered), and other projects get
+        # blocks via `gstack-config gbrain-refresh`.
         log "gbrain detected — GSTACK_SKIP_GBRAIN_REGEN set: leaving tracked SKILL.md canonical (dev/source tree)."
       else
-        log "gbrain detected — regenerating Claude SKILL.md with brain-aware blocks (~250 token overhead per planning skill)..."
-        (
+        log "gbrain detected — rendering brain-aware Claude SKILL.md into $_GSTACK_RENDER_DIR (~250 token overhead per planning skill; source checkout stays clean)..."
+        rm -rf "$_GSTACK_RENDER_DIR"
+        if (
           cd "$SOURCE_GSTACK_DIR"
           # No pipe before the || guard: `cmd | tail -3` reports TAIL's exit
           # status, so a generator crash read as success (same masking the
           # main gen:skill-docs site had). Capture, show the tail, propagate.
-          _GEN_USER_OUT=$(bun_cmd run gen:skill-docs:user --host claude 2>&1)
+          _GEN_USER_OUT=$(bun_cmd run gen:skill-docs:user --host claude --out-dir "$_GSTACK_RENDER_DIR" 2>&1)
           _GEN_USER_RC=$?
           printf '%s\n' "$_GEN_USER_OUT" | tail -3
           exit "$_GEN_USER_RC"
-        ) || log "  warning: gen:skill-docs:user failed — run 'bun run gen:skill-docs:user' manually if you want brain-aware blocks"
+        ); then
+          # Repoint the installed skills at the fresh render — the installer
+          # prefers rendered files when present (#2569).
+          if [ "${_CLAUDE_SKILLS_LINKED:-0}" -eq 1 ]; then
+            link_claude_skill_dirs "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR" >/dev/null
+          fi
+        else
+          log "  warning: gen:skill-docs:user failed — run 'bun run gen:skill-docs:user --host claude --out-dir $_GSTACK_RENDER_DIR' manually if you want brain-aware blocks"
+        fi
       fi
     else
       log "gbrain not detected — brain-aware blocks suppressed in planning-skill SKILL.md files (zero token overhead)."
       log "  To enable: install gbrain via /setup-gbrain, then re-run ./setup or 'gstack-config gbrain-refresh'."
+      # A render from a previous gbrain install would shadow canonical files
+      # on the next link/relink — drop it and restore canonical links.
+      if [ -d "$_GSTACK_RENDER_DIR" ] && [ -z "${GSTACK_SKIP_GBRAIN_REGEN:-}" ]; then
+        rm -rf "$_GSTACK_RENDER_DIR"
+        if [ "${_CLAUDE_SKILLS_LINKED:-0}" -eq 1 ]; then
+          link_claude_skill_dirs "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR" >/dev/null
+        fi
+      fi
     fi
   else
     rm -f "$DETECTION_TMP"

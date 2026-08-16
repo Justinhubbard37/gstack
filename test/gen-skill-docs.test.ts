@@ -2350,10 +2350,13 @@ describe('setup script validation', () => {
 
   test('Codex install uses link_codex_skill_dirs', () => {
     // The Codex install section (section 5) should use the Codex function
+    // End marker: the next numbered section header (a marker that doesn't
+    // exist slices to EOF and the assertion reads unrelated sections).
     const codexSection = setupContent.slice(
       setupContent.indexOf('# 5. Install for Codex'),
-      setupContent.indexOf('# 6. Create')
+      setupContent.indexOf('# 6. Install for Kiro')
     );
+    expect(setupContent.indexOf('# 6. Install for Kiro')).toBeGreaterThan(-1);
     expect(codexSection).toContain('create_codex_runtime_root');
     expect(codexSection).toContain('link_codex_skill_dirs');
     expect(codexSection).not.toContain('link_claude_skill_dirs');
@@ -2398,7 +2401,10 @@ describe('setup script validation', () => {
     const fnBody = setupContent.slice(fnStart, fnEnd);
     expect(fnBody).toContain('mkdir -p "$target"');
     // v1.36.0.0: routes through _link_or_copy helper for Windows fallback (cp on MSYS2/Git Bash).
-    expect(fnBody).toContain('_link_or_copy "$gstack_dir/$dir_name/SKILL.md" "$target/SKILL.md"');
+    // v1.67 (#2569): the source is render-aware — canonical SKILL.md, or the
+    // rendered :user variant from ${GSTACK_HOME}/render/claude when present.
+    expect(fnBody).toContain('_skill_md_src="$gstack_dir/$dir_name/SKILL.md"');
+    expect(fnBody).toContain('_link_or_copy "$_skill_md_src" "$target/SKILL.md"');
   });
 
   // REGRESSION: cleanup functions must handle both old symlinks AND new real-directory pattern

@@ -36,6 +36,12 @@ SKILLS_DIR="${GSTACK_SKILLS_DIR:-$(dirname "$INSTALL_DIR")}"
 # Read prefix setting
 PREFIX=$("$GSTACK_CONFIG" get skill_prefix 2>/dev/null || echo "false")
 
+# #2569: rendered :user variants (brain-aware blocks) live in an UNTRACKED
+# out-dir instead of the tracked install checkout. When a render exists for a
+# skill, relink serves it — otherwise a config change would silently flip
+# every skill back to the canonical (blockless) source.
+RENDER_DIR="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claude}"
+
 # Helper: remove old skill entry (symlink or real directory with symlinked SKILL.md)
 _cleanup_skill_entry() {
   local entry="$1"
@@ -98,7 +104,9 @@ for skill_dir in "$INSTALL_DIR"/*/; do
   [ -L "$target" ] && rm -f "$target"
   # Create real directory with symlinked SKILL.md (absolute path)
   mkdir -p "$target"
-  ln -snf "$INSTALL_DIR/$skill/SKILL.md" "$target/SKILL.md"
+  skill_md_src="$INSTALL_DIR/$skill/SKILL.md"
+  [ -f "$RENDER_DIR/$skill/SKILL.md" ] && skill_md_src="$RENDER_DIR/$skill/SKILL.md"
+  ln -snf "$skill_md_src" "$target/SKILL.md"
   SKILL_COUNT=$((SKILL_COUNT + 1))
 done
 

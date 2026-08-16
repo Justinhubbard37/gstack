@@ -266,6 +266,38 @@ describe('gstack-relink (#578)', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  // #2569: rendered :user variants live in ${GSTACK_HOME}/render/claude.
+  // relink must serve the render when present — otherwise any config change
+  // silently flips every skill back to the canonical (blockless) source.
+  test('prefers a rendered SKILL.md from GSTACK_HOME/render/claude (#2569)', () => {
+    setupMockInstall(['qa', 'ship']);
+    const renderDir = path.join(tmpDir, 'render', 'claude', 'qa');
+    fs.mkdirSync(renderDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(renderDir, 'SKILL.md'),
+      '---\nname: qa\ndescription: test\n---\nrendered brain-aware qa',
+    );
+
+    run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix false`, {
+      GSTACK_INSTALL_DIR: installDir,
+      GSTACK_SKILLS_DIR: skillsDir,
+      GSTACK_HOME: tmpDir,
+    });
+    run(`${path.join(installDir, 'bin', 'gstack-relink')}`, {
+      GSTACK_INSTALL_DIR: installDir,
+      GSTACK_SKILLS_DIR: skillsDir,
+      GSTACK_HOME: tmpDir,
+    });
+
+    const qaLink = path.join(skillsDir, 'qa', 'SKILL.md');
+    expect(fs.readlinkSync(qaLink)).toBe(path.join(renderDir, 'SKILL.md'));
+    expect(fs.readFileSync(qaLink, 'utf-8')).toContain('rendered brain-aware qa');
+    // ship has no render — canonical source link.
+    expect(fs.readlinkSync(path.join(skillsDir, 'ship', 'SKILL.md'))).toBe(
+      path.join(installDir, 'ship', 'SKILL.md'),
+    );
+  });
+
   // FIRST INSTALL: --no-prefix must create ONLY flat names, zero gstack-* pollution
   test('first install --no-prefix: only flat names exist, zero gstack-* entries', () => {
     setupMockInstall(['qa', 'ship', 'review', 'plan-ceo-review', 'gstack-upgrade']);
