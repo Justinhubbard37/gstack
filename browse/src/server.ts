@@ -1493,6 +1493,13 @@ async function handleCommand(body: any, tokenInfo?: TokenInfo | null): Promise<R
 if (import.meta.main) {
   // SIGINT (Ctrl+C): user intentionally stopping → shutdown.
   process.on('SIGINT', () => activeShutdown?.());
+  // SIGHUP (terminal hangup): with handleSIGHUP:false at the three launch
+  // sites (#2220), Playwright no longer closes Chromium when this process
+  // gets hung up on — this handler is now the ONLY Chromium cleanup on
+  // SIGHUP (ENG-OV4). Route to the same shutdown path as SIGINT:
+  // activeShutdown closes the browser, releases ports, and removes the
+  // state file. Without it, a hangup would leak a live Chromium.
+  process.on('SIGHUP', () => activeShutdown?.());
   // SIGTERM behavior depends on mode:
   // - Normal (headless) mode: Claude Code's Bash sandbox fires SIGTERM when the
   //   parent shell exits between tool invocations. Ignoring it keeps the server

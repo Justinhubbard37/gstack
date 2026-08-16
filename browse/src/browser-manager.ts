@@ -466,6 +466,16 @@ export class BrowserManager {
     // Playwright cache (no executablePath), so the heal is never scoped out.
     this.browser = await launchWithXProtectHeal(() => chromium.launch({
       headless: useHeadless,
+      // #2220: the daemon owns signal policy, not Playwright. Playwright's
+      // default handlers close Chromium the moment THIS process receives
+      // SIGINT/SIGTERM/SIGHUP — which fights the deliberate headless
+      // SIGTERM-ignore in server.ts (the daemon survives the signal but
+      // loses its browser out from under it). All three are false; server.ts
+      // routes the signals it actually honors through activeShutdown, which
+      // closes Chromium itself.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       // On Windows, Chromium's sandbox fails when the server is spawned through
       // the Bun→Node process chain (GitHub #276). Disable it — local daemon
       // browsing user-specified URLs has marginal sandbox benefit. Also disabled
@@ -663,6 +673,10 @@ export class BrowserManager {
     // reinstalled over (probePoisonedChromiumBundle's scope contract).
     this.context = await launchWithXProtectHeal(() => chromium.launchPersistentContext(userDataDir, {
       headless: false,
+      // #2220: daemon owns signal policy — see launch() for the rationale.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       // Match the sandbox policy used by launch() above. Without this,
       // Playwright auto-adds --no-sandbox on every headed launch and the user
       // sees Chromium's "unsupported command-line flag" yellow infobar.
@@ -1717,6 +1731,10 @@ export class BrowserManager {
       // exactly as in launch()/launchHeaded().
       newContext = await launchWithXProtectHeal(() => chromium.launchPersistentContext(userDataDir, {
         headless: false,
+        // #2220: daemon owns signal policy — see launch() for the rationale.
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false,
         // Match the sandbox policy used by launchHeaded() / launch(). The
         // handoff path is the headless→headed re-launch and shares the same
         // anti-detection posture, including no spurious --no-sandbox infobar.
