@@ -218,12 +218,17 @@ near the write-back.
 **If GitHub:**
 ```bash
 gh pr view --json body -q .body > /tmp/gstack-pr-body-$$.md
+cp /tmp/gstack-pr-body-$$.md /tmp/gstack-pr-body-orig-$$.md
 ```
 
 **If GitLab:**
 ```bash
 glab mr view -F json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('description',''))" > /tmp/gstack-pr-body-$$.md
+cp /tmp/gstack-pr-body-$$.md /tmp/gstack-pr-body-orig-$$.md
 ```
+
+(The `-orig` snapshot feeds the write-side banner tripwire at step 4b — it
+distinguishes markup WE added from text that was already in the body.)
 
 1b. Read the body FOR CONTEXT through the trust envelope (this is the copy you
 read; the raw tempfile is the copy the pipeline edits):
@@ -273,7 +278,13 @@ REDACT_VIS=$(~/.claude/skills/gstack/bin/gstack-config get redact_repo_visibilit
 reach the live PR/MR. If the composed section leaked it, ABORT the update:
 
 ```bash
-if grep -q "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md; then
+# Compare against the fetched original: only a NEW banner occurrence aborts.
+# (A hostile body that already contained the literal banner string must not
+# permanently DoS every future doc update — pre-existing occurrences pass
+# through unchanged; only markup WE would be adding trips the wire.)
+_ORIG_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-orig-$$.md 2>/dev/null || echo 0)
+_NEW_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md 2>/dev/null || echo 0)
+if [ "$_NEW_BANNERS" -gt "$_ORIG_BANNERS" ]; then
   echo "ABORT: envelope banner leaked into the outgoing PR/MR body — recompose the Documentation section from your own outputs, not from the enveloped rendering." >&2
 else
   echo "banner tripwire clean"
@@ -299,7 +310,7 @@ MRBODY
 5. Clean up the tempfile:
 
 ```bash
-rm -f /tmp/gstack-pr-body-$$.md
+rm -f /tmp/gstack-pr-body-$$.md /tmp/gstack-pr-body-orig-$$.md
 ```
 
 6. If `gh pr view` / `glab mr view` fails (no PR/MR exists): skip with message "No PR/MR found — skipping body update."

@@ -51,10 +51,8 @@ if [ -z "$CMD" ]; then
 fi
 
 # Log a hook fire event (pattern name only, never command content).
-_careful_log_fire() {
-  mkdir -p ~/.gstack/analytics 2>/dev/null || true
-  echo '{"event":"hook_fire","skill":"careful","pattern":"'"$1"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
-}
+# Shared helper respects GSTACK_HOME, so tests never write real analytics.
+_careful_log_fire() { gstack_hook_log_fire careful "$1"; }
 
 # Normalize: lowercase for case-insensitive SQL matching
 CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
@@ -90,31 +88,68 @@ case "$CMD" in
 esac
 if [ "$_IS_SIMPLE" -eq 1 ]; then
   # Recursive delete aimed at the filesystem root or the whole home directory.
-  if printf '%s' "$CMD" | grep -qE '^[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+)+(/|~|\$HOME)/?[[:space:]]*$' 2>/dev/null; then
-    _careful_log_fire "high_rm_root"
-    gstack_hook_decision deny "[careful][HIGH] Recursive delete of / or the home directory is blocked while /careful is active. If you truly mean it, end the /careful session first."
-    exit 0
+  # Tokenized: options (long or short, any position — --no-preserve-root may
+  # trail the target) are skipped; EVERY non-option token must be a root-class
+  # target (/, ~, $HOME, /*), and a recursive flag must be present. noglob is
+  # forced around word-splitting so a literal /* token never expands.
+  if printf '%s' "$CMD" | grep -qE '^[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]' 2>/dev/null \
+    && printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)([[:space:]]|$)' 2>/dev/null; then
+    _ROOT_TARGETS=0
+    _SAFE_TARGETS=0
+    set -f
+    for _TOK in $CMD; do
+      case "$_TOK" in
+        sudo|rm|-*) continue ;;
+        '/'|'~'|'~/'|'$HOME'|'$HOME/'|'/*') _ROOT_TARGETS=1 ;;
+        *) _SAFE_TARGETS=1 ;;
+      esac
+    done
+    set +f
+    if [ "$_ROOT_TARGETS" -eq 1 ] && [ "$_SAFE_TARGETS" -eq 0 ]; then
+      _careful_log_fire "high_rm_root"
+      gstack_hook_decision deny "[careful][HIGH] Recursive delete of / or the home directory is blocked while /careful is active. If you truly mean it, end the /careful session first."
+      exit 0
+    fi
   fi
   # Force-push to the repo's default branch (the shared history everyone pulls).
-  if printf '%s' "$CMD" | grep -qE '^[[:space:]]*git[[:space:]]+push([[:space:]]|$)' 2>/dev/null \
-    && printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(-f|--force)($|[[:space:]])' 2>/dev/null; then
-    _DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|.*/||' || true)
-    if [ -n "$_DEFAULT_BRANCH" ]; then
-      _TARGETS_DEFAULT=0
-      if printf '%s' "$CMD" | grep -qE "(^|[[:space:]])${_DEFAULT_BRANCH}([[:space:]]|$)" 2>/dev/null; then
-        _TARGETS_DEFAULT=1
-      elif printf '%s' "$CMD" | grep -qE '^[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force))*[[:space:]]*$' 2>/dev/null; then
-        # Bare `git push --force` (force flags only, no remote/ref): it targets
-        # the current branch's upstream, which is the default branch only when
-        # we are ON it. Any other arg shape (explicit remote + feature ref,
-        # exotic refspecs) falls through to the MEDIUM ask below.
-        _CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
-        [ -n "$_CURRENT_BRANCH" ] && [ "$_CURRENT_BRANCH" = "$_DEFAULT_BRANCH" ] && _TARGETS_DEFAULT=1
-      fi
-      if [ "$_TARGETS_DEFAULT" -eq 1 ]; then
-        _careful_log_fire "high_force_push_default"
-        gstack_hook_decision deny "[careful][HIGH] Force-push to the default branch ($_DEFAULT_BRANCH) is blocked while /careful is active. Use --force-with-lease on a feature branch, or end the /careful session if you truly mean it."
-        exit 0
+  # Force is carried by -f/--force OR by git's plus-refspec syntax (+main,
+  # +HEAD:main) which needs no flag at all. --force-with-lease never matches.
+  if printf '%s' "$CMD" | grep -qE '^[[:space:]]*git[[:space:]]+push([[:space:]]|$)' 2>/dev/null; then
+    _HAS_FORCE=0
+    if printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(-f|--force)($|[[:space:]])' 2>/dev/null; then
+      _HAS_FORCE=1
+    elif printf '%s' "$CMD" | grep -qE '(^|[[:space:]])\+[^[:space:]]' 2>/dev/null; then
+      _HAS_FORCE=1
+    fi
+    if [ "$_HAS_FORCE" -eq 1 ]; then
+      # Full branch path (slashed defaults like release/2.0 stay intact) and
+      # FIXED-STRING token comparison — never interpolate a branch name into
+      # an ERE (metacharacters would over/under-match).
+      _DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||' || true)
+      if [ -n "$_DEFAULT_BRANCH" ]; then
+        _TARGETS_DEFAULT=0
+        set -f
+        for _TOK in $CMD; do
+          case "$_TOK" in git|push|sudo|-*) continue ;; esac
+          _REF="${_TOK#+}"          # +main -> main
+          _REF="${_REF##*:}"        # HEAD:main / src:main -> main
+          if [ "$_REF" = "$_DEFAULT_BRANCH" ]; then
+            _TARGETS_DEFAULT=1
+            break
+          fi
+        done
+        set +f
+        if [ "$_TARGETS_DEFAULT" -eq 0 ] && printf '%s' "$CMD" | grep -qE '^[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force))*[[:space:]]*$' 2>/dev/null; then
+          # Bare `git push --force` (force flags only, no remote/ref): targets
+          # the current branch's upstream — the default branch only when ON it.
+          _CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
+          [ -n "$_CURRENT_BRANCH" ] && [ "$_CURRENT_BRANCH" = "$_DEFAULT_BRANCH" ] && _TARGETS_DEFAULT=1
+        fi
+        if [ "$_TARGETS_DEFAULT" -eq 1 ]; then
+          _careful_log_fire "high_force_push_default"
+          gstack_hook_decision deny "[careful][HIGH] Force-push to the default branch ($_DEFAULT_BRANCH) is blocked while /careful is active. Use --force-with-lease on a feature branch, or end the /careful session if you truly mean it."
+          exit 0
+        fi
       fi
     fi
   fi
@@ -169,8 +204,9 @@ if [ -z "$WARN" ] && printf '%s' "$CMD_LOWER" | grep -qE '\btruncate\b' 2>/dev/n
   PATTERN="truncate"
 fi
 
-# git push --force / git push -f
-if [ -z "$WARN" ] && printf '%s' "$CMD" | grep -qE 'git\s+push\s+.*(-f\b|--force)' 2>/dev/null; then
+# git push --force / git push -f / plus-refspec force (git push origin +ref)
+if [ -z "$WARN" ] && printf '%s' "$CMD" | grep -qE 'git\s+push\s' 2>/dev/null \
+  && printf '%s' "$CMD" | grep -qE '(-f\b|--force|(^|[[:space:]])\+[^[:space:]])' 2>/dev/null; then
   WARN="Destructive: git force-push rewrites remote history. Other contributors may lose work."
   PATTERN="git_force_push"
 fi
@@ -208,10 +244,16 @@ fi
 if [ -z "$WARN" ]; then
   _GSTACK_HOME_DIR="${GSTACK_HOME:-$HOME/.gstack}"
   _PATTERN_FILES="$_GSTACK_HOME_DIR/careful-patterns.txt"
-  eval "$("$_HOOK_DIR/../../bin/gstack-slug" 2>/dev/null)" 2>/dev/null || true
-  if [ -n "${SLUG:-}" ]; then
-    _PATTERN_FILES="$_PATTERN_FILES
+  # Short-circuit: resolving the project slug costs a subprocess + git call on
+  # EVERY Bash command while /careful is active — only pay it when some
+  # per-project pattern file actually exists anywhere.
+  _ANY_PROJ_PAT=$(find "$_GSTACK_HOME_DIR/projects" -maxdepth 2 -name careful-patterns.txt -print -quit 2>/dev/null || true)
+  if [ -n "$_ANY_PROJ_PAT" ]; then
+    eval "$("$_HOOK_DIR/../../bin/gstack-slug" 2>/dev/null)" 2>/dev/null || true
+    if [ -n "${SLUG:-}" ]; then
+      _PATTERN_FILES="$_PATTERN_FILES
 $_GSTACK_HOME_DIR/projects/$SLUG/careful-patterns.txt"
+    fi
   fi
   while IFS= read -r _PF; do
     [ -f "$_PF" ] || continue

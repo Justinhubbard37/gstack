@@ -46,7 +46,11 @@ export const TRACKER_EXTRA: readonly RegExp[] = [
  * keyword are stripped. The return value is matched, never emitted.
  */
 export function normalizeForDetection(text: string): string {
-  return text.normalize("NFKC").replace(/[​‌‍⁠﻿]/g, "");
+  // Strip ALL Unicode format characters (Cf: zero-widths, bidi marks, soft
+  // hyphens, invisible tag chars) — each can split a keyword to dodge the
+  // label. NFKC runs first, so losing an emoji ZWJ here only affects the
+  // match probe, never the emitted content.
+  return text.normalize("NFKC").replace(/\p{Cf}/gu, "");
 }
 
 /** True when a line (after detection-normalization) matches any pattern. */
@@ -61,11 +65,24 @@ export function lineLooksInjected(line: string): boolean {
  * matches the banner the model anchors on. (Adapted from content-security's
  * escapeEnvelopeSentinels.)
  */
+const ZWSP = "\u200B";
+
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Splice a zero-width space through a banner so a forgery no longer matches. */
+function spliceBanner(banner: string): string {
+  const mid = Math.floor(banner.length / 2);
+  return banner.slice(0, mid) + ZWSP + banner.slice(mid);
+}
+
 export function escapeTrackerSentinels(content: string): string {
-  const zwsp = "​";
+  // Derived from the exported constants — editing the banner text cannot
+  // silently decouple the forgery defusal from the envelope.
   return content
-    .replace(/═══ BEGIN UNTRUSTED TRACKER CONTENT ═══/g, `═══ BEGIN UNTRUSTED TRACKER C${zwsp}ONTENT ═══`)
-    .replace(/═══ END UNTRUSTED TRACKER CONTENT ═══/g, `═══ END UNTRUSTED TRACKER C${zwsp}ONTENT ═══`);
+    .replace(new RegExp(escapeRegExp(TRACKER_ENVELOPE_BEGIN), "g"), spliceBanner(TRACKER_ENVELOPE_BEGIN))
+    .replace(new RegExp(escapeRegExp(TRACKER_ENVELOPE_END), "g"), spliceBanner(TRACKER_ENVELOPE_END));
 }
 
 /**

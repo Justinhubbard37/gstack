@@ -10,8 +10,10 @@ const EVIDENCE = path.join(ROOT, 'bin', 'gstack-evidence');
 let gstackHome: string;
 let repoDir: string;
 
+import { gitIn, findFilesBySuffix } from './helpers/scratch-repo';
+
 function git(args: string) {
-  execSync(`git -c user.email=t@test -c user.name=t -c commit.gpgsign=false -c tag.gpgsign=false ${args}`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 });
+  gitIn(repoDir, args);
 }
 
 function run(args: string[], opts: { cwd?: string } = {}): { status: number; stdout: string; stderr: string } {
@@ -26,16 +28,7 @@ function run(args: string[], opts: { cwd?: string } = {}): { status: number; std
 }
 
 function ledgerFile(): string {
-  const found: string[] = [];
-  const walk = (d: string) => {
-    if (!fs.existsSync(d)) return;
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith('-evidence.jsonl')) found.push(p);
-    }
-  };
-  walk(path.join(gstackHome, 'projects'));
+  const found = findFilesBySuffix(path.join(gstackHome, 'projects'), '-evidence.jsonl');
   expect(found.length).toBeGreaterThan(0);
   return found[0];
 }
@@ -115,7 +108,7 @@ describe('gstack-evidence run', () => {
     expect(fs.statSync(rec.log_path).mode & 0o777).toBe(0o600);
   });
 
-  test('two rapid runs get distinct log files (collision-safe exclusive open)', () => {
+  test('two rapid runs get distinct per-run log files', () => {
     run(['run', '--label', 'tests', '--', 'echo one']);
     run(['run', '--label', 'tests', '--', 'echo two']);
     const [a, b] = records().slice(-2);
@@ -270,6 +263,26 @@ describe('gstack-evidence check', () => {
     const chk = run(['check', '--label', 'tests', '--label', 'never-ran']);
     expect(chk.status).toBe(1);
     expect(chk.stdout).toContain('MISSING label=never-ran');
+  });
+
+  test('check --all grades every recorded label; empty ledger is MISSING', () => {
+    const empty = run(['check', '--all']);
+    expect(empty.status).toBe(1);
+    expect(empty.stdout).toContain('ledger empty');
+
+    expect(run(['run', '--label', 'a', '--', 'echo ok']).status).toBe(0);
+    run(['run', '--label', 'b', '--', 'exit 1']);
+    const chk = run(['check', '--all']);
+    expect(chk.status).toBe(1);
+    expect(chk.stdout).toContain('label=a');
+    expect(chk.stdout).toContain('label=b');
+  });
+
+  test('non-numeric --max-age is a usage error, never a silent fail-open', () => {
+    expect(run(['run', '--label', 'tests', '--', 'echo green']).status).toBe(0);
+    const chk = run(['check', '--label', 'tests', '--max-age', '24h']);
+    expect(chk.status).toBe(2);
+    expect(chk.stderr).toContain('positive number');
   });
 
   test('check never errors outside a git repo — degrades to STALE', () => {

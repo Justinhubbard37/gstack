@@ -3,6 +3,7 @@ import { execSync, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { gitIn } from './helpers/scratch-repo';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const BIN = path.join(ROOT, 'bin');
@@ -144,8 +145,7 @@ describe('gstack-wtree', () => {
   function withScratchRepo(fn: (repoDir: string, wtree: () => string) => void) {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-wtree-'));
     try {
-      const git = (args: string) =>
-        execSync(`git -c user.email=t@test -c user.name=t -c commit.gpgsign=false -c tag.gpgsign=false ${args}`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 });
+      const git = (args: string) => gitIn(repoDir, args);
       git('init -q -b main');
       fs.writeFileSync(path.join(repoDir, 'a.txt'), 'hello\n');
       fs.writeFileSync(path.join(repoDir, '.gitignore'), 'scratch.txt\n');
@@ -177,7 +177,7 @@ describe('gstack-wtree', () => {
     withScratchRepo((repoDir, wtree) => {
       fs.writeFileSync(path.join(repoDir, 'a.txt'), 'edited\n');
       const dirtyFingerprint = wtree();
-      execSync('git -c user.email=t@test -c user.name=t -c commit.gpgsign=false commit -q -am edit', { cwd: repoDir, timeout: 10000 });
+      gitIn(repoDir, 'commit -q -am edit');
       expect(wtree()).toBe(dirtyFingerprint);
     });
   });

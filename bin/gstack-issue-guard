@@ -21,6 +21,7 @@
 
 import { spawnSync } from "child_process";
 import { wrapUntrustedTrackerContent } from "../lib/tracker-guard";
+import { flagValue } from "../lib/bin-context";
 
 function gh(args: string[]): { ok: boolean; out: string; err: string } {
   try {
@@ -34,11 +35,6 @@ function gh(args: string[]): { ok: boolean; out: string; err: string } {
 function fail(msg: string): never {
   console.error(`gstack-issue-guard: ${msg}`);
   process.exit(1);
-}
-
-function flagValue(args: string[], name: string): string | undefined {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
 }
 
 const [, , mode, ...rest] = process.argv;

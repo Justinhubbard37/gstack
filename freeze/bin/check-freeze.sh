@@ -108,9 +108,8 @@ case "$FILE_PATH" in
     ;;
   *)
     # Outside freeze boundary — deny
-    # Log hook fire event
-    mkdir -p ~/.gstack/analytics 2>/dev/null || true
-    echo '{"event":"hook_fire","skill":"freeze","pattern":"boundary_deny","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+    # Log hook fire event (shared helper respects GSTACK_HOME)
+    gstack_hook_log_fire freeze boundary_deny
 
     # The reason is JSON-encoded by the shared helper. Never interpolate paths
     # into hand-built JSON: a path containing a quote or newline produced

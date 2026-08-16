@@ -20,7 +20,7 @@ function rendered(rel: string): string {
 describe('content-binding template drift', () => {
   test('ship Step 16 carries the evidence check (mechanized IRON LAW)', () => {
     const ship = rendered('ship/SKILL.md');
-    expect(ship).toContain('gstack-evidence check --label tests --label vitest --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json');
+    expect(ship).toMatch(/gstack-evidence check --label tests --expect-cmd '[^']+' --label vitest --expect-cmd '[^']+' --max-age 24 --allow-paths CHANGELOG\.md,VERSION,package\.json/);
     expect(ship).toContain('a failed CHECK never blocks');
   });
 
@@ -34,7 +34,7 @@ describe('content-binding template drift', () => {
     const land = rendered('land-and-deploy/SKILL.md');
     expect(land).toContain('wtree');
     expect(land).toContain('---WTREE---');
-    expect(land).toContain('gstack-evidence check --label tests --max-age 24');
+    expect(land).toMatch(/gstack-evidence check --label tests --expect-cmd '[^']+' --max-age 24/);
     expect(land).toContain('UNKNOWN');
   });
 
@@ -47,9 +47,20 @@ describe('content-binding template drift', () => {
     expect(ship).toContain('grade UNKNOWN and treat as stale');
   });
 
+  test('the diff-scoped row list is IDENTICAL in both grading surfaces (no drift)', () => {
+    // The resolver (dashboard) and land-and-deploy each carry the row list;
+    // they diverged once (codex-review present in one, missing in the other).
+    // Rendered dashboards escape backticks (template-literal origin), so match
+    // structurally: the three row names in order inside the rule sentence.
+    const rowList = /diff-scoped rows only:[\s\S]{0,80}?adversarial-review[\s\S]{0,80}?codex-review[\s\S]{0,80}?ship-stage entries/;
+    expect(rendered('ship/SKILL.md')).toMatch(rowList);
+    expect(rendered('land-and-deploy/SKILL.md')).toMatch(rowList);
+  });
+
   test('release-body write side carries the banner tripwire', () => {
     const body = rendered('document-release/sections/release-body.md');
-    expect(body).toContain('grep -q "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md');
+    expect(body).toContain('grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md');
+    expect(body).toContain('grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-orig-$$.md');
     expect(body).toContain('banner tripwire clean');
   });
 

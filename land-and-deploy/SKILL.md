@@ -1374,8 +1374,11 @@ and tell the user: "I found and fixed a few issues during the review. The fixes 
 Check the evidence ledger first:
 
 ```bash
-~/.claude/skills/gstack/bin/gstack-evidence check --label tests --max-age 24
+~/.claude/skills/gstack/bin/gstack-evidence check --label tests --expect-cmd '<the project test command>' --max-age 24
 ```
+
+(The `--expect-cmd` string must be the exact command a wrapped run would use —
+it binds FRESH to the real suite, not to any green run recorded under the label.)
 
 If it prints FRESH (exit 0), a green run is on record for THIS exact
 working-tree content (fingerprint-bound, so a rebase or an identical-content

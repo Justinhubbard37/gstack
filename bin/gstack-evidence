@@ -38,7 +38,6 @@ import { mkdirSync, openSync, writeSync, closeSync, readdirSync, statSync, unlin
 import { join, dirname } from "path";
 import { spawnSync } from "child_process";
 import { appendJsonl, readJsonl } from "../lib/jsonl-store";
-import { resolveSlug } from "../lib/bin-context";
 import { scan, applyRedactions } from "../lib/redact-engine";
 
 const BIN_DIR = dirname(Bun.fileURLToPath(import.meta.url));
@@ -94,10 +93,12 @@ function currentWtree(): string | undefined {
 
 function ledgerPath(): { dir: string; file: string; logsDir: string } {
   const home = process.env.GSTACK_HOME || join(process.env.HOME || "~", ".gstack");
-  const slug = resolveSlug(join(BIN_DIR, "gstack-slug"));
-  // Same branch→filename sanitization as reviews.jsonl (gstack-slug's BRANCH).
+  // ONE gstack-slug spawn: its output carries both SLUG= and BRANCH= lines
+  // (same branch→filename sanitization as reviews.jsonl).
   const slugOut = spawnSync(join(BIN_DIR, "gstack-slug"), { encoding: "utf-8" });
+  const sm = (slugOut.stdout || "").match(/^SLUG=(.+)$/m);
   const bm = (slugOut.stdout || "").match(/^BRANCH=(.+)$/m);
+  const slug = sm ? sm[1].trim() : "unknown";
   const branch = bm ? bm[1].trim() : "no-branch";
   const dir = join(home, "projects", slug);
   return { dir, file: join(dir, `${branch}-evidence.jsonl`), logsDir: join(dir, "logs") };
@@ -212,7 +213,10 @@ async function cmdRun(argv: string[]): Promise<number> {
   const pump = async (stream: ReadableStream<Uint8Array> | undefined, out: NodeJS.WriteStream) => {
     if (!stream) return;
     for await (const chunk of stream) {
-      out.write(chunk);
+      // Honor backpressure: when the console consumer is slower than the child
+      // (piped into a pager/log collector), wait for drain instead of queueing
+      // unbounded chunks in the WriteStream buffer.
+      if (!out.write(chunk)) await new Promise((r) => out.once("drain", r));
       teeToLog(chunk);
     }
   };
@@ -298,7 +302,15 @@ function cmdCheck(argv: string[]): number {
       }
       wanted[wanted.length - 1].expectCmd = argv[++i] ?? "";
     } else if (a === "--all") all = true;
-    else if (a === "--max-age") maxAgeHours = Number(argv[++i]);
+    else if (a === "--max-age") {
+      maxAgeHours = Number(argv[++i]);
+      if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) {
+        // A typo must never silently drop the age gate (fail open) on a
+        // freshness checker: it is a usage error.
+        console.error(`gstack-evidence: --max-age must be a positive number of hours, got: ${JSON.stringify(argv[i])}`);
+        return 2;
+      }
+    }
     else if (a === "--allow-paths") allowPaths = (argv[++i] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   }
   if (!all && wanted.length === 0) {
@@ -324,7 +336,7 @@ function cmdCheck(argv: string[]): number {
   const wtreeNow = currentWtree();
   let allFresh = true;
   for (const { label, expectCmd } of labels) {
-    const latest = [...records].reverse().find((r) => r.label === label);
+    const latest = records.findLast((r) => r.label === label);
     if (!latest) {
       console.log(`EVIDENCE: MISSING label=${label}`);
       allFresh = false;
@@ -336,7 +348,7 @@ function cmdCheck(argv: string[]): number {
     if (latest.exit !== 0) {
       verdict = "STALE";
       reason = "recorded run failed";
-    } else if (maxAgeHours !== undefined && Number.isFinite(maxAgeHours)) {
+    } else if (maxAgeHours !== undefined) {
       const ageMs = Date.now() - Date.parse(latest.ts);
       if (!(ageMs >= 0 && ageMs <= maxAgeHours * 3600 * 1000)) {
         verdict = "STALE";
@@ -351,9 +363,15 @@ function cmdCheck(argv: string[]): number {
       // Content binding: identical working-tree fingerprint, or a diff confined
       // to the allow-list. Any git failure (gc'd tree, not a repo) → STALE —
       // never an error into the calling flow.
-      if (!latest.wtree || !wtreeNow) {
+      if (!latest.wtree || !/^[0-9a-f]{40}$/.test(latest.wtree) || !wtreeNow) {
+        // Stored fingerprints are re-validated before reaching git argv — a
+        // forged/corrupt ledger line must degrade, never inject options.
         verdict = "STALE";
-        reason = !latest.wtree ? "record has no content fingerprint" : "current fingerprint unavailable";
+        reason = !latest.wtree
+          ? "record has no content fingerprint"
+          : !/^[0-9a-f]{40}$/.test(latest.wtree)
+            ? "record has malformed fingerprint"
+            : "current fingerprint unavailable";
       } else if (latest.wtree !== wtreeNow) {
         const diff = git(["diff", "--name-only", latest.wtree, wtreeNow]);
         if (diff === undefined) {
@@ -392,5 +410,5 @@ try {
   // that breaks a skill flow: `run` propagates the child's code from inside
   // cmdRun; reaching here means bookkeeping blew up outside it.
   warn(`unexpected error: ${e?.message ?? e}`);
-  process.exit(sub === "check" ? 1 : 1);
+  process.exit(1);
 }

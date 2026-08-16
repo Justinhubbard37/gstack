@@ -62,3 +62,13 @@ gstack_hook_decision() {
   _ghd_encoded=$(gstack_hook_json_string "$_ghd_reason")
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":%s}}\n' "$_ghd_decision" "$_ghd_encoded"
 }
+
+# gstack_hook_log_fire SKILL PATTERN
+#   Append a hook_fire analytics record (pattern name only, never command
+#   content). Respects GSTACK_HOME so tests never pollute the operator's real
+#   analytics file. Best-effort: failures never affect the hook decision.
+gstack_hook_log_fire() {
+  _ghlf_dir="${GSTACK_HOME:-$HOME/.gstack}/analytics"
+  mkdir -p "$_ghlf_dir" 2>/dev/null || true
+  echo '{"event":"hook_fire","skill":"'"$1"'","pattern":"'"$2"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> "$_ghlf_dir/skill-usage.jsonl" 2>/dev/null || true
+}

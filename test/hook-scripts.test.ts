@@ -3,6 +3,7 @@ import { spawnSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { gitArgvIn } from './helpers/scratch-repo';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const CAREFUL_SCRIPT = path.join(ROOT, 'careful', 'bin', 'check-careful.sh');
@@ -30,8 +31,7 @@ function runHook(scriptPath: string, input: object, env?: Record<string, string>
 function withGitRepo(defaultBranch: string, currentBranch: string, fn: (repoDir: string) => void) {
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-careful-git-'));
   try {
-    const git = (args: string[]) =>
-      spawnSync('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...args], { cwd: repoDir, timeout: 5000 });
+    const git = (args: string[]) => gitArgvIn(repoDir, args);
     git(['init', '-q', '-b', defaultBranch]);
     git(['commit', '--allow-empty', '-q', '-m', 'init']);
     // A symbolic ref may dangle; the hook only reads its NAME.
@@ -536,6 +536,51 @@ describe('check-careful.sh', () => {
         const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('cd elsewhere && git push --force origin main'), undefined, repoDir);
         expect(exitCode).toBe(0);
         expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+      });
+    });
+
+    test.each(['rm -rf --no-preserve-root /', 'rm -rf / --no-preserve-root', 'rm -rf /*'])(
+      'denies catastrophic rm variant: %s',
+      (command) => {
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput(command));
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('HIGH');
+      },
+    );
+
+    test('plus-refspec force to the default branch denies (git push origin +main)', () => {
+      withGitRepo('main', 'feature', (repoDir) => {
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push origin +main'), undefined, repoDir);
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('HIGH');
+      });
+    });
+
+    test('refspec-form force to the default branch denies (git push -f origin HEAD:main)', () => {
+      withGitRepo('main', 'feature', (repoDir) => {
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push -f origin HEAD:main'), undefined, repoDir);
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+      });
+    });
+
+    test('plus-refspec force to a FEATURE branch asks (MEDIUM, not silent allow)', () => {
+      withGitRepo('main', 'main', (repoDir) => {
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push origin +feature'), undefined, repoDir);
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('force-push');
+      });
+    });
+
+    test('slashed default branch is matched whole (git push -f origin release/2.0)', () => {
+      withGitRepo('release/2.0', 'feature', (repoDir) => {
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push -f origin release/2.0'), undefined, repoDir);
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('release/2.0');
       });
     });
 

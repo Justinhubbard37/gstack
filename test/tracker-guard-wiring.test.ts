@@ -33,6 +33,10 @@ const READ_PATTERNS: { name: string; re: RegExp }[] = [
   // (mechanical title-prefix rewrite) is not.
   { name: 'gh issue-list title read', re: /gh issue list[^\n]*--json[\s"']*[a-z,]*\btitle\b/ },
   { name: 'glab body/description read', re: /glab mr view[^\n]*(description|--json[\s"']*[a-z,]*\bbody\b)/ },
+  // Flagless `gh pr view` / `gh issue view <n>` print the FULL body in their
+  // default human output — a raw read without --json is still a body read.
+  // (?![`/]) excludes prose mentions like "If `gh pr view` / `glab mr view` fails".
+  { name: 'gh flagless body read', re: /gh (pr|issue) view(?![`/])(?![^\n]*--json)(?![^\n]*-q )[^\n]*/ },
 ];
 
 // (file, pattern-name) exemptions with reasons. Keep every entry REASONED.
