@@ -266,6 +266,16 @@ const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
     reason: 'bin/ hits are fixture path segments; spawns bash explicitly — the IS_WINDOWS=1 refresh path must run on windows-latest',
   },
   {
+    file: 'test/uninstall-windows-copies.test.ts',
+    // Trips the "spawns bin/ shebang script" pattern via the
+    // path.join(ROOT, 'bin', 'gstack-uninstall') constant, but the script is
+    // always spawned through spawnSync('bash', [UNINSTALL, ...]). This file
+    // carries the #2563 Windows real-dir-copy uninstall coverage — the bug
+    // ONLY reproduces on the copy install shape windows-latest exercises.
+    // The symlink-shape describe block self-skips on win32.
+    reason: 'bin/ hit is a bash-spawned script path; #2563 real-dir uninstall coverage must run on windows-latest',
+  },
+  {
     file: 'browse/test/file-permissions.test.ts',
     // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
     // is platform-guarded (win32 returns early / takes the icacls branch).
