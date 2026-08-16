@@ -64,9 +64,16 @@ _gstack_codex_model_probe() {
   local _cache="$_gstack_home/.codex-model-probe"
   # Cache signature: config.toml + auth.json mtimes. Editing the model pin
   # or re-logging-in invalidates the cached MODEL_OK immediately.
+  # GNU-first stat order + numeric validation (the #2195 pattern): on GNU
+  # stat, `-f` means FILESYSTEM mode, so the BSD-first form emitted a
+  # multi-line filesystem block on Linux — the signature then never matched
+  # its own cache line and the cache missed on every read. BSD stat rejects
+  # `-c` cleanly, so GNU-first degrades correctly on macOS.
   local _cfg_m _auth_m _sig
-  _cfg_m=$(stat -f %m "$_codex_home/config.toml" 2>/dev/null || stat -c %Y "$_codex_home/config.toml" 2>/dev/null || echo 0)
-  _auth_m=$(stat -f %m "$_codex_home/auth.json" 2>/dev/null || stat -c %Y "$_codex_home/auth.json" 2>/dev/null || echo 0)
+  _cfg_m=$(stat -c %Y "$_codex_home/config.toml" 2>/dev/null || stat -f %m "$_codex_home/config.toml" 2>/dev/null || echo 0)
+  _auth_m=$(stat -c %Y "$_codex_home/auth.json" 2>/dev/null || stat -f %m "$_codex_home/auth.json" 2>/dev/null || echo 0)
+  case "$_cfg_m" in ''|*[!0-9]*) _cfg_m=0 ;; esac
+  case "$_auth_m" in ''|*[!0-9]*) _auth_m=0 ;; esac
   _sig="${_cfg_m}-${_auth_m}"
   local _now
   _now=$(date +%s 2>/dev/null || echo 0)
