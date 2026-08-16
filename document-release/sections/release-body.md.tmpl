@@ -286,6 +286,14 @@ reach the live PR/MR. If the composed section leaked it, ABORT the update:
 # to it would DOUBLE-EMIT ("0" twice) and break the -gt comparison into the
 # clean branch, failing open on the exact leak this guards. Default only the
 # missing-file case via parameter expansion.
+# Each bash block runs in a separate shell, so $$ differs BETWEEN blocks —
+# run the fetch, splice, scan, tripwire, and edit in ONE shell (or replace $$
+# with an explicit filename you carry through). The tripwire fails CLOSED on
+# missing files rather than counting zeros on paths that don't exist.
+if [ ! -f /tmp/gstack-pr-body-orig-$$.md ] || [ ! -f /tmp/gstack-pr-body-$$.md ]; then
+  echo "ABORT: tripwire inputs missing — the fetch and the write-back ran in different shells (\$\$ changed). Re-run fetch through edit in one bash block." >&2
+  false
+fi
 _ORIG_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-orig-$$.md 2>/dev/null)
 _ORIG_BANNERS=${_ORIG_BANNERS:-0}
 _NEW_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md 2>/dev/null)

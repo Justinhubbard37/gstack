@@ -10,6 +10,12 @@
 # content it wasn't made on. All other caller fields pass through untouched.
 # Outside a git repo the fields are simply omitted (legacy consumers fall back
 # to their heuristics).
+#
+# Known limitation: binding happens at LOG time, not review-START time — edits
+# made between finishing a review and logging it (including fixes the review
+# itself applied) are certified by the stamped fingerprint. gstack-evidence
+# closes this window for test runs (before/after capture); review flows log
+# immediately after reviewing, which keeps the window small but nonzero.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 eval "$("$SCRIPT_DIR/gstack-slug" 2>/dev/null)"

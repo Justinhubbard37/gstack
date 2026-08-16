@@ -16,7 +16,13 @@ INPUT=$(cat)
 # See hook-extract.sh for the drift history that motivated the shared file.
 _HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=careful/bin/hook-extract.sh
-. "$_HOOK_DIR/hook-extract.sh"
+# bash treats `.` on a MISSING file as fatal non-interactively; a partial
+# install must degrade to an ASK (this is the ask-tier hook), never silence.
+_HOOK_HELPER="$_HOOK_DIR/hook-extract.sh"
+if [ ! -f "$_HOOK_HELPER" ] || ! . "$_HOOK_HELPER" 2>/dev/null; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] Hook helpers unavailable (broken install?) - cannot safety-check this command. Approve only if you know what it does."}}\n'
+  exit 0
+fi
 
 # Extract the "command" field value from tool_input with a real JSON parser.
 #
@@ -101,8 +107,10 @@ if [ "$_IS_SIMPLE" -eq 1 ]; then
       # Strip one layer of surrounding quotes: rm -rf "/" is still rm -rf /.
       _TOK="${_TOK#\"}"; _TOK="${_TOK%\"}"; _TOK="${_TOK#\'}"; _TOK="${_TOK%\'}"
       case "$_TOK" in
-        sudo|rm|-*) continue ;;
-        '/'|'~'|'~/'|'$HOME'|'$HOME/'|'/*'|'//') _ROOT_TARGETS=1 ;;
+        # Skip non-target decoration: options, `--`, redirections (2>/dev/null
+        # is the most common suffix on agent-generated commands), backgrounding.
+        sudo|rm|-*|--|[0-9]'>'*|'>'*|'<'*|'&') continue ;;
+        '/'|'~'|'~/'|'$HOME'|'$HOME/'|'${HOME}'|'${HOME}/'|'/*'|'//') _ROOT_TARGETS=1 ;;
         *) _SAFE_TARGETS=1 ;;
       esac
     done
@@ -275,9 +283,9 @@ $_GSTACK_HOME_DIR/projects/$SLUG/careful-patterns.txt"
     while IFS= read -r _PAT || [ -n "$_PAT" ]; do
       case "$_PAT" in ''|'#'*) continue ;; esac
       _PAT_RC=0
-      printf '' | grep -qE "$_PAT" 2>/dev/null || _PAT_RC=$?
+      printf '' | grep -qE -- "$_PAT" 2>/dev/null || _PAT_RC=$?
       [ "$_PAT_RC" -eq 2 ] && continue # invalid ERE — skip the line
-      if printf '%s' "$CMD" | grep -qE "$_PAT" 2>/dev/null; then
+      if printf '%s' "$CMD" | grep -qE -- "$_PAT" 2>/dev/null; then
         WARN="Project rule matched: $_PAT"
         PATTERN="project_rule"
         break

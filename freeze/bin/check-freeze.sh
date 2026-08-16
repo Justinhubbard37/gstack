@@ -46,6 +46,12 @@ fi
 # "~/My Project/src" could never match anything — every edit denied (or the
 # mangled path accidentally allowed the wrong tree).
 FREEZE_DIR=$(head -n 1 "$FREEZE_FILE" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+# A literal leading ~ in the state file never matches absolute tool paths
+# (tilde is not expanded from variables) — expand it here.
+case "$FREEZE_DIR" in
+  "~/"*) FREEZE_DIR="$HOME/${FREEZE_DIR#\~/}" ;;
+  "~") FREEZE_DIR="$HOME" ;;
+esac
 
 # If freeze dir is empty, allow
 if [ -z "$FREEZE_DIR" ]; then

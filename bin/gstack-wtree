@@ -29,11 +29,13 @@
 set -euo pipefail
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+# Resolve the REAL index path BEFORE exporting GIT_INDEX_FILE — with the env
+# var set, `git rev-parse --git-path index` returns the temp index itself and
+# the stat-cache seed silently self-copies into a dead fast path.
+REAL_INDEX=$(git -C "$TOP" rev-parse --git-path index 2>/dev/null || true)
 TMPIDX=$(mktemp "${TMPDIR:-/tmp}/gstack-wtree-XXXXXX")
 trap 'rm -f "$TMPIDX"' EXIT
 export GIT_INDEX_FILE="$TMPIDX"
-
-REAL_INDEX=$(git -C "$TOP" rev-parse --git-path index 2>/dev/null || true)
 # Resolve relative --git-path output against the repo root.
 case "$REAL_INDEX" in
   ""|/*) ;;

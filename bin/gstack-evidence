@@ -92,7 +92,10 @@ function currentWtree(): string | undefined {
 }
 
 function ledgerPath(): { dir: string; file: string; logsDir: string } {
-  const home = process.env.GSTACK_HOME || join(process.env.HOME || "~", ".gstack");
+  const home = process.env.GSTACK_HOME || (process.env.HOME ? join(process.env.HOME, ".gstack") : undefined);
+  // No resolvable home: skip bookkeeping (a literal "~" dir in cwd would land
+  // inside the repo and perturb the fingerprint it exists to compute).
+  if (!home) throw new Error("no GSTACK_HOME/HOME — bookkeeping skipped");
   // ONE gstack-slug spawn: its output carries both SLUG= and BRANCH= lines
   // (same branch→filename sanitization as reviews.jsonl).
   const slugOut = spawnSync(join(BIN_DIR, "gstack-slug"), { encoding: "utf-8" });
@@ -212,6 +215,9 @@ async function cmdRun(argv: string[]): Promise<number> {
       }
     } catch {
       truncated = true; // stop teeing on any write failure; console stream continues
+      try {
+        writeSync(log.fd, Buffer.from("\n\n[gstack-evidence: log ended early (write failure) — output continued on console]\n"));
+      } catch {}
     }
   };
   const pump = async (stream: ReadableStream<Uint8Array> | undefined, out: NodeJS.WriteStream) => {
@@ -220,7 +226,19 @@ async function cmdRun(argv: string[]): Promise<number> {
       // Honor backpressure: when the console consumer is slower than the child
       // (piped into a pager/log collector), wait for drain instead of queueing
       // unbounded chunks in the WriteStream buffer.
-      if (!out.write(chunk)) await new Promise((r) => out.once("drain", r));
+      if (!out.write(chunk)) {
+        // Race drain against error: a dying consumer (EPIPE from `| head`)
+        // never drains — resolve either way and stop forwarding on error.
+        await new Promise<void>((r) => {
+          const done = () => {
+            out.off("drain", done);
+            out.off("error", done);
+            r();
+          };
+          out.once("drain", done);
+          out.once("error", done);
+        });
+      }
       teeToLog(chunk);
     }
   };
