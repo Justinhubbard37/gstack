@@ -2418,6 +2418,21 @@ by shard parallelism; the per-file wall cost remains.
 **Where:** test/gstack-gbrain-detect-mcp-mode.test.ts.
 **Effort:** S (human ~2h, CC ~15min).
 
+### P2: In-shard eval concurrency (40) is the shared root of the timeout-flake family
+
+**What:** Every timeout-flake member on PR #2593 (document-release 180s->300s,
+review-dashboard-via 300s->360s after PR #2472's 180s->300s, retro-base-branch
+240s->360s) shares one story: claude session STARTUP queues behind up to 39
+siblings under evals.yml's `--max-concurrency 40`, eating the per-test budget
+before the first turn. Per-test ratchets treat symptoms. Systemic options:
+(a) drop in-shard concurrency to ~15-20 and measure the wall-clock cost,
+(b) startup-aware budgets (start the timer at first turn, not spawn),
+(c) per-row concurrency overrides like the retries field. Receipts: the
+PR #2593 flake ledger comment.
+**Where:** .github/workflows/evals.yml:309 (--max-concurrency 40);
+test/helpers/session-runner.ts (budget start point).
+**Effort:** M (human ~1d, CC ~45min + measurement rounds).
+
 ### P2: plan-design-review scope-gate detector is marginal under CI contention
 
 **What:** `plan-design-review reaches a terminal outcome outside plan mode`
