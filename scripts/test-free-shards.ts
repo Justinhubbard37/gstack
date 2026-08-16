@@ -238,6 +238,16 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
     file: 'test/question-preference-hook.test.ts',
     reason: 'spawns the PreToolUse preference hook (shebang script) directly; Windows spawn cannot exec it',
   },
+  // Round-4 census (PR #2593 run 31920052810): unhandled errors with no
+  // (fail) lines — attributed statically (the lane had no log artifact yet).
+  {
+    file: 'browse/test/browser-skill-commands.test.ts',
+    reason: 'spawnSkill spawns bun with a constructed env — bun resolution fails under Windows spawn (unhandled, no (fail) line)',
+  },
+  {
+    file: 'browse/test/security-audit-r2.test.ts',
+    reason: 'symlink-attack fixtures (evil-link) need Developer Mode CI runners lack; expect(toThrow) fires unhandled on Windows',
+  },
 ];
 
 // Force-include overrides: files a WINDOWS_FRAGILE_PATTERNS regex excludes for

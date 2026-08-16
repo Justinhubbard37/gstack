@@ -109,5 +109,20 @@ jobs:
         # growing/pruning Windows coverage is one list, not two. If a test is
         # red here because it's genuinely POSIX-bound, add it to the curation
         # exclusions — don't resurrect a hand list in this file.
+        env:
+          # Point os.tmpdir() at the runner temp so the shard logs land
+          # somewhere the artifact step below can glob.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: bun run test:windows
         shell: bash
+
+      # Same diagnosability contract as free-tests.yml: a red lane must
+      # carry the WHY (the runner's quiet console names files, not causes).
+      - name: Upload shard logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-free-test-shard-logs
+          path: ${{ runner.temp }}/gstack-free-test-*.log
+          if-no-files-found: ignore
