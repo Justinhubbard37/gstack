@@ -1557,8 +1557,11 @@ describe('parameterized resolver support', () => {
 describe('preamble routing injection', () => {
   const shipContent = readShipUnion();
 
-  test('preamble bash checks for routing section in CLAUDE.md', () => {
-    expect(shipContent).toContain('grep -q "## Skill routing" CLAUDE.md');
+  test('preamble bash checks for routing section in CLAUDE.md and AGENTS.md', () => {
+    // #2500: the probe iterates CLAUDE.md AND AGENTS.md — non-Claude hosts
+    // route skills via AGENTS.md, the cross-harness convention file.
+    expect(shipContent).toContain('for _RF in CLAUDE.md AGENTS.md');
+    expect(shipContent).toContain('grep -q "## Skill routing" "$_RF"');
     expect(shipContent).toContain('HAS_ROUTING');
   });
 
@@ -2023,8 +2026,15 @@ describe('Codex generation (--host codex)', () => {
     // timeout-wrapper guidance documents the Codex CLI's own rollout-log
     // location (a user-facing CLI path, same class as ~/.codex/logs/ in the
     // codex skill), not the gstack Codex host install path.
+    // `~/.codex/config.toml` is the same user-facing class: the shared
+    // codexPreflight's model_unusable branch (#2477) points at the CLI's own
+    // config file, where the rejected `model =` pin lives.
     expect(content).not.toContain('.agents/skills');
-    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
+    expect(
+      content
+        .replaceAll('~/.codex/sessions/', '')
+        .replaceAll('~/.codex/config.toml', ''),
+    ).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: ship skill still uses .claude/skills/ paths', () => {
@@ -2032,8 +2042,14 @@ describe('Codex generation (--host codex)', () => {
     expect(content).toContain('~/.claude/skills/gstack');
     expect(content).not.toContain('.agents/skills');
     // ~/.codex/sessions/ is the Codex CLI's rollout-log path (user-facing),
-    // documented by the adversarial-pass timeout guidance — see review test above.
-    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
+    // documented by the adversarial-pass timeout guidance; ~/.codex/config.toml
+    // is the CLI's own config file (model_unusable guidance, #2477) — see the
+    // review test above.
+    expect(
+      content
+        .replaceAll('~/.codex/sessions/', '')
+        .replaceAll('~/.codex/config.toml', ''),
+    ).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: all Claude skills have zero Codex paths', () => {
@@ -2043,10 +2059,16 @@ describe('Codex generation (--host codex)', () => {
       // codex + autoplan document the Codex CLI auth file (~/.codex/auth.json)
       // and log path (~/.codex/logs/) — those are user-facing Codex CLI paths,
       // not the gstack Codex host install path. ~/.codex/sessions/ (rollout
-      // logs, referenced by the review/ship timeout guidance) is the same
-      // user-facing class, so it is scrubbed before the ban.
+      // logs, referenced by the review/ship timeout guidance) and
+      // ~/.codex/config.toml (the model_unusable guidance in the shared
+      // codexPreflight, #2477) are the same user-facing class, so they are
+      // scrubbed before the ban.
       if (skill.dir !== 'pair-agent' && skill.dir !== 'codex' && skill.dir !== 'autoplan') {
-        expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
+        expect(
+          content
+            .replaceAll('~/.codex/sessions/', '')
+            .replaceAll('~/.codex/config.toml', ''),
+        ).not.toContain('~/.codex/');
       }
       // gstack-upgrade legitimately references .agents/skills for cross-platform detection
       if (skill.dir !== 'gstack-upgrade') {
