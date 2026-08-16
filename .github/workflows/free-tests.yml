@@ -24,6 +24,10 @@ name: Free Tests
 on:
   pull_request:
     branches: [main]
+  # Also on main pushes: two individually-green PRs can merge into a red
+  # main; without this nothing runs the free suite on main until the next PR.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
