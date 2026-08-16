@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.66.2.0] - 2026-08-16
+
+**We read every line of external-contributor code from the last two months.**
+**Six findings hardened, two refuted, zero backdoors.**
+
+gstack ran an explicit security sweep over all external-contributor code merged since mid-June: the seven directly-merged `time-attack` PRs, the two fork-port squash waves, and the roughly fifty absorbed community PRs. About 38,000 lines across ~500 files, read with an adversarial eye. The verdict up front: no backdoor, no exfiltration path, no live secret leak. The contributions are net security-strengthening. This release hardens the six real findings the sweep confirmed and locks each one behind a regression test, so the property it protects holds by construction, not by luck.
+
+The pre-push secret scanner now catches all-caps database passwords. Persisted browser sessions stay out of git whether or not your repo has a `.gitignore`. The App Store Connect key the release flow mints is scoped to the one app you are shipping, and the exit report tells you it exists and how to revoke it. The iOS test bridge's private touch APIs compile out of Release builds. The browser server's Node spawn shim has its `exited`/drain/memory-cap contract back. Bearer-token comparison is constant-time.
+
+### The numbers that matter
+
+Source: a two-wave read-only audit (72 agents, two independent verifiers per finding) plus a four-specialist pre-landing review. Reproduce the headline check with `echo 'postgres://admin:PROD2026SECRET@h/db' | bin/gstack-redact` (exit 3) and `bun run test`.
+
+| Property | Before | After |
+|---|---|---|
+| `postgres://admin:PROD2026SECRET@host` at pre-push | passed the HIGH gate | HIGH block (exit 3) |
+| `postgresql://USER:PASSWORD@host` doc placeholder | skipped | still skipped (pinned) |
+| Persisted session cookies in a `.gitignore`-less repo | git-committable | ignored by construction |
+| Minted App Store Connect key scope | every app on the team | the one app being shipped |
+| iOS private-API touch code in a Release build | compiled in | compiled out (`#if DEBUG`) |
+| `await proc.exited` on the Windows Node fallback | resolved `undefined` | resolves the real exit code |
+| Loopback bearer-token comparison | byte-by-byte `===` | constant-time |
+
+The one that matters most for a public repo: opt-in browser session persistence kept live cookies and request logs under `.gstack/` inside the working tree. Now a self-contained ignore lands there at setup time, so `git add -A && git push` cannot ship them.
+
+### What this means for you
+
+If you run gstack from a build that pulled in community or fork-ported code, this is the release where someone read all of it and calibrated the guards against real credential shapes, not just placeholders. Run `bin/gstack-egress verify` and `bin/gstack-redact` on your own repos with confidence. The full audit trail and the governance follow-ups (a required-review rule for `main`) are captured for maintainers separately; nothing here changes a command you already run.
+
+### Itemized changes
+
+#### Fixed
+- The pre-push credential scanner blocks a real all-caps URL password (`postgres://admin:PROD2026SECRET@host`) at the HIGH tier. The `USER:PASSWORD` documentation convention still suppresses, pinned in both directions with a table-driven test over the full placeholder set. (`lib/redact-patterns.ts`)
+- The browse state directory (`.gstack/`) carries a self-contained `.gitignore` written unconditionally when the directory is created, so persisted `session-state.json` cookies and `browse-network.log` / `browse-audit.jsonl` request headers can never be committed, regardless of the project's own `.gitignore`. (`browse/src/config.ts`)
+- The Node `Bun.spawn` polyfill regains its `exited` promise, eager stdout/stderr drain, and 16MB output cap, restoring correct child-process handling on the Windows Node fallback (cookie import, browser-skill children). (`browse/src/bun-polyfill.cjs`)
+- The iOS QA touch bridge's private UIKit/IOKit synthesis is gated `#if TARGET_OS_IOS && DEBUG` with a matching `cSettings` DEBUG define, so it compiles out of Release builds. (`ios-qa/templates/`)
+- Loopback bearer-token comparison in the browse server is constant-time. (`browse/src/server.ts`)
+
+#### Changed
+- The App Store Connect upload key minted during an Apple release is scoped to the target app (`allAppsVisible:false` with an explicit `apps` relationship) instead of every app on the team, and the release exit report discloses the key and its revocation path. (`ship/sections/apple-release.md`)
+- `gstack-egress verify` documents that ledger truncation and deletion are out of scope for the forensic-observability threat model. (`bin/gstack-egress`)
+
+#### For contributors
+- New regression guards pin each security property against a silent revert: a static tripwire for the constant-time `validateAuth`, a table-driven suppression test over the exported `URL_PASSWORD_PLACEHOLDER_WORDS`, an unconditional-write test for the state-dir ignore, a static tripwire for the iOS Release compile-out, and the restored `Bun.spawn` contract tests.
+
 ## [1.66.1.0] - 2026-08-16
 
 **Every claim gstack makes now binds to the content it was made on.**
