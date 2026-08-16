@@ -584,6 +584,37 @@ describe('check-careful.sh', () => {
       });
     });
 
+    test.each(['rm -rf "/"', "rm -rf '~'", 'rm -rf //'])('quoted root targets still deny: %s', (command) => {
+      const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput(command));
+      expect(exitCode).toBe(0);
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+    });
+
+    test('quoted default-branch ref still denies (git push -f origin "main")', () => {
+      withGitRepo('main', 'feature', (repoDir) => {
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push -f origin "main"'), undefined, repoDir);
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+      });
+    });
+
+    test('missing origin/HEAD symbolic ref falls back to origin/main probe (Conductor worktrees)', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-careful-nohead-'));
+      try {
+        const git = (args: string[]) => gitArgvIn(repoDir, args);
+        git(['init', '-q', '-b', 'main']);
+        git(['commit', '--allow-empty', '-q', '-m', 'init']);
+        // No symbolic-ref — only a plain remote-tracking ref, like a Conductor worktree.
+        git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+        git(['checkout', '-q', '-b', 'feature']);
+        const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push --force origin main'), undefined, repoDir);
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
     test('--force-with-lease is never HIGH (the safe force variant)', () => {
       withGitRepo('main', 'main', (repoDir) => {
         const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('git push --force-with-lease origin main'), undefined, repoDir);
@@ -810,6 +841,28 @@ describe('check-freeze.sh', () => {
           const outside = runHook(FREEZE_SCRIPT, freezeInput(path.join(base, 'elsewhere.ts')), { CLAUDE_PLUGIN_DATA: stateDir });
           expect(outside.exitCode).toBe(0);
           expect(outside.output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        });
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('broken install fails closed', () => {
+    test('a missing hook-extract helper DENIES instead of proceeding', () => {
+      // Copy the freeze hook into a tree with NO careful sibling — the source
+      // fails, and a deny-tier boundary must fail CLOSED, not fall through.
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-freeze-broken-'));
+      const binDir = path.join(base, 'freeze', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const script = path.join(binDir, 'check-freeze.sh');
+      fs.copyFileSync(FREEZE_SCRIPT, script);
+      try {
+        withFreezeDir('/Users/dev/project/src/', (stateDir) => {
+          const { exitCode, output } = runHook(script, freezeInput('/Users/dev/project/src/x.ts'), { CLAUDE_PLUGIN_DATA: stateDir });
+          expect(exitCode).toBe(0);
+          expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+          expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('fail closed');
         });
       } finally {
         fs.rmSync(base, { recursive: true, force: true });

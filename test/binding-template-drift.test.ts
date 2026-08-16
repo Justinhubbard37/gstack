@@ -57,11 +57,35 @@ describe('content-binding template drift', () => {
     expect(rendered('land-and-deploy/SKILL.md')).toMatch(rowList);
   });
 
-  test('release-body write side carries the banner tripwire', () => {
+  test('release-body write side carries the banner tripwire (and it actually fires)', () => {
     const body = rendered('document-release/sections/release-body.md');
     expect(body).toContain('grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md');
     expect(body).toContain('grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-orig-$$.md');
+    // The fail-open shape: grep -c prints 0 AND exits 1 on no-match, so an
+    // `|| echo 0` double-emits and breaks the -gt into the clean branch.
+    expect(body).not.toContain('|| echo 0');
     expect(body).toContain('banner tripwire clean');
+
+    // Functional: execute the template's tripwire block against a 0-banner
+    // original and a 1-banner outgoing body — the ABORT branch must fire.
+    const block = body.match(/_ORIG_BANNERS=\$\(grep[\s\S]*?fi\n/);
+    expect(block).not.toBeNull();
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const { execSync } = require('child_process');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-banner-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'orig.md'), 'clean body\n');
+      fs.writeFileSync(path.join(dir, 'new.md'), 'body with UNTRUSTED TRACKER CONTENT banner leak\n');
+      const script = block![0]
+        .replaceAll('/tmp/gstack-pr-body-orig-$$.md', path.join(dir, 'orig.md'))
+        .replaceAll('/tmp/gstack-pr-body-$$.md', path.join(dir, 'new.md'));
+      const out = execSync(`bash -c ${JSON.stringify(script + '; true')}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+      expect(out).not.toContain('banner tripwire clean');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('greptile triage reads bodies through the guard (metadata/body split)', () => {

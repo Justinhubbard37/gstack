@@ -20,7 +20,16 @@ INPUT=$(cat)
 # escaped quotes and failed OPEN; the shared file kills that drift class.
 _HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=careful/bin/hook-extract.sh
-. "$_HOOK_DIR/../../careful/bin/hook-extract.sh"
+# Freeze is deny-tier: if its own helpers are missing/broken (partial install,
+# mid-upgrade state), the boundary must fail CLOSED — inline JSON, since the
+# encoder we would normally use lives in the file that just failed to load.
+# NOTE: bash treats `.` on a MISSING file as fatal in non-interactive shells
+# (an if-guard cannot catch it) — the existence check must come first.
+_HOOK_HELPER="$_HOOK_DIR/../../careful/bin/hook-extract.sh"
+if [ ! -f "$_HOOK_HELPER" ] || ! . "$_HOOK_HELPER" 2>/dev/null; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[freeze] Hook helpers unavailable (broken install?) - blocked, fail closed. Reinstall gstack or run /unfreeze."}}\n'
+  exit 0
+fi
 
 # Locate the freeze directory state file
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.gstack}"

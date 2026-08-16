@@ -966,7 +966,7 @@ Display:
 - If \`skip_eng_review\` config is \`true\`, Eng Review shows "SKIPPED (global)" and verdict is CLEARED
 
 **Staleness detection:** After displaying the dashboard, check if any existing reviews may be stale:
-- **Content-first rule (diff-scoped rows only: \`review\`, \`adversarial-review\`, ship-stage entries).** Parse the \`---WTREE---\` and \`---DIRTY---\` sections from the bash output. If an entry has a \`wtree\` field AND it equals the current \`---WTREE---\` value AND the entry's \`dirty\` is false AND \`---DIRTY---\` is false, the review is CURRENT — identical content, regardless of commit count, rebase, or amend. Skip the commit-count heuristic for that entry and show no staleness note.
+- **Content-first rule (diff-scoped rows only: \`review\`, \`adversarial-review\`, \`codex-review\`, ship-stage entries).** Parse the \`---WTREE---\` and \`---DIRTY---\` sections from the bash output. If an entry has a \`wtree\` field AND it equals the current \`---WTREE---\` value AND the entry's \`dirty\` is false AND \`---DIRTY---\` is false, the review is CURRENT — identical content, regardless of commit count, rebase, or amend. Skip the commit-count heuristic for that entry and show no staleness note.
 - Plan-tier rows (plan-ceo-review, plan-eng-review, plan-design-review) grade a plan file, not the repo tree — never apply the wtree rule to them; they keep the 7-day freshness logic. If such an entry carries a \`plan_sha256\` field, you MAY compare it against the current plan file's sha256 and note "plan changed since review" on mismatch.
 - Fallback (no \`wtree\` on the entry, wtree mismatch, or either side dirty): parse the \`---HEAD---\` section to get the current HEAD commit hash. For each review entry that has a \`commit\` field: compare it against the current HEAD. If different, count elapsed commits: \`git rev-list --count STORED_COMMIT..HEAD\`. If that command FAILS (the stored commit was rebased away), grade UNKNOWN and treat as stale — do not error. Display: "Note: {skill} review from {date} may be stale — {N} commits since review"
 - For entries without a \`commit\` field (legacy entries): display "Note: {skill} review from {date} has no commit tracking — consider re-running for accurate staleness detection"
@@ -2931,8 +2931,15 @@ EOF
 The evidence ledger is the mechanical arm of this law. Check it FIRST:
 
 ```bash
-$GSTACK_ROOT/bin/gstack-evidence check --label tests --label vitest --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json
+$GSTACK_ROOT/bin/gstack-evidence check --label tests --expect-cmd '<exact tests-lane command from Step 5>' --label vitest --expect-cmd '<exact vitest-lane command from Step 5>' --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json
 ```
+
+Pass each `--expect-cmd` the exact command string the wrapped Step 5 lane ran —
+that binds FRESH to the real suite (a green `echo ok` recorded under the label
+can never satisfy the check). Residual risk, accepted: `package.json` sits on
+the allow-list because Step 12's version bump writes its version field between
+the test run and this gate; a behavior-changing package.json edit in that
+window would not invalidate evidence. The check is advisory either way.
 
 - **Every line FRESH (exit 0):** the recorded runs were green and the working-tree
   content is identical to what was tested, modulo the allow-listed release files

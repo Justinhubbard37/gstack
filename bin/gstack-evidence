@@ -178,6 +178,10 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   const log = paths ? openLog(paths.logsDir, label, cmdSha) : undefined;
 
+  // Fingerprint the content BEFORE the child runs: a working-tree edit made
+  // DURING a long suite must not be certified as "the tested content".
+  const wtreeBefore = currentWtree();
+
   const started = Date.now();
   let exitCode: number;
   let proc: ReturnType<typeof Bun.spawn> | undefined;
@@ -187,7 +191,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     // Spawn failure (ENOENT on argv-direct form): record exit 127, propagate 127.
     exitCode = 127;
     warn(`spawn failed: ${e?.message ?? e}`);
-    record(paths, log?.path, label, commandString, cmdSha, exitCode, started);
+    record(paths, log?.path, label, commandString, cmdSha, exitCode, started, wtreeBefore);
     return exitCode;
   }
 
@@ -239,7 +243,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  record(paths, log?.path, label, commandString, cmdSha, exitCode, started);
+  record(paths, log?.path, label, commandString, cmdSha, exitCode, started, wtreeBefore);
   return exitCode;
 }
 
@@ -251,6 +255,7 @@ function record(
   cmdSha: string,
   exitCode: number,
   startedMs: number,
+  wtreeBefore: string | undefined,
 ): void {
   if (!paths) return;
   try {
@@ -269,7 +274,15 @@ function record(
       rec.commit = commit;
       rec.tree = git(["rev-parse", "HEAD^{tree}"]);
       rec.dirty = (git(["status", "--porcelain", "-uno"]) ?? "") !== "";
-      rec.wtree = currentWtree();
+      // TOCTOU guard: the fingerprint is only trustworthy when the content was
+      // IDENTICAL before and after the run. A mid-run edit omits wtree, so
+      // check grades STALE instead of certifying content the suite never ran.
+      const wtreeAfter = currentWtree();
+      if (wtreeBefore && wtreeAfter && wtreeBefore === wtreeAfter) {
+        rec.wtree = wtreeAfter;
+      } else if (wtreeBefore || wtreeAfter) {
+        warn("working-tree content changed during the run — evidence recorded without a content fingerprint (will grade STALE)");
+      }
     }
     if (logPath) rec.log_path = logPath;
     appendJsonl(paths.file, rec, { mode: 0o600 });

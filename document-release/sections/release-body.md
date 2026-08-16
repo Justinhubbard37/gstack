@@ -284,8 +284,14 @@ reach the live PR/MR. If the composed section leaked it, ABORT the update:
 # (A hostile body that already contained the literal banner string must not
 # permanently DoS every future doc update — pre-existing occurrences pass
 # through unchanged; only markup WE would be adding trips the wire.)
-_ORIG_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-orig-$$.md 2>/dev/null || echo 0)
-_NEW_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md 2>/dev/null || echo 0)
+# grep -c already prints 0 on no-match (exit 1) — appending a fallback echo
+# to it would DOUBLE-EMIT ("0" twice) and break the -gt comparison into the
+# clean branch, failing open on the exact leak this guards. Default only the
+# missing-file case via parameter expansion.
+_ORIG_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-orig-$$.md 2>/dev/null)
+_ORIG_BANNERS=${_ORIG_BANNERS:-0}
+_NEW_BANNERS=$(grep -c "UNTRUSTED TRACKER CONTENT" /tmp/gstack-pr-body-$$.md 2>/dev/null)
+_NEW_BANNERS=${_NEW_BANNERS:-0}
 if [ "$_NEW_BANNERS" -gt "$_ORIG_BANNERS" ]; then
   echo "ABORT: envelope banner leaked into the outgoing PR/MR body — recompose the Documentation section from your own outputs, not from the enveloped rendering." >&2
 else

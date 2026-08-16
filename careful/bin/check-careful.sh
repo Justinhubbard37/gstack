@@ -98,9 +98,11 @@ if [ "$_IS_SIMPLE" -eq 1 ]; then
     _SAFE_TARGETS=0
     set -f
     for _TOK in $CMD; do
+      # Strip one layer of surrounding quotes: rm -rf "/" is still rm -rf /.
+      _TOK="${_TOK#\"}"; _TOK="${_TOK%\"}"; _TOK="${_TOK#\'}"; _TOK="${_TOK%\'}"
       case "$_TOK" in
         sudo|rm|-*) continue ;;
-        '/'|'~'|'~/'|'$HOME'|'$HOME/'|'/*') _ROOT_TARGETS=1 ;;
+        '/'|'~'|'~/'|'$HOME'|'$HOME/'|'/*'|'//') _ROOT_TARGETS=1 ;;
         *) _SAFE_TARGETS=1 ;;
       esac
     done
@@ -126,10 +128,23 @@ if [ "$_IS_SIMPLE" -eq 1 ]; then
       # FIXED-STRING token comparison — never interpolate a branch name into
       # an ERE (metacharacters would over/under-match).
       _DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||' || true)
+      # Conductor worktrees often lack the origin/HEAD symbolic ref — without a
+      # fallback the HIGH tier would be silently inert in the primary deploy
+      # environment. Probe the two conventional defaults.
+      if [ -z "$_DEFAULT_BRANCH" ]; then
+        if git show-ref --verify -q refs/remotes/origin/main 2>/dev/null; then
+          _DEFAULT_BRANCH="main"
+        elif git show-ref --verify -q refs/remotes/origin/master 2>/dev/null; then
+          _DEFAULT_BRANCH="master"
+        fi
+      fi
       if [ -n "$_DEFAULT_BRANCH" ]; then
         _TARGETS_DEFAULT=0
         set -f
         for _TOK in $CMD; do
+          # Strip one layer of surrounding quotes: `git push -f origin "main"`
+          # must not dodge the deny just because the ref is quoted.
+          _TOK="${_TOK#\"}"; _TOK="${_TOK%\"}"; _TOK="${_TOK#\'}"; _TOK="${_TOK%\'}"
           case "$_TOK" in git|push|sudo|-*) continue ;; esac
           _REF="${_TOK#+}"          # +main -> main
           _REF="${_REF##*:}"        # HEAD:main / src:main -> main

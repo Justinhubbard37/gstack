@@ -70,5 +70,12 @@ gstack_hook_decision() {
 gstack_hook_log_fire() {
   _ghlf_dir="${GSTACK_HOME:-$HOME/.gstack}/analytics"
   mkdir -p "$_ghlf_dir" 2>/dev/null || true
-  echo '{"event":"hook_fire","skill":"'"$1"'","pattern":"'"$2"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> "$_ghlf_dir/skill-usage.jsonl" 2>/dev/null || true
+  # Fields are JSON-encoded (a repo basename can carry quotes/backslashes) —
+  # same rule this file states for decisions: never raw-interpolate into JSON.
+  _ghlf_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")
+  printf '{"event":"hook_fire","skill":%s,"pattern":%s,"ts":"%s","repo":%s}\n' \
+    "$(gstack_hook_json_string "$1")" \
+    "$(gstack_hook_json_string "$2")" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$(gstack_hook_json_string "$_ghlf_repo")" >> "$_ghlf_dir/skill-usage.jsonl" 2>/dev/null || true
 }

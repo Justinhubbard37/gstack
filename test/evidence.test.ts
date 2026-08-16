@@ -147,6 +147,18 @@ describe('gstack-evidence run', () => {
     expect(rec.exit).toBe(0);
   });
 
+  test('TOCTOU guard: a mid-run working-tree edit omits the fingerprint (never certifies unseen content)', () => {
+    // The command itself mutates the tree — wtreeBefore != wtreeAfter.
+    const r = run(['run', '--label', 'tests', '--', 'echo mutated >> src.txt && echo green']);
+    expect(r.status).toBe(0);
+    const rec = records().pop();
+    expect(rec.wtree).toBeUndefined();
+    expect(r.stderr).toContain('changed during the run');
+    const chk = run(['check', '--label', 'tests']);
+    expect(chk.status).toBe(1);
+    expect(chk.stdout).toContain('no content fingerprint');
+  });
+
   test('a HIGH credential in the command is stored redacted', () => {
     const r = run(['run', '--label', 'sec', '--', 'echo ghp_A8bC2dE4fG6hI8jK0lM2nO4pQ6rS8tU0vW2x deploy']);
     expect(r.status).toBe(0);
