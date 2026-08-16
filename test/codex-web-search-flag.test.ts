@@ -29,6 +29,9 @@ function grepRepo(pattern: string, includes: string[]): string[] {
     .split('\n')
     .filter(Boolean)
     .filter((f) => !f.includes('node_modules'))
+    // The workspace-local .claude/ install is not generated output and can
+    // carry dangling symlinks from unrelated sessions.
+    .filter((f) => !f.includes('/.claude/'))
     .filter((f) => !f.endsWith('test/codex-web-search-flag.test.ts'));
 }
 

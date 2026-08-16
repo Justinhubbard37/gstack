@@ -36,7 +36,7 @@ const FILENAME_PREFIX = /\$\{?_BRANCH\}?[A-Za-z0-9._-]*\.(?:jsonl|json|md|txt|lo
 
 function renderedSkillFiles(): string[] {
   const out = execSync(
-    `find "${ROOT}" -name 'SKILL.md' -not -path '*/node_modules/*' ; find "${ROOT}" -path '*/sections/*.md' -not -path '*/node_modules/*'`,
+    `find "${ROOT}" -name 'SKILL.md' -not -path '*/node_modules/*' -not -path '*/.claude/*' ; find "${ROOT}" -path '*/sections/*.md' -not -path '*/node_modules/*' -not -path '*/.claude/*'`,
     { encoding: 'utf-8' },
   );
   return out.split('\n').filter(Boolean);

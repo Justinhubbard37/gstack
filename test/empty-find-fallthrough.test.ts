@@ -86,7 +86,10 @@ describe('empty find must not fall through to cwd (#2483)', () => {
     const hits = out
       .split('\n')
       .filter(Boolean)
-      .filter((f) => !f.includes('node_modules'));
+      .filter((f) => !f.includes('node_modules'))
+    // The workspace-local .claude/ install is not generated output and can
+    // carry dangling symlinks from unrelated sessions.
+    .filter((f) => !f.includes('/.claude/'));
     expect(hits).toEqual([]);
   });
 });
