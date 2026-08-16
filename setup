@@ -104,6 +104,38 @@ _link_or_copy() {
   fi
 }
 
+# ─── Ownership gates for the Windows refresh bypass (#2444 → #2142) ─────────
+# On Windows a refresh means rm -rf + re-copy (_link_or_copy). The host
+# skills dirs are SHARED namespaces (~/.codex/skills, ~/.factory/skills,
+# ~/.cursor/skills, ...), so a gstack* glob name can collide with a user's
+# OWN real directory (e.g. ~/.cursor/skills/gstack-notes) — deleting it on
+# every ./setup re-run is silent data loss. Mirror of bin/gstack-uninstall's
+# provenance gate (#2563): an existing REAL skill dir may only be replaced
+# when its SKILL.md carries the generated banner. Missing targets and
+# symlinks always pass (replacing a link never destroys content); non-dir
+# targets pass (file targets live inside gstack-owned roots).
+_owned_for_windows_refresh() {
+  local dst="$1"
+  if [ ! -e "$dst" ] && [ ! -L "$dst" ]; then return 0; fi
+  if [ -L "$dst" ]; then return 0; fi
+  if [ ! -d "$dst" ]; then return 0; fi
+  grep -q '<!-- AUTO-GENERATED from' "$dst/SKILL.md" 2>/dev/null
+}
+
+# A sidecar/runtime ROOT (…/skills/gstack) is provably USER-owned when it is
+# a real dir whose SKILL.md exists but lacks the generated banner — a
+# hand-written skill squatting on the canonical name. The sidecar installers
+# skip it entirely rather than write into (or wipe) someone else's skill.
+# A root with NO SKILL.md stays presumed ours: it is the documented gstack
+# install location and old/partial installs legitimately look like that.
+_sidecar_root_user_owned() {
+  local root="$1"
+  [ -d "$root" ] || return 1
+  [ -L "$root" ] && return 1
+  [ -f "$root/SKILL.md" ] || return 1
+  ! grep -q '<!-- AUTO-GENERATED from' "$root/SKILL.md" 2>/dev/null
+}
+
 _WINDOWS_COPY_NOTE_PRINTED=0
 _print_windows_copy_note_once() {
   if [ "$IS_WINDOWS" -eq 1 ] && [ "$_WINDOWS_COPY_NOTE_PRINTED" -eq 0 ]; then
@@ -1012,9 +1044,15 @@ link_codex_skill_dirs() {
       # the symlink-or-missing guard skipped every re-run and SKILL.md never
       # refreshed after `git pull`. IS_WINDOWS bypasses the guard —
       # _link_or_copy rm -rf's the destination first, refreshing the copy.
+      # #2142: a real dir may only be replaced when it is provably ours
+      # (_owned_for_windows_refresh), never a user's own colliding dir.
       if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
-        _link_or_copy "$skill_dir" "$target"
-        linked+=("$skill_name")
+        if _owned_for_windows_refresh "$target"; then
+          _link_or_copy "$skill_dir" "$target"
+          linked+=("$skill_name")
+        else
+          echo "  left in place (existing dir not gstack-managed — no generated banner): $target" >&2
+        fi
       fi
     fi
   done
@@ -1030,6 +1068,13 @@ link_codex_skill_dirs() {
 create_agents_sidecar() {
   local repo_root="$1"
   local agents_gstack="$repo_root/.agents/skills/gstack"
+  # #2142: a hand-written skill squatting on the canonical name is the
+  # user's — never write into it (the Windows branch would rm -rf its
+  # subdirs on every re-run).
+  if _sidecar_root_user_owned "$agents_gstack"; then
+    echo "  left in place (existing dir not gstack-managed — no generated banner): $agents_gstack" >&2
+    return 0
+  fi
   mkdir -p "$agents_gstack"
 
   # Sidecar directories that skills reference at runtime. bin scripts import
@@ -1274,9 +1319,15 @@ link_factory_skill_dirs() {
       # the symlink-or-missing guard skipped every re-run and SKILL.md never
       # refreshed after `git pull`. IS_WINDOWS bypasses the guard —
       # _link_or_copy rm -rf's the destination first, refreshing the copy.
+      # #2142: a real dir may only be replaced when it is provably ours
+      # (_owned_for_windows_refresh), never a user's own colliding dir.
       if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
-        _link_or_copy "$skill_dir" "$target"
-        linked+=("$skill_name")
+        if _owned_for_windows_refresh "$target"; then
+          _link_or_copy "$skill_dir" "$target"
+          linked+=("$skill_name")
+        else
+          echo "  left in place (existing dir not gstack-managed — no generated banner): $target" >&2
+        fi
       fi
     fi
   done
@@ -1310,9 +1361,15 @@ link_opencode_skill_dirs() {
       # the symlink-or-missing guard skipped every re-run and SKILL.md never
       # refreshed after `git pull`. IS_WINDOWS bypasses the guard —
       # _link_or_copy rm -rf's the destination first, refreshing the copy.
+      # #2142: a real dir may only be replaced when it is provably ours
+      # (_owned_for_windows_refresh), never a user's own colliding dir.
       if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
-        _link_or_copy "$skill_dir" "$target"
-        linked+=("$skill_name")
+        if _owned_for_windows_refresh "$target"; then
+          _link_or_copy "$skill_dir" "$target"
+          linked+=("$skill_name")
+        else
+          echo "  left in place (existing dir not gstack-managed — no generated banner): $target" >&2
+        fi
       fi
     fi
   done
@@ -1333,6 +1390,11 @@ create_cursor_runtime_root() {
 
   if [ -L "$cursor_gstack" ]; then
     rm -f "$cursor_gstack"
+  elif _sidecar_root_user_owned "$cursor_gstack"; then
+    # #2142: a hand-written skill squatting on the canonical name is the
+    # user's — never wipe it to make room for the runtime root.
+    echo "  left in place (existing dir not gstack-managed — no generated banner): $cursor_gstack" >&2
+    return 0
   elif [ -d "$cursor_gstack" ] && [ "$cursor_gstack" != "$gstack_dir" ] && [ "$cursor_gstack" != "$generated_root" ]; then
     rm -rf "$cursor_gstack"
   fi
@@ -1381,6 +1443,14 @@ create_cursor_sidecar() {
   local repo_root="$1"
   local cursor_gstack="$repo_root/.cursor/skills/gstack"
   local cursor_dir="$repo_root/.cursor/skills"
+
+  # #2142: same user-ownership gate as create_agents_sidecar — but the
+  # generated tree's own root (cursor_dir/gstack carries the banner) always
+  # passes, so normal installs refresh as before.
+  if _sidecar_root_user_owned "$cursor_gstack"; then
+    echo "  left in place (existing dir not gstack-managed — no generated banner): $cursor_gstack" >&2
+    return 0
+  fi
 
   mkdir -p "$cursor_gstack" "$cursor_gstack/browse" "$cursor_gstack/gstack-upgrade" "$cursor_gstack/review"
 
@@ -1445,11 +1515,16 @@ link_cursor_skill_dirs() {
       [ "$skill_name" = "gstack" ] && continue
       target="$skills_dir/$skill_name"
       # #2444: IS_WINDOWS bypass — real-dir copies never match -L, so re-runs
-      # skipped the refresh. Only replace a symlink or a missing path
-      # otherwise; never an unowned real Cursor skill dir (#2142).
+      # skipped the refresh. Only replace a symlink, a missing path, or a
+      # PROVABLY gstack-managed real dir; never a user's own Cursor skill
+      # dir that merely starts with gstack (#2142).
       if [ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]; then
-        _link_or_copy "$skill_dir" "$target"
-        linked+=("$skill_name")
+        if _owned_for_windows_refresh "$target"; then
+          _link_or_copy "$skill_dir" "$target"
+          linked+=("$skill_name")
+        else
+          echo "  left in place (existing dir not gstack-managed — no generated banner): $target" >&2
+        fi
       fi
     fi
   done

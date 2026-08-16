@@ -54,6 +54,91 @@ describe('setup: Windows re-run refresh — static guard sites (#2444)', () => {
   ])('%s bypasses the symlink-or-missing guard on Windows', (fn) => {
     expect(extractFn(fn)).toContain(WINDOWS_BYPASS);
   });
+
+  // #2142 ownership census: the Windows bypass rm -rf's real dirs, so every
+  // skill-dir installer must gate the replacement on provable gstack
+  // ownership, and every sidecar/runtime-root installer must refuse a
+  // user-owned root. A bypass without its gate deletes user data.
+  test.each([
+    'link_codex_skill_dirs',
+    'link_factory_skill_dirs',
+    'link_opencode_skill_dirs',
+    'link_cursor_skill_dirs',
+  ])('%s gates the Windows real-dir replacement on _owned_for_windows_refresh', (fn) => {
+    expect(extractFn(fn)).toContain('_owned_for_windows_refresh "$target"');
+  });
+
+  test.each([
+    'create_agents_sidecar',
+    'create_cursor_sidecar',
+    'create_cursor_runtime_root',
+  ])('%s refuses a user-owned root via _sidecar_root_user_owned', (fn) => {
+    expect(extractFn(fn)).toContain('_sidecar_root_user_owned');
+  });
+});
+
+describe('setup: Windows refresh ownership gate — behavior fixture (#2142)', () => {
+  test("IS_WINDOWS=1: a user's own real dir on a gstack* name survives; a bannered install refreshes", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-owned-'));
+    try {
+      const fake = path.join(tmp, 'gstack');
+      const skills = path.join(tmp, 'skills');
+      const banner = '<!-- AUTO-GENERATED from SKILL.md.tmpl - DO NOT EDIT DIRECTLY -->\n';
+      // Generated tree ships two skills.
+      for (const name of ['gstack-demo', 'gstack-notes']) {
+        const d = path.join(fake, '.agents', 'skills', name);
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, 'SKILL.md'), `${banner}upstream-v2\n`);
+      }
+      fs.mkdirSync(skills, { recursive: true });
+      // gstack-demo: a prior gstack install (bannered) — must refresh.
+      fs.mkdirSync(path.join(skills, 'gstack-demo'), { recursive: true });
+      fs.writeFileSync(path.join(skills, 'gstack-demo', 'SKILL.md'), `${banner}installed-v1\n`);
+      // gstack-notes: the USER'S own hand-written skill — must survive.
+      fs.mkdirSync(path.join(skills, 'gstack-notes'), { recursive: true });
+      fs.writeFileSync(path.join(skills, 'gstack-notes', 'SKILL.md'), '# my own notes\n');
+
+      const r = runInstaller(
+        '1',
+        ['_owned_for_windows_refresh', 'link_codex_skill_dirs'],
+        `link_codex_skill_dirs "${tmp}/gstack" "${skills}"`,
+      );
+      expect(r.status).toBe(0);
+      expect(fs.readFileSync(path.join(skills, 'gstack-demo', 'SKILL.md'), 'utf-8')).toContain('upstream-v2');
+      expect(fs.readFileSync(path.join(skills, 'gstack-notes', 'SKILL.md'), 'utf-8')).toBe('# my own notes\n');
+      expect(r.stderr).toContain('left in place');
+      expect(r.stderr).toContain('gstack-notes');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('IS_WINDOWS=1: create_agents_sidecar refuses a user-owned root and writes nothing into it', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-owned-sidecar-'));
+    try {
+      const fake = path.join(tmp, 'gstack');
+      fs.mkdirSync(path.join(fake, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(fake, 'bin', 'tool.sh'), 'v1\n');
+      // The user's own skill squats on .agents/skills/gstack.
+      const root = path.join(fake, '.agents', 'skills', 'gstack');
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, 'SKILL.md'), '# hand-written\n');
+
+      const vars = `SOURCE_GSTACK_DIR="${fake}"`;
+      const r = runInstaller(
+        '1',
+        ['_sidecar_root_user_owned', 'create_agents_sidecar'],
+        `create_agents_sidecar "${fake}"`,
+        vars,
+      );
+      expect(r.status).toBe(0);
+      expect(r.stderr).toContain('left in place');
+      expect(fs.existsSync(path.join(root, 'bin'))).toBe(false);
+      expect(fs.readFileSync(path.join(root, 'SKILL.md'), 'utf-8')).toBe('# hand-written\n');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 interface RunResult {
@@ -74,6 +159,9 @@ function runInstaller(
     `IS_WINDOWS=${isWindows}`,
     extraVars,
     extractFn('_link_or_copy'),
+    // Ownership gates (#2142) — dependencies of every installer under test.
+    extractFn('_owned_for_windows_refresh'),
+    extractFn('_sidecar_root_user_owned'),
     ...fns.map(extractFn),
     invocation,
   ].join('\n');
@@ -90,22 +178,25 @@ describe('setup: Windows re-run refresh — behavior fixture (#2444)', () => {
       const demo = path.join(fake, '.agents', 'skills', 'gstack-demo');
       fs.mkdirSync(demo, { recursive: true });
       fs.mkdirSync(skills, { recursive: true });
-      fs.writeFileSync(path.join(demo, 'SKILL.md'), 'v1-original\n');
+      // Generated SKILL.md files always carry the banner — the #2142
+      // ownership gate keys the Windows refresh on it.
+      const banner = '<!-- AUTO-GENERATED from SKILL.md.tmpl - DO NOT EDIT DIRECTLY -->\n';
+      fs.writeFileSync(path.join(demo, 'SKILL.md'), `${banner}v1-original\n`);
 
       // First run: installs the copy.
       let r = runInstaller('1', ['link_codex_skill_dirs'], `link_codex_skill_dirs "${fake}" "${skills}"`);
       expect(r.status).toBe(0);
       const installed = path.join(skills, 'gstack-demo', 'SKILL.md');
-      expect(fs.readFileSync(installed, 'utf-8')).toBe('v1-original\n');
+      expect(fs.readFileSync(installed, 'utf-8')).toBe(`${banner}v1-original\n`);
       expect(fs.lstatSync(path.join(skills, 'gstack-demo')).isSymbolicLink()).toBe(false);
 
       // Upstream ships a change (the git pull).
-      fs.writeFileSync(path.join(demo, 'SKILL.md'), 'v2-UPDATED\n');
+      fs.writeFileSync(path.join(demo, 'SKILL.md'), `${banner}v2-UPDATED\n`);
 
       // Second run: pre-#2444 this was a silent no-op on Windows.
       r = runInstaller('1', ['link_codex_skill_dirs'], `link_codex_skill_dirs "${fake}" "${skills}"`);
       expect(r.status).toBe(0);
-      expect(fs.readFileSync(installed, 'utf-8')).toBe('v2-UPDATED\n');
+      expect(fs.readFileSync(installed, 'utf-8')).toBe(`${banner}v2-UPDATED\n`);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
