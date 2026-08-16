@@ -114,6 +114,20 @@ export function ensureStateDir(config: BrowseConfig): void {
     throw err;
   }
 
+  // Load-bearing guard: a self-contained ignore INSIDE the state dir so its
+  // contents can NEVER be `git add`-ed, regardless of the project's own
+  // .gitignore (which may be absent, or the append below may silently fail).
+  // The state dir holds session-state.json (live cookies + localStorage/
+  // sessionStorage tokens) and browse-network.log / browse-audit.jsonl
+  // (captured request headers can carry bearer tokens). Written unconditionally,
+  // synchronously, before return — the project-.gitignore dance below is now
+  // redundant safety, kept so `.gstack/` still reads as ignored in git status.
+  try {
+    fs.writeFileSync(path.join(config.stateDir, '.gitignore'), '*\n');
+  } catch {
+    // Best-effort; the project-.gitignore path below is the fallback.
+  }
+
   // Ensure .gstack/ is in the project's .gitignore
   // First, check if git already ignores .gstack/ (via global excludes, .git/info/exclude, or parent .gitignore)
   if (isIgnoredByGit(config.projectDir, '.gstack/')) return;

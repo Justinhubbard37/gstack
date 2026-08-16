@@ -61,6 +61,21 @@ describe('config', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    test('writes a self-contained .gstack/.gitignore with * unconditionally', () => {
+      // Even with NO project .gitignore, the state dir must carry its own
+      // ignore so persisted cookies / network+audit logs can never be git-added.
+      const tmpDir = path.join(os.tmpdir(), `browse-selfignore-test-${Date.now()}`);
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const config = resolveConfig({ BROWSE_STATE_FILE: path.join(tmpDir, '.gstack', 'browse.json') });
+      ensureStateDir(config);
+      const selfIgnore = path.join(config.stateDir, '.gitignore');
+      expect(fs.existsSync(selfIgnore)).toBe(true);
+      expect(fs.readFileSync(selfIgnore, 'utf-8')).toBe('*\n');
+      // No nesting: the ignore is directly inside the state dir, not .gstack/.gstack/.
+      expect(fs.existsSync(path.join(config.stateDir, '.gstack'))).toBe(false);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     test('adds .gstack/ to .gitignore if not present', () => {
       const tmpDir = path.join(os.tmpdir(), `browse-gitignore-test-${Date.now()}`);
       fs.mkdirSync(tmpDir, { recursive: true });
