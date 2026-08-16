@@ -694,6 +694,41 @@ fi
 # 3. Ensure ~/.gstack global state directory exists
 mkdir -p "$HOME/.gstack/projects"
 
+# ─── Helper: link a skill's runtime assets into its installed dir ────────────
+# Installs EVERY runtime asset a skill ships next to its SKILL.md (#2317,
+# #2454): review/checklist.md + specialists/, qa/templates + references,
+# gstack-upgrade/migrations, careful/bin, freeze/bin, sections/, etc.
+# Exclusion list rather than inclusion list (F7) so a new asset file is
+# installed by default instead of silently dropped:
+#   - SKILL.md       linked separately by the caller (name-aware)
+#   - node_modules   dependency trees, never a runtime read
+#   - dist           compiled binaries; skills reference them repo-anchored
+#                    (~/.claude/skills/gstack/browse/dist/...), never
+#                    alias-relative, and fresh clones haven't built them
+#   - test           test fixtures
+#   - *.tmpl         generator sources; the generated file is the asset
+#   - hidden files   excluded by the glob (no dotglob)
+# Shared so any flattened-skill installer can reuse it (the Claude path is
+# the first consumer; codex/factory/opencode install from generated trees).
+_link_skill_runtime_assets() {
+  local src_dir="$1"
+  local dst_dir="$2"
+  local asset asset_name
+  for asset in "$src_dir"/*; do
+    [ -e "$asset" ] || continue  # empty-glob guard
+    asset_name="$(basename "$asset")"
+    case "$asset_name" in
+      SKILL.md|node_modules|dist|test|*.tmpl) continue ;;
+    esac
+    # Refresh unconditionally: rm the old entry (symlink OR real copy — the
+    # Windows install pattern) so re-runs after `git pull` pick up changes.
+    if [ -e "$dst_dir/$asset_name" ] || [ -L "$dst_dir/$asset_name" ]; then
+      rm -rf "$dst_dir/$asset_name"
+    fi
+    _link_or_copy "$asset" "$dst_dir/$asset_name"
+  done
+}
+
 # ─── Helper: link Claude skill subdirectories into a skills parent directory ──
 # Creates real directories (not symlinks) at the top level with a SKILL.md symlink
 # inside. This ensures Claude discovers them as top-level skills, not nested under
@@ -732,14 +767,14 @@ link_claude_skill_dirs() {
       # Validate target isn't a symlink before creating the link
       if [ -L "$target/SKILL.md" ]; then rm "$target/SKILL.md"; fi
       _link_or_copy "$gstack_dir/$dir_name/SKILL.md" "$target/SKILL.md"
-      # Link the sections/ subdir for carved skills (v2 plan T9). The prefixed
-      # Claude skill dir otherwise holds only SKILL.md, so a runtime
-      # "Read sections/<name>.md" 404s. Route through _link_or_copy so Windows
-      # gets a fresh copy (and re-copies on every ./setup, refreshing staleness).
-      if [ -d "$gstack_dir/$dir_name/sections" ]; then
-        if [ -e "$target/sections" ] || [ -L "$target/sections" ]; then rm -rf "$target/sections"; fi
-        _link_or_copy "$gstack_dir/$dir_name/sections" "$target/sections"
-      fi
+      # Link every runtime asset the skill ships next to its SKILL.md (#2317,
+      # #2454): sections/ for carved skills, review's checklist.md +
+      # specialists/, qa's templates/ + references/, gstack-upgrade's
+      # migrations/, careful/freeze's bin/, ... Without this, only SKILL.md
+      # landed and /review 404'd at "Read .claude/skills/review/checklist.md"
+      # on every fresh Claude install. Routes through _link_or_copy so Windows
+      # gets real copies refreshed on every ./setup.
+      _link_skill_runtime_assets "$gstack_dir/$dir_name" "$target"
       linked+=("$link_name")
     fi
   done
