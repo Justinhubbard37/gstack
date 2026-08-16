@@ -153,7 +153,12 @@ describe('brain-cache schema mismatch behavior', () => {
     // the file gets deleted by the rebuild step. State should be 'missing' or
     // 'stale-fallback' depending on whether the rebuild left a file behind.
     expect(['missing', 'cold-refreshed', 'stale-fallback']).toContain(result.state);
-  });
+  }, 30000);
+  // ^ 30s: the schema-mismatch rebuild refreshes EVERY per-project entity,
+  // each spawning the real gbrain CLI (no mock here). With an unreachable
+  // brain each spawn runs to its own timeout, and under machine load the
+  // stack exceeds bun's 5s default — observed at 5.2-5.4s on a loaded box,
+  // identically on pre-fix binaries (load flake, not a code regression).
 });
 
 describe('brain-cache state machine', () => {
