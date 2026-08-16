@@ -54,7 +54,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Review
   'review-sql-injection':     ['review/**', 'test/fixtures/review-eval-vuln.rb', 'test/skill-e2e-review.test.ts'],
   'review-enum-completeness': ['review/**', 'test/fixtures/review-eval-enum*.rb', 'test/skill-e2e-review.test.ts'],
-  'review-base-branch':       ['review/**'],
+  'review-base-branch':       ['review/**', 'test/skill-e2e-review-attribution.test.ts'],
   'review-design-lite':       ['review/**', 'test/fixtures/review-eval-design-slop.*', 'test/skill-e2e-review.test.ts'],
 
   // Review Army (specialist dispatch)
@@ -221,7 +221,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'codex-offered-eng-review':    ['plan-eng-review/**', 'scripts/gen-skill-docs.ts'],
 
   // Ship
-  'ship-base-branch': ['ship/**', 'bin/gstack-repo-mode'],
+  'ship-base-branch': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-review-attribution.test.ts'],
   'ship-local-workflow': ['ship/**', 'scripts/gen-skill-docs.ts'],
   'review-dashboard-via': ['ship/**', 'scripts/resolvers/review.ts', 'codex/**', 'autoplan/**', 'land-and-deploy/**', 'test/skill-e2e-review-attribution.test.ts'],
 
@@ -801,6 +801,9 @@ export const GLOBAL_TOUCHFILES = [
   'test/helpers/hermetic-env.ts',    // Changes every E2E child's environment
   'test/helpers/eval-store.ts',      // All E2E tests store results here
   'test/helpers/test-selection.ts',  // Selection logic itself — a bug here mis-selects every test
+  'test/helpers/touchfiles.ts',      // The facade is executable selection-path code; an edit must run everything (it should never change, so the cost is ~zero)
+  'test/helpers/e2e-helpers.ts',     // Shared harness every paid test imports (selection wiring, preflight, describeIfSelected) — an edit here changes every test's behavior
+  'test/helpers/paid-test-set.ts',   // Paid-vs-free classification — an edit moves files between suites
   'test/helpers/skill-fixture.ts',   // SKILL.md fixture extraction — reshapes the skill content most E2E suites read
   // NOTE: this file (touchfiles-data.ts) is deliberately NOT a global
   // touchfile. Changes to it route through map-diff selection in
