@@ -6,12 +6,12 @@
 **memory sync never drops a record. 30 contributors landed.**
 
 This release mines the full issue tracker and community PR queue. Browse now
-classifies a macOS XProtect kill at Chromium launch and heals itself — clears
-the quarantine flag, reinstalls the pinned browser revision from the right
-install root, and retries, all bounded and logged. Fresh installs link every
-runtime asset a skill references, so /review and friends work on a clean
-machine the first time. Brain-sync's queue is drained with a classified
-disposition — privacy-held records are retained and labeled, a failed push
+classifies a macOS XProtect kill at Chromium launch and heals itself. It
+clears the quarantine flag, reinstalls the pinned browser revision from the
+right install root, and retries, all bounded and logged. Fresh installs link
+every runtime asset a skill references, so /review and friends work on a
+clean machine the first time. Brain-sync's queue is drained with a classified
+disposition. Privacy-held records are retained and labeled, a failed push
 keeps its commit and re-delivers it on the next run, and the retry only ever
 publishes commits it authored itself. Twenty-five community PRs landed with
 credit, and roughly thirty-five issues close on merge.
@@ -50,8 +50,9 @@ repro is now a regression test with your name on the commit.
   dependabot #2582), plus an XProtect kill-signature classifier with positive
   AND negative fixtures, a one-shot quarantine-clear + bounded (~120s,
   process-group-killed) reinstall from the gstack install root that pins the
-  matching Chromium revision, structured heal logging, and a v1.65-style
-  upgrade migration for already-poisoned caches. The heal resolves the install
+  matching Chromium revision, structured heal logging, and an upgrade-time
+  quarantine-clear + reinstall in `setup` for already-poisoned caches. The
+  heal resolves the install
   root via `os.homedir()` and keeps its manual-remediation guidance even when
   the post-heal retry fails.
 - **Fresh installs missing runtime assets (#2317, #2454).** `setup` links
@@ -90,7 +91,7 @@ repro is now a regression test with your name on the commit.
   (#2414).
 - Daemon crash logs persist without tokens or unsanitized page content
   (needle-tested). Contributed by @phuttimatebenchanakatkul (#2461).
-- The dead security-shield surface was removed end to end (−535 lines) while
+- The dead security-shield surface was removed end to end (−272 net lines) while
   the live L4 sidecar path keeps its status endpoint — docs updated in the
   same commit. Contributed by @frederik-kaster-noygear (#2557, with the
   pipe-capture core from #2559). CDP `Emulation.setEmulatedMedia` joins the

@@ -42,8 +42,10 @@ No setup needed. Learnings are logged automatically. View them with `/learn`.
    ln -sfn /path/to/your/gstack-fork .claude/skills/gstack
    cd .claude/skills/gstack && bun install && bun run build && ./setup
    ```
-   Setup creates per-skill directories with SKILL.md symlinks inside (`qa/SKILL.md -> gstack/qa/SKILL.md`)
-   and asks your prefix preference. Pass `--no-prefix` to skip the prompt and use short names.
+   Setup creates per-skill directories with SKILL.md symlinks inside (`qa/SKILL.md -> gstack/qa/SKILL.md`),
+   links each skill's runtime assets alongside (sections/, templates, checklists — everything except
+   SKILL.md, tests, build output, and `.tmpl` sources), and asks your prefix preference.
+   Pass `--no-prefix` to skip the prompt and use short names.
 5. **Fix the issue** — your changes are live immediately in this project
 6. **Test by actually using gstack** — do the thing that annoyed you, verify it's fixed
 7. **Open a PR from your fork**
@@ -82,7 +84,10 @@ gstack/                          <- your working tree
 ```
 
 Setup creates real directories (not symlinks) at the top level with a SKILL.md
-symlink inside. This ensures Claude discovers them as top-level skills, not nested
+symlink inside, plus links to each skill's runtime assets (sections/, templates,
+checklists). Alias skills (`_gstack-command`, `connect-chrome`) install as
+rewritten copies, never symlinks — editing a symlinked alias would corrupt the
+generated source. This ensures Claude discovers them as top-level skills, not nested
 under `gstack/`. Names depend on your prefix setting (`~/.gstack/config.yaml`).
 Short names (`/review`, `/ship`) are the default. Run `./setup --prefix` if you
 prefer namespaced names (`/gstack-review`, `/gstack-ship`).
@@ -118,9 +123,11 @@ passes `GSTACK_SKIP_GBRAIN_REGEN=1` inline to the nested `./setup` (so it never
 dirties tracked source) and runs `gen:skill-docs:user --out-dir .claude/gstack-rendered`,
 which rewrites only the section-base paths to point at the render. `bin/dev-teardown`
 removes the render. To make the blocks live across your *other* projects' Claude
-sessions, run `gstack-config gbrain-refresh`, which renders them into the global
-install (`~/.claude/skills/gstack`), guarded so it never touches a symlinked or
-non-gstack directory.
+sessions, run `gstack-config gbrain-refresh`, which renders them to a user render
+dir (`${GSTACK_USER_RENDER_DIR:-~/.gstack/render/claude}`, swapped in only on a
+successful render) and repoints the installed skills at it via `gstack-relink` —
+the global install checkout stays git-clean, and the refresh is guarded so it
+never touches a symlinked or non-gstack directory.
 
 ## Testing & evals
 

@@ -254,6 +254,13 @@ Beyond the slash-command skills, gstack ships standalone CLIs for workflows that
 | `gstack-ios-qa-mint` | **iOS allowlist manager** — owner-grant CLI for the tailnet allowlist. `grant`/`revoke`/`list` against `~/.gstack/ios-qa-allowlist.json` (mode 0600). Remote agents never auto-allowlist; this is the explicit-intent path. |
 | `gstack-ios-qa-regen` | **iOS bridge regenerator** — deterministically installs the canonical DebugBridge package, generates typed state accessors, and records the installed gstack version. Safe to rerun after source changes or upgrades. |
 
+`./setup` also registers one default-on Stop hook in `~/.claude/settings.json`:
+`gstack-timeline-stop` (closes dangling session-timeline entries when a session
+is interrupted; fail-open — 2s internal budget, always exits 0, can never block
+a session). Skip it with `./setup --no-team`, remove it with
+`gstack-settings-hook remove-source --source gstack-timeline-stop`;
+`gstack-uninstall` removes it too.
+
 ### Continuous checkpoint mode (opt-in, local by default)
 
 Set `gstack-config set checkpoint_mode continuous` and skills auto-commit your work as you go with a `WIP:` prefix plus a structured `[gstack-context]` body (decisions, remaining work, failed approaches). Survives crashes and context switches. `/context-restore` reads those commits to reconstruct session state. `/ship` filter-squashes WIP commits before the PR (preserving non-WIP commits) so bisect stays clean. Push is opt-in via `checkpoint_push=true` — default is local-only so you don't trigger CI on every WIP commit.
@@ -297,7 +304,7 @@ gstack works well with one sprint. It gets interesting with ten running at once.
 
 **Personal automation.** The sidebar agent isn't just for dev workflows. Example: "Browse my kid's school parent portal and add all the other parents' names, phone numbers, and photos to my Google Contacts." Two ways to get authenticated: (1) log in once in the headed browser, your session persists, or (2) click the "cookies" button in the sidebar footer to import cookies from your real Chrome. Once authenticated, Claude navigates the directory, extracts the data, and creates the contacts.
 
-**Prompt injection defense.** Hostile web pages try to hijack your sidebar agent. gstack ships a layered defense: a 22MB ML classifier bundled with the browser scans every page and tool output locally, a Claude Haiku transcript check votes on the full conversation shape, a random canary token in the system prompt catches session exfil attempts across text, tool args, URLs, and file writes, and a verdict combiner requires two classifiers to agree before blocking (prevents single-model false positives on Stack Overflow-style instruction pages). A shield icon in the sidebar header shows status (green/amber/red). Opt in to a 721MB DeBERTa-v3 ensemble via `GSTACK_SECURITY_ENSEMBLE=deberta` for 2-of-3 agreement. Emergency kill switch: `GSTACK_SECURITY_OFF=1`. See [ARCHITECTURE.md](ARCHITECTURE.md#prompt-injection-defense-sidebar-agent) for the full stack.
+**Prompt injection defense.** Hostile web pages try to hijack your sidebar agent. gstack ships a layered defense: content filters (datamarking, hidden-element stripping, ARIA scrubbing, URL blocklist) on every page read, plus a 22MB ML classifier running locally in a sidecar subprocess that scans page-derived content before the agent sees it, with a verdict combiner that requires classifier agreement before blocking (prevents single-model false positives on Stack Overflow-style instruction pages). Everything runs on your machine, no network calls. Emergency kill switch: `GSTACK_SECURITY_OFF=1`. See [ARCHITECTURE.md](ARCHITECTURE.md#prompt-injection-defense-sidebar-agent) for the full stack.
 
 **Browser handoff when the AI gets stuck.** Hit a CAPTCHA, auth wall, or MFA prompt? `$B handoff` opens a visible Chrome at the exact same page with all your cookies and tabs intact. Solve the problem, tell Claude you're done, `$B resume` picks up right where it left off. The agent even suggests it automatically after 3 consecutive failures.
 
@@ -344,6 +351,7 @@ If you don't have the repo cloned (e.g. you installed via a Claude Code paste an
 pkill -f "gstack.*browse" 2>/dev/null || true
 
 # 2. Remove per-skill directories whose SKILL.md points into gstack/
+#    (rm -rf, not rmdir — installed dirs also contain runtime-asset links)
 find ~/.claude/skills -mindepth 1 -maxdepth 1 -type d ! -name gstack 2>/dev/null |
 while IFS= read -r dir; do
   link="$dir/SKILL.md"
@@ -351,11 +359,12 @@ while IFS= read -r dir; do
   target=$(readlink "$link" 2>/dev/null) || continue
   case "$target" in
     gstack/*|*/gstack/*)
-      rm -f "$link"
-      rmdir "$dir" 2>/dev/null || true
+      rm -rf "$dir"
       ;;
   esac
 done
+# Alias skills install as copies (no symlink to detect) — remove by name
+rm -rf ~/.claude/skills/_gstack-command ~/.claude/skills/connect-chrome 2>/dev/null
 
 # 3. Remove gstack
 rm -rf ~/.claude/skills/gstack
@@ -368,6 +377,8 @@ rm -rf ~/.codex/skills/gstack* 2>/dev/null
 rm -rf ~/.factory/skills/gstack* 2>/dev/null
 rm -rf ~/.kiro/skills/gstack* 2>/dev/null
 rm -rf ~/.openclaw/skills/gstack* 2>/dev/null
+rm -rf ~/.cursor/skills/gstack* 2>/dev/null
+rm -rf ~/.config/opencode/skills/gstack* 2>/dev/null
 
 # 6. Remove temp files
 rm -f /tmp/gstack-* 2>/dev/null
@@ -376,6 +387,10 @@ rm -f /tmp/gstack-* 2>/dev/null
 rm -rf .gstack .gstack-worktrees .claude/skills/gstack 2>/dev/null
 rm -rf .agents/skills/gstack* .factory/skills/gstack* 2>/dev/null
 ```
+
+Manual removal leaves the gstack Stop hook entry behind in `~/.claude/settings.json`
+(the uninstall script removes it for you). Edit that file and delete the hook whose
+command path ends in `hosts/claude/hooks/timeline-stop-hook`.
 
 ### Clean up CLAUDE.md
 
