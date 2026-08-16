@@ -66,6 +66,8 @@ function makeEnv(opts: {
   withConfig?: boolean;
   /** #2051: config carries gbrain's remote_mcp thin-client marker. */
   thinClientConfig?: boolean;
+  /** #2520: content for ~/.claude.json (host MCP registrations). */
+  claudeJson?: object;
 }): FakeEnv {
   const tmp = mkdtempSync(join(tmpdir(), "gbrain-local-status-test-"));
   const bindir = join(tmp, "bin");
@@ -97,6 +99,10 @@ function makeEnv(opts: {
     const gbrainPath = join(bindir, "gbrain");
     writeFileSync(gbrainPath, fake);
     chmodSync(gbrainPath, 0o755);
+  }
+
+  if (opts.claudeJson) {
+    writeFileSync(join(home, ".claude.json"), JSON.stringify(opts.claudeJson));
   }
 
   return {
@@ -524,5 +530,127 @@ describe("lib/gbrain-local-status — thin-client (#2051)", () => {
       },
     });
     expect(r.status).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2520: bearer-token thin clients (`gbrain connect --token`) — no remote_mcp
+// marker in config.json; the evidence is the host's remote-HTTP MCP
+// registration in ~/.claude.json.
+// ---------------------------------------------------------------------------
+
+describe("lib/gbrain-local-status — bearer-token thin-client (#2520)", () => {
+  let env: FakeEnv | null = null;
+  let restoreEnv: (() => void) | null = null;
+
+  afterEach(() => {
+    if (restoreEnv) restoreEnv();
+    if (env) env.cleanup();
+    env = null;
+    restoreEnv = null;
+  });
+
+  const REMOTE_GBRAIN = {
+    type: "http",
+    url: "https://brain.example.com/mcp",
+    headers: { Authorization: "Bearer test-token" },
+  };
+  const LOCAL_GBRAIN = { type: "stdio", command: "gbrain", args: ["serve"] };
+
+  it("returns 'thin-client' when config.json is absent but a remote-HTTP gbrain MCP is registered (user scope)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: { mcpServers: { gbrain: REMOTE_GBRAIN } },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("returns 'thin-client' when config.json is absent and the registration is PROJECT-scoped (#2499)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: {
+        projects: { "/some/repo": { mcpServers: { "gbrain-remote": REMOTE_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("reclassifies a failed local probe (engine-locked) as 'thin-client' when the only gbrain MCP is remote", () => {
+    // The reporter's exact shape: leftover local pglite config, dead/absent
+    // local engine (probe exits 124 "connect timed out"), brain fully working
+    // over remote-HTTP MCP with a bearer token.
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "engine-locked",
+      withConfig: true,
+      claudeJson: { mcpServers: { gbrain: REMOTE_GBRAIN } },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("reclassifies broken-db as 'thin-client' when the only gbrain MCP is remote", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "broken-db",
+      withConfig: true,
+      claudeJson: { mcpServers: { gbrain: REMOTE_GBRAIN } },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("preserves 'engine-locked' when a local-stdio gbrain MCP is ALSO registered (federation guard)", () => {
+    // A local-stdio registration means the user runs a local engine —
+    // local-engine statuses must keep their precise meaning, even if a
+    // second (e.g. team) brain is registered remote-HTTP.
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "engine-locked",
+      withConfig: true,
+      claudeJson: {
+        mcpServers: { gbrain: LOCAL_GBRAIN, "gbrain-work": REMOTE_GBRAIN },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("engine-locked");
+  });
+
+  it("still returns 'missing-config' when no gbrain MCP registration exists (discriminator)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: { mcpServers: { "other-server": { type: "http", url: "https://x.example/mcp" } } },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("missing-config");
+  });
+
+  it("--is-ok exits 0 on a bearer thin-client fixture (end-to-end gate)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "engine-locked",
+      withConfig: true,
+      claudeJson: { mcpServers: { gbrain: REMOTE_GBRAIN } },
+    });
+    const detectBin = join(import.meta.dir, "..", "bin", "gstack-gbrain-detect");
+    const bunDir = dirname(process.execPath);
+    const r = spawnSync(detectBin, ["--is-ok"], {
+      encoding: "utf-8",
+      env: {
+        HOME: env.home,
+        PATH: `${env.bindir}:${bunDir}:/usr/bin:/bin`,
+        GSTACK_HOME: env.gstackHome,
+        GSTACK_DETECT_NO_CACHE: "1",
+      },
+    });
+    expect(r.status).toBe(0);
   });
 });
