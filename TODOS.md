@@ -174,37 +174,6 @@ Trigger condition documented in `lib/gbrain-sources.ts` at the drift log line.
 
 **Effort:** M (human ~1d, CC ~45min). **Depends on:** drift-log evidence from
 the wave's `ensureSourceRegistered` logging.
-### P1: Free suite exit code is untrustworthy — in-process force-exits mask failures
-
-**Priority:** P1
-
-**What:** At least five browse test files end with `setTimeout(() => process.exit(0), 500)`
-(browse/test/commands.test.ts:101, snapshot.test.ts:36, batch.test.ts:47,
-handoff.test.ts:31, content-security.test.ts:465). The timer fires inside the SHARED
-`bun test` process, exiting 0 before bun prints its final summary — so `bun test` can
-report exit 0 while real test failures scrolled by earlier. Remove the force-exits and
-fix the underlying handle leaks they paper over (lingering Playwright/daemon handles
-that once made the suite hang), or scope the exit to a spawned child process.
-
-**Why:** Observed 2026-08-07: three genuinely failing tests (eval-list-cli,
-benchmark-cli, observability check 11) rode green `bun test` exit codes across
-multiple runs; the failures only surfaced by grepping logs for "(fail)" lines. A test
-suite that exits 0 on failure is worse than no suite — it manufactures false
-confidence at commit time and in any CI job that trusts the exit code.
-
-**Pros:** Restores the one contract everything (CI, /ship, humans) relies on: exit
-code == truth. Also un-hides the missing final summary block.
-**Cons:** The force-exits exist because the suite once hung on leaked handles;
-removing them without fixing the leaks trades silent failure for hangs. Needs a
-focused pass: find each leaked handle (daemon children, PTY, Playwright contexts),
-close them in afterAll, then delete the exits one file at a time.
-
-**Context / where to start:** `grep -rn "process.exit(0)" browse/test/` — the
-setTimeout variants are the offenders (server-no-import-side-effects.test.ts:62 is a
-spawned-child probe, fine). Repro: run the full free suite and note the log ends at
-the browse files with no "Ran N tests" summary. Receipts:
-~/.gstack-dev/logs/free-suite-main-check.log (3 masked fails, exit 0).
-
 ### P2: Periodic CI matrix covers 9 of ~66 e2e files — decide the coverage contract
 
 **Priority:** P2
@@ -2332,7 +2301,158 @@ Shipped in v0.6.5. TemplateContext in gen-skill-docs.ts bakes skill name into pr
 
 **Depends on:** v1.47.0.0 ships; gather real false-negative data from the v1 string matcher.
 
+## Test/evals/CI speedup follow-ups (filed v1.66.0.0 via /ship review army)
+
+### P2: Free-suite shard balancing — LPT by recorded durations instead of stable hash
+
+**What:** Full-suite shard assignment is a stable hash; measured shard durations
+spread 69.5s-168.5s (max 2.4x min), so ~35-40s of every run is idle tail. Local
+full-suite mode doesn't need deterministic indices (only the CI --shards matrix
+does) — bin-pack by recorded per-file durations (bun prints them in the logs the
+runner already captures), keep assignFilesToShards untouched for --shard mode.
+**Where:** scripts/test-free-shards.ts main() full-suite path.
+**Effort:** S (human ~4h, CC ~20min).
+
+### P2: Propagate parent eval selection to shard children (EVALS_SELECTION_JSON)
+
+**What:** The sharded paid runner computes selection once in the parent, but each
+shard child re-derives it at e2e-helpers module load (git spawns per shard; plus a
+bun child evaluating the old touchfiles-data when map-diff is active). Serialize
+the parent's selection into the child env and honor it in computeDiffSelection,
+keeping child self-derivation for non-sharded entrypoints. Add a parent/child
+selection drift test (same fixture through computePaidDiffSelection and
+computeDiffSelection) while there.
+**Where:** scripts/test-paid-shards.ts runPaidShards env block; test/helpers/e2e-helpers.ts.
+**Effort:** S (human ~4h, CC ~20min).
+
+### P2: evals.yml matrix census tripwire — gate files must appear in the CI matrix
+
+**What:** The branch's headline incident (two rehomed gate files silently never ran
+for 48 versions because the monolith's filename missed the hand-listed evals.yml
+matrix) has no tripwire binding gate-tier skill-e2e files to the matrix.
+e2e-tier-alignment covers the LOCAL sharded runner's mapper; the CI matrix can
+still drift. Parse the workflow YAML in a free test and diff against E2E_TIERS
+gate files (curated exclude list for deliberately-manual files).
+**Where:** new test beside test/e2e-tier-alignment.test.ts; .github/workflows/evals.yml.
+**Effort:** S (human ~3h, CC ~15min).
+
+### P2: E2E dep-list self-registration sweep — 129 of 177 keys omit their own test file
+
+**What:** Editing only a test's assertions/prompt selects nothing for most keys
+(the adversarial review measured 129/177), and parent-side shard skipping makes
+the hole cheaper to hit. This branch fixed the rehomed files' keys; sweep the
+rest mechanically (each key's dep list appends the file that declares it) and
+upgrade e2e-tier-alignment's report-only mode to enforce self-registration.
+**Where:** test/helpers/touchfiles-data.ts; test/e2e-tier-alignment.test.ts.
+**Effort:** S (human ~3h, CC ~15min).
+
+### P3: Paid runner spools non-live shard output to disk instead of RAM
+
+**What:** Non-live shards buffer their entire 30-min stream-json stdout+stderr in
+memory (Buffer[]), x jobs concurrent shards. Spool to a temp file like the free
+runner's per-run log.
+**Where:** scripts/test-paid-shards.ts runPaidShard buffered path.
+**Effort:** S (human ~2h, CC ~10min).
+
+### P3: Eval Docker image freshness tripwire
+
+**What:** The cache-key trio means the image rebuilds only when Dockerfile/bun.lock
+change; freshness of the baked unpinned claude CLI now rides entirely on
+ci-image.yml's cron. If the cron silently fails or is disabled, eval CI pins to an
+ever-older CLI with no signal. Add an image-age check (fail the eval workflow when
+the image tag's created date exceeds N days) or a cron-liveness alert.
+**Where:** .github/workflows/ci-image.yml, evals.yml.
+**Effort:** S (human ~2h, CC ~10min).
+
+### P3: Detach-floor self-check against runtime knobs (EVALS_JOBS)
+
+**What:** test/eval-detach-timeout-floor.test.ts computes the worst case from
+constants; an operator exporting EVALS_JOBS=2 doubles the gate worst case past the
+25,200s watchdog and healthy tail shards report never-started. Add a runtime
+self-check in test-paid-shards main(): warn/fail when the computed worst case with
+LIVE options exceeds a GSTACK_DETACH_TIMEOUT env exported by gstack-detach.
+**Where:** scripts/test-paid-shards.ts; bin/gstack-detach.
+**Effort:** S (human ~2h, CC ~10min).
+
+### P3: Eval store records the effective judge/capture model per run
+
+**What:** Model defaults moved (capture Opus→Sonnet) and GSTACK_EVAL_MODEL_JUDGE
+can silently change graders; eval:compare deltas across a model boundary conflate
+model swap with skill regressions. Record the resolved models in the eval-store
+record and surface them in eval:compare.
+**Where:** test/helpers/eval-store.ts, llm-judge.ts, eval-compare.
+**Effort:** S (human ~2h, CC ~10min).
+
+### P3: SECURITY_BENCH periodic lane — classifier behavioral coverage runs nowhere
+
+**What:** Gating the live L4 classifier tests on SECURITY_BENCH=1 fixed local
+suite speed but left the prompt-injection classifier with no scheduled lane.
+Add SECURITY_BENCH=1 (with model-cache warmup, 112MB first run) to
+evals-periodic.yml so behavioral coverage exists weekly.
+**Where:** .github/workflows/evals-periodic.yml; browse/test/security-live-playwright.test.ts.
+**Effort:** S (human ~2h, CC ~10min).
+
+### P3: Shared child-lifecycle helper for the two shard runners
+
+**What:** runFreeShard and runPaidShard duplicate ~35 lines of spawn/group-kill/
+wall-timer scaffold verbatim (and the ShardCommand type). Extract into
+scripts/test-strict-output.ts, which already hosts the shared lifecycle
+primitives, leaving stream policy per runner.
+**Where:** scripts/test-free-shards.ts, scripts/test-paid-shards.ts.
+**Effort:** S (human ~3h, CC ~15min).
+
+### P3: DI-refactor gstack-gbrain-detect-mcp-mode test (~40s spawn cost, absorbed but real)
+
+**What:** Plan item 5 of the v1.66.0.0 pass, deferred: the test spawns the real
+binary repeatedly. Refactor to import the module with a DI-injected exec seam
+(never env-set-before-import), keep 1-2 spawn smokes. Cost is currently absorbed
+by shard parallelism; the per-file wall cost remains.
+**Where:** test/gstack-gbrain-detect-mcp-mode.test.ts.
+**Effort:** S (human ~2h, CC ~15min).
+
+### P3: Tighten revived coverage-audit E2E assertions
+
+**What:** The revived skill-e2e-coverage-audit tests assert hasGap OR hasTested
+(near-vacuous) and reference skill sections their own DRIFT WARNING says moved.
+Tighten to conjunctive assertions and retarget the prompts at live sections;
+needs one paid run to validate, so it didn't ride the ship.
+**Where:** test/skill-e2e-coverage-audit.test.ts.
+**Effort:** S (human ~2h, CC ~15min + one paid run).
+
 ## Completed
+
+### ✅ DONE (v1.66.0.0): Free suite exit code is untrustworthy — in-process force-exits mask failures
+
+**Priority:** P1
+
+**What:** At least five browse test files end with `setTimeout(() => process.exit(0), 500)`
+(browse/test/commands.test.ts:101, snapshot.test.ts:36, batch.test.ts:47,
+handoff.test.ts:31, content-security.test.ts:465). The timer fires inside the SHARED
+`bun test` process, exiting 0 before bun prints its final summary — so `bun test` can
+report exit 0 while real test failures scrolled by earlier. Remove the force-exits and
+fix the underlying handle leaks they paper over (lingering Playwright/daemon handles
+that once made the suite hang), or scope the exit to a spawned child process.
+
+**Why:** Observed 2026-08-07: three genuinely failing tests (eval-list-cli,
+benchmark-cli, observability check 11) rode green `bun test` exit codes across
+multiple runs; the failures only surfaced by grepping logs for "(fail)" lines. A test
+suite that exits 0 on failure is worse than no suite — it manufactures false
+confidence at commit time and in any CI job that trusts the exit code.
+
+**Pros:** Restores the one contract everything (CI, /ship, humans) relies on: exit
+code == truth. Also un-hides the missing final summary block.
+**Cons:** The force-exits exist because the suite once hung on leaked handles;
+removing them without fixing the leaks trades silent failure for hangs. Needs a
+focused pass: find each leaked handle (daemon children, PTY, Playwright contexts),
+close them in afterAll, then delete the exits one file at a time.
+
+**Context / where to start:** `grep -rn "process.exit(0)" browse/test/` — the
+setTimeout variants are the offenders (server-no-import-side-effects.test.ts:62 is a
+spawned-child probe, fine). Repro: run the full free suite and note the log ends at
+the browse files with no "Ran N tests" summary. Receipts:
+~/.gstack-dev/logs/free-suite-main-check.log (3 masked fails, exit 0).
+
+**Completed:** v1.66.0.0 (2026-08-15) — main's v1.64 removed the force-exits; v1.66.0.0 adds runner-level strict-output classification (a shard without bun's terminal summary FAILS), size-scaled wall deadlines, and the failure-naming epilogue, so exit code == truth is enforced by the runner, not by convention.
 
 ### Slim preamble + real-PTY plan-mode E2E harness (v1.13.1.0)
 
