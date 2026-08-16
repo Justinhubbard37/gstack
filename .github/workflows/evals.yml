@@ -36,7 +36,7 @@ jobs:
         # which rebuilt the image each time for a dependency set that only
         # bun.lock determines. A stale baked package.json is harmless — checkout
         # overwrites /workspace and node_modules comes from the lockfile.
-        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock') }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock', 'patches/**') }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v4
         with:

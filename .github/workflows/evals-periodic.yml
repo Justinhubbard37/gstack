@@ -27,7 +27,7 @@ jobs:
       - id: meta
         # Keep in sync with evals.yml — key on Dockerfile + lockfile only
         # (package.json's version field would bust the key on every ship).
-        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock') }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock', 'patches/**') }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v4
         with:

@@ -29,7 +29,7 @@ jobs:
       # This is the tag the eval matrix looks up first — without pushing it
       # here, the weekly/main prebuild never warms the cache that matters.
       - id: meta
-        run: echo "tag=ghcr.io/${{ github.repository }}/ci:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock') }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=ghcr.io/${{ github.repository }}/ci:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock', 'patches/**') }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v4
         with:
