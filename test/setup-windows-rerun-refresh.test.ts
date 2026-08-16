@@ -139,6 +139,71 @@ describe('setup: Windows re-run refresh — behavior fixture (#2444)', () => {
     }
   });
 
+  test('IS_WINDOWS=1: nested gitignored build output does NOT survive the runtime-asset copy (P5)', () => {
+    // The exclusion list in _link_skill_runtime_assets filters direct
+    // children only; cp -R swept NESTED node_modules/.build/dist too
+    // (concrete: ios-qa/scripts/gen-accessors-tool/.build, 252MB). The
+    // Windows branch prunes them post-copy; real asset files at every level
+    // survive.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-rerun-prune-'));
+    try {
+      const src = path.join(tmp, 'skill-src');
+      const dst = path.join(tmp, 'skill-dst');
+      fs.mkdirSync(path.join(src, 'scripts', 'gen-tool', '.build'), { recursive: true });
+      fs.mkdirSync(path.join(src, 'scripts', 'gen-tool', 'node_modules', 'dep'), { recursive: true });
+      fs.mkdirSync(path.join(src, 'scripts', 'gen-tool', 'dist'), { recursive: true });
+      fs.mkdirSync(dst, { recursive: true });
+      fs.writeFileSync(path.join(src, 'scripts', 'runner.sh'), 'echo run\n');
+      fs.writeFileSync(path.join(src, 'scripts', 'gen-tool', 'main.swift'), 'source\n');
+      fs.writeFileSync(path.join(src, 'scripts', 'gen-tool', '.build', 'blob.bin'), '#'.repeat(4096));
+      fs.writeFileSync(path.join(src, 'scripts', 'gen-tool', 'node_modules', 'dep', 'index.js'), 'x\n');
+      fs.writeFileSync(path.join(src, 'scripts', 'gen-tool', 'dist', 'compiled'), 'bin\n');
+
+      const r = runInstaller(
+        '1',
+        ['_link_skill_runtime_assets'],
+        `_link_skill_runtime_assets "${src}" "${dst}"`,
+      );
+      expect(r.status).toBe(0);
+      // Real assets at both levels survive…
+      expect(fs.readFileSync(path.join(dst, 'scripts', 'runner.sh'), 'utf-8')).toBe('echo run\n');
+      expect(fs.readFileSync(path.join(dst, 'scripts', 'gen-tool', 'main.swift'), 'utf-8')).toBe('source\n');
+      // …nested build output does not.
+      expect(fs.existsSync(path.join(dst, 'scripts', 'gen-tool', '.build'))).toBe(false);
+      expect(fs.existsSync(path.join(dst, 'scripts', 'gen-tool', 'node_modules'))).toBe(false);
+      expect(fs.existsSync(path.join(dst, 'scripts', 'gen-tool', 'dist'))).toBe(false);
+      // The source tree is untouched — the prune runs on the COPY only.
+      expect(fs.existsSync(path.join(src, 'scripts', 'gen-tool', '.build', 'blob.bin'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('IS_WINDOWS=0: the Unix symlink path never prunes through into the source', () => {
+    // On Unix the asset is a SYMLINK into the working tree; pruning through
+    // it would delete real build output from the repo. The prune is gated on
+    // the Windows real-copy shape ([ -d ] && [ ! -L ]).
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-rerun-prune-unix-'));
+    try {
+      const src = path.join(tmp, 'skill-src');
+      const dst = path.join(tmp, 'skill-dst');
+      fs.mkdirSync(path.join(src, 'scripts', 'gen-tool', '.build'), { recursive: true });
+      fs.mkdirSync(dst, { recursive: true });
+      fs.writeFileSync(path.join(src, 'scripts', 'gen-tool', '.build', 'blob.bin'), 'keep');
+
+      const r = runInstaller(
+        '0',
+        ['_link_skill_runtime_assets'],
+        `_link_skill_runtime_assets "${src}" "${dst}"`,
+      );
+      expect(r.status).toBe(0);
+      expect(fs.lstatSync(path.join(dst, 'scripts')).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(path.join(src, 'scripts', 'gen-tool', '.build', 'blob.bin'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test('IS_WINDOWS=1: the gstack sidecar dir is still skipped by the skill loop', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-rerun-skip-'));
     try {

@@ -767,6 +767,16 @@ _link_skill_runtime_assets() {
       rm -rf "$dst_dir/$asset_name"
     fi
     _link_or_copy "$asset" "$dst_dir/$asset_name"
+    # P5: the exclusion list above filters DIRECT children only, but the
+    # Windows cp -R copy sweeps NESTED gitignored build output too (concrete:
+    # ios-qa/scripts/gen-accessors-tool/.build is 252MB). Prune post-copy —
+    # a rendered skill install is never a build root, so nested
+    # node_modules/.build/dist are dead weight. ONLY here: the generic
+    # _link_or_copy stays untouched because runtime roots (browse/, design/)
+    # intentionally copy their dist/ binaries.
+    if [ "$IS_WINDOWS" -eq 1 ] && [ -d "$dst_dir/$asset_name" ] && [ ! -L "$dst_dir/$asset_name" ]; then
+      find "$dst_dir/$asset_name" -type d \( -name node_modules -o -name .build -o -name dist \) -prune -exec rm -rf {} + 2>/dev/null || true
+    fi
   done
 }
 
