@@ -60,6 +60,11 @@ jobs:
       # Still BUILD (validates Dockerfile.ci changes), just don't publish. This
       # job intentionally keeps no `if:` so fork PRs still get one real, honest
       # green check here instead of a run where every job is grey.
+      # Registry cache export needs a docker-container builder — the default
+      # `docker` driver hard-errors on cache-to (first live run of the trio).
+      - if: steps.check.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
       - if: steps.check.outputs.exists == 'false'
         uses: docker/build-push-action@v6
         with:

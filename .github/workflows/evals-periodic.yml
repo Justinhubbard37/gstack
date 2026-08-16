@@ -47,6 +47,11 @@ jobs:
       - if: steps.check.outputs.exists == 'false'
         run: cp package.json bun.lock .github/docker/
 
+      # Registry cache export needs a docker-container builder — the default
+      # `docker` driver hard-errors on cache-to.
+      - if: steps.check.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
       - if: steps.check.outputs.exists == 'false'
         uses: docker/build-push-action@v6
         with:
