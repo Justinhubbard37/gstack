@@ -505,6 +505,23 @@ describe('test-free-shards: GitHub Actions log-group attribution', () => {
     reporter.end();
     expect(reporter.report().failures).toEqual([{ file: 'test/b.test.ts', testName: 'planted' }]);
   });
+
+  test('headerless recap re-prints do not invent a phantom failing file', () => {
+    // Round-3 CI shape: bun's recap prints "N tests failed:" then the (fail)
+    // lines with NO file headers — the stale currentFile (an innocent file)
+    // was charged with the previous file's failures.
+    const reporter = new FreeRunReporter(['test/a.test.ts', 'test/b.test.ts']);
+    reporter.write('::group::test/a.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.write('::endgroup::\n', 'stderr');
+    reporter.write('::group::test/b.test.ts:\n', 'stderr');
+    reporter.write('(pass-ish output, no failures here)\n', 'stderr');
+    reporter.write('2 tests failed:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.end();
+    expect(reporter.report().failures).toEqual([{ file: 'test/a.test.ts', testName: 'planted' }]);
+  });
 });
 
 describe('test-free-shards: curated-list census pins', () => {

@@ -587,6 +587,7 @@ export class FreeRunReporter {
   private readonly failures: FreeRunFailure[] = [];
   private readonly crashed = new Set<string>();
   private currentFile: string | null = null;
+  private inRecap = false;
   private testsRan: number | null = null;
   private filesRan: number | null = null;
   private sawSummary = false;
@@ -646,6 +647,16 @@ export class FreeRunReporter {
     const line = stripAnsiLine(rawLine).replace(/^::group::/, '');
     let visible = false;
 
+    // Bun's terminal recap ("N tests failed:") re-prints every (fail) line
+    // WITHOUT re-printing file headers. Attributing those to the stale
+    // currentFile invented a phantom failing file on the first Linux run
+    // (5 real failures reported as 10 across 2 files, one innocent).
+    if (/^\d+ tests? failed:$/.test(line)) {
+      this.inRecap = true;
+      if (this.currentFile) this.progressFor(this.currentFile).ended = true;
+      this.currentFile = null;
+    }
+
     const header = FILE_HEADER_RE.exec(line);
     if (header) {
       const file = this.canonicalize(header[1]);
@@ -661,8 +672,12 @@ export class FreeRunReporter {
       const final = fail || retry ? null : CRASH_FINAL_RE.exec(line);
       if (fail) {
         visible = true;
+        // In the recap, a (fail) line only records a failure the main run
+        // somehow never attributed (belt and braces); known names dedupe.
+        const recapDuplicate = this.inRecap
+          && this.failures.some((f) => f.testName === fail[1]);
         const key = `${this.currentFile ?? ''}\u0000${fail[1]}`;
-        if (!this.failureKeys.has(key)) {
+        if (!recapDuplicate && !this.failureKeys.has(key)) {
           this.failureKeys.add(key);
           this.failures.push({ file: this.currentFile, testName: fail[1] });
         }
