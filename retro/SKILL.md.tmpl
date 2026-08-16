@@ -23,7 +23,10 @@ gbrain:
   context_queries:
     - id: prior-retros
       kind: filesystem
-      glob: "~/.gstack/projects/{repo_slug}/retros/*.md"
+      # #2552: /retro writes .context/retros/*.json (repo-local; see the save
+      # step below) — the old ~/.gstack/.../retros/*.md glob matched a
+      # directory and extension nothing ever writes, so this query was dead.
+      glob: ".context/retros/*.json"
       sort: mtime_desc
       limit: 5
       render_as: "## Prior retros for this project"
