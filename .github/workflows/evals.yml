@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: evals-${{ github.head_ref || github.run_id }}
+  group: evals-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
