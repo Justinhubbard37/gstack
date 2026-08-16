@@ -668,12 +668,32 @@ function applyHostRewrites(content: string, hostConfig: HostConfig): string {
  * unresolved. Extracted so SKILL.md and section templates resolve through the
  * exact same path — a security/sanitization fix to one can't miss the other.
  */
+/**
+ * A second {{PREAMBLE}} in one template re-expands the entire ~12K-token
+ * preamble mid-document (#2508/#2362 — a PROSE mention of the macro in
+ * spec/SKILL.md.tmpl expanded it a second time, +43KB per /spec load).
+ * Resolution is context-blind, so any second occurrence — code fence, prose,
+ * anywhere — is a generation error, never intentional. Throw at render time
+ * so the mistake cannot reach a generated SKILL.md again.
+ */
+export function assertSinglePreamble(tmplContent: string, relTmplPath: string): void {
+  const count = (tmplContent.match(/\{\{PREAMBLE\}\}/g) || []).length;
+  if (count > 1) {
+    throw new Error(
+      `${relTmplPath} contains {{PREAMBLE}} ${count} times — a template may reference it `
+      + `at most once (each occurrence expands the full preamble; see #2508/#2362). `
+      + `Refer to "the preamble" in prose instead of the macro.`,
+    );
+  }
+}
+
 function resolvePlaceholders(
   tmplContent: string,
   ctx: TemplateContext,
   hostConfig: HostConfig,
   relTmplPath: string,
 ): string {
+  assertSinglePreamble(tmplContent, relTmplPath);
   // effectiveSuppressedResolvers() honors --respect-detection: when gbrain is
   // detected locally, GBRAIN_* resolvers un-suppress. Shared by SKILL.md and
   // section generation so both paths get the same gbrain-aware behavior.

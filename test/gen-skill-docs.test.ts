@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll } from 'bun:test';
+import { assertSinglePreamble } from '../scripts/gen-skill-docs';
 import { COMMAND_DESCRIPTIONS } from '../browse/src/commands';
 import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
 import * as fs from 'fs';
@@ -1504,6 +1505,25 @@ describe('CHANGELOG_WORKFLOW resolver', () => {
   test('changelog workflow includes keep-changelog format', () => {
     expect(shipContent).toContain('### Added');
     expect(shipContent).toContain('### Fixed');
+  });
+});
+
+// --- Duplicate {{PREAMBLE}} guard (#2508/#2362) ---
+
+describe('assertSinglePreamble', () => {
+  test('one {{PREAMBLE}} passes', () => {
+    expect(() => assertSinglePreamble('a\n{{PREAMBLE}}\nb', 'x/SKILL.md.tmpl')).not.toThrow();
+  });
+
+  test('zero {{PREAMBLE}} passes (sections have none)', () => {
+    expect(() => assertSinglePreamble('no macro here', 'x/sections/y.md.tmpl')).not.toThrow();
+  });
+
+  test('a second occurrence throws with the template path — even in prose', () => {
+    // The original #2508 bug WAS a prose mention: "emitted by {{PREAMBLE}}'s
+    // preamble bash". Resolution is context-blind, so the guard must be too.
+    const tmpl = '{{PREAMBLE}}\n\n...later: emitted by {{PREAMBLE}}\'s preamble bash';
+    expect(() => assertSinglePreamble(tmpl, 'spec/SKILL.md.tmpl')).toThrow(/spec\/SKILL\.md\.tmpl.*2 times/);
   });
 });
 
