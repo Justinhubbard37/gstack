@@ -268,17 +268,33 @@ export function insideUuid(match: RegExpExecArray): boolean {
 // alike (the identifier-only form flagged the DSN-encoding call site as a
 // pushed secret). Bare `$word` stays uppercase-only: `$hunter2` must block.
 const INTERPOLATED_PASSWORD_RE = /^(\$\{.+\}|\$[A-Z_][A-Z0-9_]*)$/;
+// URL-password placeholders are matched by EXACT token, never by shape or
+// substring. A shape rule (`/^[A-Z][A-Z0-9_]*$/`) waved through real all-caps
+// secrets like `PROD2026SECRET`; a substring rule would let `PROD2026SECRET`
+// slip because it contains `SECRET`. So this is an anchored, hand-curated set
+// of the doc-comment conventions (postgres://USER:PASSWORD@host) only. Compared
+// case-sensitively against the raw span: the convention is ALL CAPS, and a
+// lowercase `password`/`pass` at this position is a real (terrible) credential
+// that must still block.
+const URL_PASSWORD_PLACEHOLDER_WORDS = new Set([
+  "PASSWORD",
+  "PASS",
+  "PASSWD",
+  "YOUR_PASSWORD",
+  "DB_PASSWORD",
+  "MY_PASSWORD",
+  "CHANGEME",
+  "CHANGE_ME",
+  "PLACEHOLDER",
+  "REDACTED",
+  "EXAMPLE",
+]);
 function urlPasswordIsPlaceholder(span: string): boolean {
   const m = span.match(/:\/\/[^:]+:([^@]+)@/);
   const pw = m?.[1] ?? "";
   if (pw === "") return true;
   if (INTERPOLATED_PASSWORD_RE.test(pw)) return true;
-  // URL-password position is STRICTER than generic placeholder detection.
-  // Doc-comment convention writes placeholders in ALL CAPS
-  // (postgres://USER:PASSWORD@host); a lowercase `password` or `pass` at
-  // this position is a real (terrible) credential and must block — the
-  // case-insensitive isPlaceholderSpan words would wave it through.
-  if (/^[A-Z][A-Z0-9_]*$/.test(pw)) return true;
+  if (URL_PASSWORD_PLACEHOLDER_WORDS.has(pw)) return true;
   return PLACEHOLDER_STRUCTURAL.some((re) => re.test(pw));
 }
 

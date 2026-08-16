@@ -134,6 +134,13 @@ describe("HIGH credential patterns", () => {
     expect(ids("https://root:" + "pa" + "ss@127.0.0.1/")).toContain("creds.basic_auth_url");
     // Structural placeholders still suppress at the URL position.
     expect(ids("postgres://user:<your-password>@host/db")).not.toContain("db.url_with_password");
+    // An ALL-CAPS password that is NOT an exact placeholder token is a real
+    // secret and must block — the pre-fix shape rule (/^[A-Z][A-Z0-9_]*$/) waved
+    // every all-caps password through. Substring of a placeholder word (SECRET)
+    // must not rescue it. Assembled at runtime so this file's own pushed bytes
+    // carry no live DSN shape.
+    expect(ids("postgres://admin:" + "PROD2026" + "SECRET@db-prod.internal/app")).toContain("db.url_with_password");
+    expect(ids("postgres://admin:" + "ADMIN" + "123@host/db")).toContain("db.url_with_password");
   });
 
   test("all HIGH patterns block (exit 3)", () => {
