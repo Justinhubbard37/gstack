@@ -123,6 +123,22 @@ describe('bun-polyfill', () => {
     expect(out).toMatch(/^exit:\d+$/);
   });
 
+  // Signal-exit branch: Bun reports 128 + signal number when a child is killed
+  // by a signal (code === null). Skipped on Windows, whose kill() semantics
+  // don't produce the POSIX 128+n mapping.
+  test.skipIf(process.platform === 'win32')('Bun.spawn proc.exited maps a killing signal to 128+signal', async () => {
+    const result = Bun.spawnSync(['node', '-e', `
+      require(${JSON.stringify(polyfillPath)});
+      (async () => {
+        const p = Bun.spawn(['node', '-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'ignore', 'ignore'] });
+        setTimeout(() => p.kill('SIGTERM'), 150);
+        console.log('exit:' + await p.exited);
+      })();
+    `], { stdout: 'pipe', stderr: 'pipe' });
+    // SIGTERM = 15 → 128 + 15 = 143.
+    expect(result.stdout.toString().trim()).toBe('exit:143');
+  });
+
   // GSTACK_SPAWN_MAX_BUFFER caps the drain so a runaway child can't OOM the
   // server. Past the cap, the pipe keeps flowing (child doesn't block) but
   // further bytes are dropped. Set a small cap, write more than that, assert

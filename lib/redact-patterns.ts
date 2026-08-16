@@ -276,7 +276,7 @@ const INTERPOLATED_PASSWORD_RE = /^(\$\{.+\}|\$[A-Z_][A-Z0-9_]*)$/;
 // case-sensitively against the raw span: the convention is ALL CAPS, and a
 // lowercase `password`/`pass` at this position is a real (terrible) credential
 // that must still block.
-const URL_PASSWORD_PLACEHOLDER_WORDS = new Set([
+export const URL_PASSWORD_PLACEHOLDER_WORDS = new Set([
   "PASSWORD",
   "PASS",
   "PASSWD",

@@ -76,6 +76,24 @@ describe('config', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    test('writes the self-contained .gitignore even when git already ignores .gstack/ (before the early return)', () => {
+      // Pins the load-bearing property: the state-dir ignore is written
+      // UNCONDITIONALLY, before the `if (isIgnoredByGit(...)) return` early exit.
+      // A git repo whose root .gitignore already lists .gstack/ makes
+      // isIgnoredByGit true, so the early return fires — moving the write below
+      // it (the exact bug the fix removed) would skip the guard here.
+      const tmpDir = path.join(os.tmpdir(), `browse-gitignored-repo-test-${Date.now()}`);
+      fs.mkdirSync(tmpDir, { recursive: true });
+      Bun.spawnSync(['git', 'init'], { cwd: tmpDir, stdout: 'ignore', stderr: 'ignore' });
+      fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.gstack/\n');
+      const config = resolveConfig({ BROWSE_STATE_FILE: path.join(tmpDir, '.gstack', 'browse.json') });
+      ensureStateDir(config);
+      const selfIgnore = path.join(config.stateDir, '.gitignore');
+      expect(fs.existsSync(selfIgnore)).toBe(true);
+      expect(fs.readFileSync(selfIgnore, 'utf-8')).toBe('*\n');
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     test('adds .gstack/ to .gitignore if not present', () => {
       const tmpDir = path.join(os.tmpdir(), `browse-gitignore-test-${Date.now()}`);
       fs.mkdirSync(tmpDir, { recursive: true });

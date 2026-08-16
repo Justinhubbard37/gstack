@@ -21,6 +21,7 @@ import {
   shannonEntropy,
   isPublicIPv4,
   isPlaceholderSpan,
+  URL_PASSWORD_PLACEHOLDER_WORDS,
 } from "../lib/redact-patterns";
 
 function ids(text: string, vis: RepoVisibility = "private"): string[] {
@@ -141,6 +142,21 @@ describe("HIGH credential patterns", () => {
     // carry no live DSN shape.
     expect(ids("postgres://admin:" + "PROD2026" + "SECRET@db-prod.internal/app")).toContain("db.url_with_password");
     expect(ids("postgres://admin:" + "ADMIN" + "123@host/db")).toContain("db.url_with_password");
+  });
+
+  // Every curated placeholder word must suppress at the URL-password position.
+  // The fix replaced a shape rule with a hand-curated EXACT set, so a typo or a
+  // dropped entry (CHANGEME -> CHANGME) would silently start blocking a legit
+  // doc placeholder with zero failure elsewhere. Loop the real exported set so
+  // the test can't drift from the source list.
+  test("db.url_with_password suppresses every curated placeholder word", () => {
+    for (const word of URL_PASSWORD_PLACEHOLDER_WORDS) {
+      expect(ids(`postgres://user:${word}@host/db`)).not.toContain("db.url_with_password");
+    }
+    // Guard the set stays a non-trivial curated list (catches an accidental clear).
+    expect(URL_PASSWORD_PLACEHOLDER_WORDS.size).toBeGreaterThanOrEqual(8);
+    // And a real secret that merely CONTAINS a placeholder word still blocks.
+    expect(ids("postgres://user:" + "MY" + "SECRETPASS@host/db")).toContain("db.url_with_password");
   });
 
   test("all HIGH patterns block (exit 3)", () => {

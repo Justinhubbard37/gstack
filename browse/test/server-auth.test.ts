@@ -64,6 +64,22 @@ describe('Server auth security', () => {
     expect(scopeBlock).toContain('Domain not allowed');
   });
 
+  // Test 1d: validateAuth compares the bearer token in CONSTANT TIME with a
+  // length gate. A revert to `header === \`Bearer ${authToken}\`` keeps
+  // accept/reject behavior identical (functional tests still pass) but silently
+  // reintroduces the byte-by-byte timing side-channel; dropping the length gate
+  // makes timingSafeEqual throw RangeError (500 instead of 401) on a wrong-length
+  // token. Pin both properties, mirroring the token-registry sibling guard.
+  test('validateAuth uses constant-time comparison with a length gate', () => {
+    const authBlock = sliceBetween(SERVER_SRC, 'function validateAuth(req: Request): boolean {', '// Factory-scoped shutdown');
+    expect(authBlock).toContain('crypto.timingSafeEqual');
+    expect(authBlock).toContain('got.length === want.length');
+    // The null-header guard must remain (Buffer.from(null) would otherwise throw).
+    expect(authBlock).toContain('header === null');
+    // The raw === comparison of the header against the bearer string must be gone.
+    expect(authBlock).not.toContain('header === `Bearer ${authToken}`');
+  });
+
   // Test 2: /refs endpoint requires auth via validateAuth
   test('/refs endpoint requires authentication', () => {
     const refsBlock = sliceBetween(SERVER_SRC, "url.pathname === '/refs'", "url.pathname === '/activity/stream'");
