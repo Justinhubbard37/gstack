@@ -360,6 +360,24 @@ ensure_playwright_browser() {
   _wait_with_deadline $! 90
 }
 
+# P0 #2554: a macOS XProtect definition update can start SIGKILLing the
+# Chromium revision the lockfile pins, which surfaces here as a failed launch
+# probe. Clear com.apple.quarantine on the Playwright cache bundles ONLY —
+# never a GSTACK_CHROMIUM_PATH bundle (that belongs to the wrapper/embedder;
+# same scope contract as browse's probePoisonedChromiumBundle) — so the
+# reinstall below produces a launchable browser. Best-effort and macOS-only.
+_clear_playwright_quarantine() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  local cache_root="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
+  [ -d "$cache_root" ] || return 0
+  local d
+  for d in "$cache_root"/chromium-* "$cache_root"/chromium_headless_shell-*; do
+    [ -d "$d" ] || continue
+    echo "  clearing com.apple.quarantine on $(basename "$d") (XProtect self-heal, #2554)" >&2
+    xattr -dr com.apple.quarantine "$d" 2>/dev/null || true
+  done
+}
+
 # Ensure a color-emoji font is installed (Linux only).
 #
 # Chromium renders emoji code points as .notdef "tofu" (▯) when no color-emoji
@@ -629,6 +647,10 @@ fi
 
 if ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
+  # XProtect self-heal (#2554): the probe failure may be the OS killing the
+  # cached Chromium, not a missing install. Clear quarantine on the Playwright
+  # cache bundles before reinstalling so the fresh fetch launches clean.
+  _clear_playwright_quarantine
   _PW_LOCK="${TMPDIR:-/tmp}/gstack-playwright-install.lock"
   # Stale-lock self-heal: a SIGKILL'd prior setup leaves the lock dir behind
   # forever (mkdir mutexes have no owner). If the recorded holder PID is dead,
