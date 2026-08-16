@@ -43,21 +43,98 @@ describe(':user render targets the out-dir, never the checkout (#2569)', () => {
     expect(sites).toBeGreaterThanOrEqual(outDirSites);
   });
 
-  test('setup wipes and repoints: rm -rf render dir + relink after a successful render', () => {
+  test('setup renders into a TMP dir, swaps on success, repoints after (never wipes first)', () => {
     const block = SETUP_SRC.slice(
       SETUP_SRC.indexOf('# ─── GBrain detection + conditional SKILL.md render'),
       SETUP_SRC.indexOf('# 11. Plan-tune cathedral hook install'),
     );
-    expect(block).toContain('rm -rf "$_GSTACK_RENDER_DIR"');
+    // The live render dir is symlinked into by installed skills — it may only
+    // be replaced AFTER a successful render (a pre-render wipe left every
+    // brain-aware SKILL.md link dangling on a transient render failure).
+    expect(block).toContain('--out-dir "$_GSTACK_RENDER_TMP"');
+    expect(block).not.toContain('--out-dir "$_GSTACK_RENDER_DIR"');
+    expect(block).toContain('_swap_in_render "$_GSTACK_RENDER_DIR" "$_GSTACK_RENDER_TMP"');
     expect(block).toContain('link_claude_skill_dirs "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR"');
-    // Stale-render cleanup on the gbrain-gone path.
+    // Stale-render cleanup on the gbrain-gone path (a deliberate wipe).
     expect(block).toContain('gbrain not detected');
+    expect(block).toContain('rm -rf "$_GSTACK_RENDER_DIR"');
   });
 
-  test('gstack-config gbrain-refresh renders to the out-dir and dropped the dirty-tree caveat', () => {
+  test('gstack-config gbrain-refresh renders to a TMP out-dir, swaps on success', () => {
     expect(CONFIG_SRC).toContain('gen:skill-docs:user --host claude --out-dir');
     expect(CONFIG_SRC).not.toContain("this dirties the install's git tree");
     expect(CONFIG_SRC).toContain('gstack-relink');
+    expect(CONFIG_SRC).toContain('--out-dir "$RENDER_TMP"');
+    expect(CONFIG_SRC).not.toContain('--out-dir "$RENDER_DIR"');
+    expect(CONFIG_SRC).toContain('_swap_in_render "$RENDER_DIR" "$RENDER_TMP"');
+  });
+
+  test('_swap_in_render behavior: success replaces, and the shape means failure never touches the live dir', () => {
+    // Both files carry the same-contract helper — drive each for real.
+    for (const src of [SETUP_SRC, CONFIG_SRC]) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-render-swap-'));
+      try {
+        const live = path.join(tmp, 'claude');
+        const fresh = path.join(tmp, 'claude.tmp.123');
+        fs.mkdirSync(path.join(live, 'ship'), { recursive: true });
+        fs.writeFileSync(path.join(live, 'ship', 'SKILL.md'), 'old-render\n');
+        fs.mkdirSync(path.join(fresh, 'ship'), { recursive: true });
+        fs.writeFileSync(path.join(fresh, 'ship', 'SKILL.md'), 'new-render\n');
+
+        const script = [
+          'set -e',
+          extractFn(src, '_swap_in_render'),
+          `_swap_in_render "${live}" "${fresh}"`,
+        ].join('\n');
+        const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 15_000 });
+        expect(r.status).toBe(0);
+        // Live dir now serves the fresh render at the SAME path (links into
+        // it stay valid), tmp and .old are gone.
+        expect(fs.readFileSync(path.join(live, 'ship', 'SKILL.md'), 'utf-8')).toBe('new-render\n');
+        expect(fs.existsSync(fresh)).toBe(false);
+        expect(fs.readdirSync(tmp)).toEqual(['claude']);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test('a FAILED render leaves the previous render dir fully intact (gstack-config path, end-to-end shape)', () => {
+    // Reconstruct the exact failure branch: render into tmp fails → tmp is
+    // removed, the live dir (and the symlinks into it) are untouched, and
+    // _swap_in_render is never called.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-render-fail-'));
+    try {
+      const live = path.join(tmp, 'claude');
+      fs.mkdirSync(path.join(live, 'ship'), { recursive: true });
+      fs.writeFileSync(path.join(live, 'ship', 'SKILL.md'), 'previous-render\n');
+      // An installed skill symlinks into the live render dir.
+      const installed = path.join(tmp, 'installed-ship-SKILL.md');
+      fs.symlinkSync(path.join(live, 'ship', 'SKILL.md'), installed);
+
+      const script = [
+        'set -u',
+        extractFn(CONFIG_SRC, '_swap_in_render'),
+        `RENDER_DIR="${live}"`,
+        'RENDER_TMP="$RENDER_DIR.tmp.$$"',
+        'rm -rf "$RENDER_TMP"',
+        // The render fails (broken template, bun error, disk full).
+        'if ( mkdir -p "$RENDER_TMP" && false ); then',
+        '  _swap_in_render "$RENDER_DIR" "$RENDER_TMP"',
+        'else',
+        '  rm -rf "$RENDER_TMP"',
+        '  echo "render failed — previous render left in place" >&2',
+        'fi',
+      ].join('\n');
+      const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 15_000 });
+      expect(r.status).toBe(0);
+      expect(fs.readFileSync(path.join(live, 'ship', 'SKILL.md'), 'utf-8')).toBe('previous-render\n');
+      // The installed symlink still resolves — the skill set did not vanish.
+      expect(fs.readFileSync(installed, 'utf-8')).toBe('previous-render\n');
+      expect(fs.readdirSync(tmp).sort()).toEqual(['claude', 'installed-ship-SKILL.md']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   test('gstack-relink prefers the render dir when a rendered SKILL.md exists', () => {

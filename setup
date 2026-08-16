@@ -136,6 +136,21 @@ _sidecar_root_user_owned() {
   ! grep -q '<!-- AUTO-GENERATED from' "$root/SKILL.md" 2>/dev/null
 }
 
+# Swap a freshly-rendered tmp dir into the live render location (#2569
+# hardening). Installed skills SYMLINK into the live dir, so it is only ever
+# replaced AFTER a successful render — a failed render leaves the previous
+# render (and every link into it) fully intact. Keep in sync with
+# bin/gstack-config's _swap_in_render (same contract, both pinned by
+# test/user-render-out-dir-install.test.ts).
+_swap_in_render() {
+  local render_dir="$1" render_tmp="$2"
+  local render_old="$render_dir.old.$$"
+  rm -rf "$render_old"
+  if [ -e "$render_dir" ] || [ -L "$render_dir" ]; then mv "$render_dir" "$render_old"; fi
+  mv "$render_tmp" "$render_dir"
+  rm -rf "$render_old"
+}
+
 _WINDOWS_COPY_NOTE_PRINTED=0
 _print_windows_copy_note_once() {
   if [ "$IS_WINDOWS" -eq 1 ] && [ "$_WINDOWS_COPY_NOTE_PRINTED" -eq 0 ]; then
@@ -1917,24 +1932,32 @@ if [ -x "$DETECT_BIN" ]; then
         log "gbrain detected — GSTACK_SKIP_GBRAIN_REGEN set: leaving tracked SKILL.md canonical (dev/source tree)."
       else
         log "gbrain detected — rendering brain-aware Claude SKILL.md into $_GSTACK_RENDER_DIR (~250 token overhead per planning skill; source checkout stays clean)..."
-        rm -rf "$_GSTACK_RENDER_DIR"
+        # Render into a tmp dir and swap it in only on SUCCESS. Installed
+        # skills SYMLINK into the render dir (relink prefers it), so wiping
+        # it before the render meant one transient failure left every
+        # brain-aware SKILL.md link dangling — the whole skill set vanished
+        # from Claude Code until a successful re-render.
+        _GSTACK_RENDER_TMP="$_GSTACK_RENDER_DIR.tmp.$$"
+        rm -rf "$_GSTACK_RENDER_TMP"
         if (
           cd "$SOURCE_GSTACK_DIR"
           # No pipe before the || guard: `cmd | tail -3` reports TAIL's exit
           # status, so a generator crash read as success (same masking the
           # main gen:skill-docs site had). Capture, show the tail, propagate.
-          _GEN_USER_OUT=$(bun_cmd run gen:skill-docs:user --host claude --out-dir "$_GSTACK_RENDER_DIR" 2>&1)
+          _GEN_USER_OUT=$(bun_cmd run gen:skill-docs:user --host claude --out-dir "$_GSTACK_RENDER_TMP" 2>&1)
           _GEN_USER_RC=$?
           printf '%s\n' "$_GEN_USER_OUT" | tail -3
           exit "$_GEN_USER_RC"
         ); then
+          _swap_in_render "$_GSTACK_RENDER_DIR" "$_GSTACK_RENDER_TMP"
           # Repoint the installed skills at the fresh render — the installer
           # prefers rendered files when present (#2569).
           if [ "${_CLAUDE_SKILLS_LINKED:-0}" -eq 1 ]; then
             link_claude_skill_dirs "$SOURCE_GSTACK_DIR" "$INSTALL_SKILLS_DIR" >/dev/null
           fi
         else
-          log "  warning: gen:skill-docs:user failed — run 'bun run gen:skill-docs:user --host claude --out-dir $_GSTACK_RENDER_DIR' manually if you want brain-aware blocks"
+          rm -rf "$_GSTACK_RENDER_TMP"
+          log "  warning: gen:skill-docs:user failed — previous render (if any) left in place, links stay valid. Run 'bun run gen:skill-docs:user --host claude --out-dir $_GSTACK_RENDER_DIR' manually if you want fresh brain-aware blocks"
         fi
       fi
     else
