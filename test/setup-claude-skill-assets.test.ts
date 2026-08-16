@@ -43,11 +43,7 @@ const BUILT_ARTIFACT_ALLOWLIST = [
  * do not add entries without an issue + a scheduled fix.
  */
 const KNOWN_BROKEN_CLASS2: Record<string, string> = {
-  // #2250: setup-gbrain's docs call both scripts by bare name; only the .ts
-  // files exist. Fixed by the wave's c24 (PR #2409 re-derive) — remove these
-  // entries in that commit.
-  'bin/gstack-memory-ingest': '#2250 — fixed by setup-gbrain .ts invocation-path commit',
-  'bin/gstack-gbrain-sync': '#2250 — fixed by setup-gbrain .ts invocation-path commit',
+  // (empty — #2250's bare bin names were the last entries; keep it that way)
 };
 
 /** Extract a named shell function body (through its closing brace) from setup. */
