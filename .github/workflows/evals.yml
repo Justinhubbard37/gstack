@@ -123,6 +123,10 @@ jobs:
             file: test/skill-e2e-review-attribution.test.ts
           - name: e2e-workflow
             file: test/skill-e2e-workflow.test.ts
+            # Earned its extra attempt with receipts: document-release is a
+            # long multi-step E2E that timed out on attempt 2 under in-shard
+            # concurrency (PR #2593 round 4) while passing other rounds.
+            retries: 2
           # Rehomed from the deleted pre-split monolith (its filename never
           # matched the skill-e2e-* glob, so these gate tests silently never
           # ran). Both files hold gate-tier tests: review/plan-eng coverage
@@ -147,6 +151,12 @@ jobs:
           - name: e2e-pty-plan-smoke
             file: test/skill-e2e-office-hours-auto-mode.test.ts test/skill-e2e-plan-mode-no-op.test.ts
             timeout: 35
+            # The documented contention-heavy PTY family: ROTATING members
+            # failed attempt 2 in consecutive PR #2593 rounds
+            # (plan-design-review, then plan-eng-review) while the family
+            # passes on branches still running three attempts. Every other
+            # row keeps --retry 1.
+            retries: 2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -306,7 +316,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EVALS_CONCURRENCY: "40"
           PLAYWRIGHT_BROWSERS_PATH: /opt/playwright-browsers
-        run: EVALS=1 bun test --retry 1 --concurrent --max-concurrency 40 ${{ matrix.suite.file }}
+        run: EVALS=1 bun test --retry ${{ matrix.suite.retries || 1 }} --concurrent --max-concurrency 40 ${{ matrix.suite.file }}
 
       - name: Upload eval results
         if: always()
