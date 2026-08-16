@@ -27,7 +27,11 @@
 # injection when consumed via source or eval.
 set -euo pipefail
 
-CACHE_DIR="$HOME/.gstack/slug-cache"
+# GSTACK_HOME-aware, matching lib/bin-context.ts's native port (#2561): the
+# bash writer and the TS reader must key the SAME cache, and a test running
+# with GSTACK_HOME=<temp> must write its cache junk there, not into the real
+# home (observed: 2,528 stale temp-cwd entries accumulated in ~/.gstack).
+CACHE_DIR="${GSTACK_HOME:-$HOME/.gstack}/slug-cache"
 PROJECT_DIR="$(pwd)"
 # Encode absolute path as cache key: /Users/j/foo → _Users_j_foo
 CACHE_KEY=$(printf '%s' "$PROJECT_DIR" | tr '/' '_')
@@ -37,8 +41,14 @@ SLUG=""
 
 # 0. Explicit env override — wins over everything. Escape hatch for vendored
 #    sub-repos and other genuine "subdir IS its own project" edge cases.
+SLUG_FROM_ENV=0
 if [[ -n "${GSTACK_PROJECT_SLUG:-}" ]]; then
   SLUG=$(printf '%s' "$GSTACK_PROJECT_SLUG" | tr -cd 'a-zA-Z0-9._-')
+  # Per-invocation escape hatch, never a durable identity: persisting it
+  # would rebind THIS cwd's slug for every later env-less run (observed: a
+  # test exporting GSTACK_PROJECT_SLUG from the repo root rebound the whole
+  # repo's session state to the test's slug).
+  SLUG_FROM_ENV=1
 fi
 
 # 1. Walk up from pwd, tracking the OUTERMOST ancestor with a canonical
@@ -160,7 +170,7 @@ SLUG="${SLUG:-$(basename "$PROJECT_DIR" | tr -cd 'a-zA-Z0-9._-')}"
 #     injection, but the invariant should not depend on that reasoning).
 SLUG=$(printf '%s' "$SLUG" | tr -cd 'a-zA-Z0-9._-')
 
-if [[ -n "$SLUG" ]]; then
+if [[ -n "$SLUG" && "$SLUG_FROM_ENV" -eq 0 ]]; then
   CURRENT_CACHE=""
   if [[ -f "$CACHE_FILE" ]]; then
     CURRENT_CACHE=$(cat "$CACHE_FILE" 2>/dev/null || true)
