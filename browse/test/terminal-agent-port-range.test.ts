@@ -1,6 +1,6 @@
 /**
  * #2314: the terminal-agent must allocate its port from the SAME fixed
- * 10000-60000 scan range the main server uses (port-allocator.ts,
+ * 10000-49151 scan range the main server uses (port-allocator.ts,
  * decision 8) — never `port: 0`. Binding 0 drew from the OS ephemeral range
  * (49152-65535 on macOS), where the weeks-lived agent squatted ports that
  * short-lived `app.listen(0)` test servers expected to receive, absorbing
@@ -26,8 +26,10 @@ describe('shared port allocator (#2314)', () => {
       const port = await findAvailablePort();
       expect(port).toBeGreaterThanOrEqual(RANDOM_PORT_MIN);
       expect(port).toBeLessThan(RANDOM_PORT_MAX);
-      // The load-bearing property: below the ephemeral floor (49152).
-      expect(RANDOM_PORT_MAX).toBeLessThanOrEqual(60000);
+      // The load-bearing property: the WHOLE range sits below the ephemeral
+      // floor (49152). The original 60000 cap left ~22% of picks inside the
+      // pool this allocator exists to avoid.
+      expect(RANDOM_PORT_MAX).toBeLessThan(49152);
       expect(RANDOM_PORT_MIN).toBeGreaterThanOrEqual(1024);
     }
   });

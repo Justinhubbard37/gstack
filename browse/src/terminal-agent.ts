@@ -952,10 +952,25 @@ function readBrowseToken(): string {
 // Boot.
 async function main() {
   writeClaudeAvailable();
-  // #2314: allocate from the shared fixed scan range, then bind. Same
-  // probe-then-bind semantics as the main server's findPort.
-  const allocatedPort = await findAvailablePort();
-  const server = buildServer(allocatedPort);
+  // #2314: allocate from the shared fixed scan range, then bind. Probe-then-
+  // bind has a TOCTOU window — a concurrent process can take the port between
+  // the probe and Bun.serve, which throws and would kill the boot with no
+  // retry (main().catch → exit 1). Re-allocate and retry a few times; each
+  // iteration probes fresh, so only a genuine race lands here.
+  let server: ReturnType<typeof buildServer> | undefined;
+  let lastBindErr: unknown;
+  for (let attempt = 0; attempt < 5 && !server; attempt++) {
+    const allocatedPort = await findAvailablePort();
+    try {
+      server = buildServer(allocatedPort);
+    } catch (err) {
+      lastBindErr = err;
+    }
+  }
+  if (!server) {
+    console.error(`[terminal-agent] failed to bind after 5 attempts: ${lastBindErr}`);
+    process.exit(1);
+  }
   const port = (server as any).port || (server as any).address?.port;
   if (!port) {
     console.error('[terminal-agent] failed to bind: no port');

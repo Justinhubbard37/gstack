@@ -1,12 +1,15 @@
 /**
  * Shared loopback port allocation (#2314, decision 8).
  *
- * One fixed scan range (10000-60000) for EVERY long-lived gstack listener:
+ * One fixed scan range (10000-49151) for EVERY long-lived gstack listener:
  * the main browse daemon and the terminal-agent. Binding `port: 0` instead
  * hands out a port from the OS EPHEMERAL range (49152-65535 on macOS) — the
  * same pool every short-lived test server draws from — so a daemon that
  * lives for weeks ends up squatting ports that `app.listen(0)` test servers
- * expect to receive, silently absorbing their traffic as phantom 404s.
+ * expect to receive, silently absorbing their traffic as phantom 404s. The
+ * range therefore ends AT 49151: a max above it would put a fraction of
+ * picks back inside the pool this module exists to avoid (the original
+ * 60000 cap left ~22% of allocations in 49152-59999).
  *
  * Extracted from server.ts (which had this logic since #486) so
  * terminal-agent.ts can reuse it without importing the whole server module.
@@ -24,7 +27,7 @@ export type FailedPortAttempt = {
 };
 
 export const RANDOM_PORT_MIN = 10000;
-export const RANDOM_PORT_MAX = 60000;
+export const RANDOM_PORT_MAX = 49151; // last port BELOW the macOS ephemeral pool (49152-65535)
 export const RANDOM_PORT_RETRIES = 5;
 
 export function normalizePortError(err: unknown): Extract<PortCheckResult, { available: false }> {
