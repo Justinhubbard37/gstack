@@ -31,8 +31,9 @@
 //       file. No bump. Validates the VERSION pattern first.
 //
 // Contract: classify NEVER writes. write/repair mutate VERSION + package.json
-// only. No git mutation, no network. Mirrors gstack-next-version's reader/writer
-// split so /ship composes them.
+// + npm lockfiles (package-lock.json / npm-shrinkwrap.json, when present)
+// only. No git mutation, no network. Mirrors gstack-next-version's
+// reader/writer split so /ship composes them.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -106,6 +107,38 @@ function writePkgVersion(cwd: string, version: string): void {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   parsed.version = version;
   writeFileSync(pkgPath, JSON.stringify(parsed, null, 2) + "\n");
+}
+
+/**
+ * npm records the package version twice in its lockfiles — top-level
+ * `version` and, in lockfileVersion >= 2, `packages[""].version` (the entry
+ * describing the root package itself) — and `npm install` keeps both in
+ * step. Nothing else in a release does, so a lockfile left behind drifts one
+ * field per bump until someone runs npm, dirtying the tree on the next
+ * `npm install` far from the cause (#2567). Pure JSON edit: no npm spawn,
+ * no dependency-tree churn.
+ *
+ * Synced ONLY when the file already exists — never created (gstack itself
+ * is bun-only; decision pinned in the v1.67 fix-wave plan).
+ * npm-shrinkwrap.json shares the format and, when present, is what npm
+ * actually honors, so both names are covered. Returns the names synced.
+ */
+const NPM_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json"];
+function syncNpmLockfiles(dir: string, version: string): string[] {
+  const synced: string[] = [];
+  for (const name of NPM_LOCKFILES) {
+    const lockPath = join(dir, name);
+    if (!existsSync(lockPath)) continue;
+    const parsed = JSON.parse(readFileSync(lockPath, "utf-8")) as Record<string, unknown>;
+    parsed.version = version;
+    const packages = parsed.packages as Record<string, Record<string, unknown>> | undefined;
+    if (packages && typeof packages[""] === "object" && packages[""] !== null) {
+      packages[""].version = version;
+    }
+    writeFileSync(lockPath, JSON.stringify(parsed, null, 2) + "\n");
+    synced.push(name);
+  }
+  return synced;
 }
 
 function baseVersion(cwd: string, base: string, versionRel: string): string {
@@ -194,18 +227,26 @@ function cmdWrite(args: string[], cwd: string): void {
   }
 
   writeFileSync(versionPath, version + "\n");
+  let lockSynced: string[] = [];
   if (existsSync(join(cwd, "package.json"))) {
     try {
       writePkgVersion(cwd, version!);
+      lockSynced = syncNpmLockfiles(cwd, version!);
     } catch {
       fail(
-        "failed to update package.json. VERSION was written but package.json is now stale. " +
-          "Re-run — classify will report DRIFT_STALE_PKG and repair will sync it.",
+        "failed to update package.json/npm lockfiles. VERSION was written but the npm " +
+          "manifests are now stale. Re-run — classify will report DRIFT_STALE_PKG and repair will sync them.",
         3,
       );
     }
   }
-  process.stdout.write(JSON.stringify({ wrote: version, packageJson: existsSync(join(cwd, "package.json")) }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      wrote: version,
+      packageJson: existsSync(join(cwd, "package.json")),
+      packageLock: lockSynced.length > 0,
+    }) + "\n",
+  );
 }
 
 function cmdRepair(args: string[], cwd: string): void {
@@ -233,8 +274,9 @@ function cmdRepair(args: string[], cwd: string): void {
   }
   try {
     writePkgVersion(cwd, current);
+    syncNpmLockfiles(cwd, current);
   } catch {
-    fail("drift repair failed — could not update package.json.", 3);
+    fail("drift repair failed — could not update package.json/npm lockfiles.", 3);
   }
   process.stdout.write(JSON.stringify({ repaired: current }) + "\n");
 }
