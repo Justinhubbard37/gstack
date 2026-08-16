@@ -1,4 +1,14 @@
 import type { TemplateContext } from './types';
+import { CODEX_WEB_SEARCH_FLAG } from './constants';
+
+/**
+ * {{CODEX_WEB_SEARCH_FLAG}} — the non-deprecated codex web-search flag
+ * (#2525). Templates with inline codex invocations reference this token so
+ * the flag has exactly one source of truth (scripts/resolvers/constants.ts).
+ */
+export function generateCodexWebSearchFlag(_ctx: TemplateContext): string {
+  return CODEX_WEB_SEARCH_FLAG;
+}
 
 export function generateSlugEval(ctx: TemplateContext): string {
   return `eval "$(${ctx.paths.binDir}/gstack-slug 2>/dev/null)"`;
