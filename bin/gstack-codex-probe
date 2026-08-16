@@ -48,9 +48,14 @@ _gstack_codex_model_probe() {
   # Contract:
   #   MODEL_OK (exit 0)              — round trip succeeded; cached 1h.
   #   MODEL_UNUSABLE (exit 1)        — deterministic model 400; hints printed.
+  #     Cached 15 min: the 400 is config-driven, so re-probing every preflight
+  #     charged the affected user a 30s round trip + real tokens per review
+  #     section, forever. Editing config.toml (the fix) changes the cache
+  #     signature and re-probes immediately; the short TTL covers server-side
+  #     entitlement recovery the signature can't see.
   #   MODEL_PROBE_INCONCLUSIVE (exit 0) — timeout/transient; FAIL-OPEN so a
   #     slow network never wedges codex mode (the per-invocation Error
-  #     Handling entry still covers a later 400).
+  #     Handling entry still covers a later 400). Never cached.
   #
   # Only call this AFTER _gstack_codex_auth_probe passes — probing without
   # auth just measures the auth failure again.
@@ -76,6 +81,12 @@ _gstack_codex_model_probe() {
       echo "MODEL_OK (cached)"
       return 0
     fi
+    if [ "$_c_status" = "MODEL_UNUSABLE" ] && [ "$_c_sig" = "$_sig" ] && [ $((_now - _c_ts)) -lt 900 ]; then
+      echo "MODEL_UNUSABLE (cached)"
+      echo "HINT: the rejected model comes from the 'model = ' line in $_codex_home/config.toml."
+      echo "HINT: check its [notice.model_migrations] table — Codex records the intended replacement there."
+      return 1
+    fi
   fi
   local _out _code
   _out=$(_gstack_codex_timeout_wrapper 30 codex exec --skip-git-repo-check -s read-only "reply OK" </dev/null 2>&1)
@@ -87,6 +98,8 @@ _gstack_codex_model_probe() {
     return 0
   fi
   if printf '%s' "$_out" | grep -qiE 'model.{0,40}is not supported|"status":[[:space:]]*400'; then
+    mkdir -p "$_gstack_home" 2>/dev/null || true
+    printf 'MODEL_UNUSABLE %s %s\n' "$_now" "$_sig" > "$_cache" 2>/dev/null || true
     echo "MODEL_UNUSABLE"
     printf '%s\n' "$_out" | grep -i "model" | head -3
     echo "HINT: the rejected model comes from the 'model = ' line in $_codex_home/config.toml."
@@ -120,8 +133,8 @@ _gstack_codex_version_check() {
 
 _gstack_codex_timeout_wrapper() {
   # Resolve wrapper binary: prefer gtimeout (Homebrew coreutils on macOS),
-  # fall back to timeout (Linux), else run unwrapped. Arguments: $1 is the
-  # duration in seconds; rest is the command to run.
+  # fall back to timeout (Linux), else a bash-native watchdog. Arguments:
+  # $1 is the duration in seconds; rest is the command to run.
   local _duration="$1"
   shift
   local _to
@@ -129,7 +142,29 @@ _gstack_codex_timeout_wrapper() {
   if [ -n "$_to" ]; then
     "$_to" "$_duration" "$@"
   else
-    "$@"
+    # Stock macOS ships neither coreutils gtimeout nor timeout(1); running
+    # unwrapped let a hung `codex exec` block the probe — and the calling
+    # workflow — indefinitely. Emulate: background the command, TERM it at
+    # the deadline, mirror timeout(1)'s exit-124 contract. The watchdog's
+    # stdout is detached so an early finish never blocks a caller's $(...)
+    # capture on the orphaned sleep.
+    "$@" &
+    local _cmd_pid=$!
+    ( sleep "$_duration" && kill -TERM "$_cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
+    local _watch_pid=$!
+    local _rc
+    wait "$_cmd_pid"
+    _rc=$?
+    if kill -0 "$_watch_pid" 2>/dev/null; then
+      # Command finished before the deadline. Retiring the watchdog subshell
+      # also defuses its pending kill (the `&& kill` lives in the subshell);
+      # its detached sleep expires harmlessly.
+      kill "$_watch_pid" 2>/dev/null
+      wait "$_watch_pid" 2>/dev/null
+    elif [ "$_rc" -ge 128 ]; then
+      _rc=124  # killed by the watchdog: report timeout(1)'s code
+    fi
+    return "$_rc"
   fi
 }
 

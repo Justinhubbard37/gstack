@@ -287,6 +287,29 @@ describe('gstack-codex-probe: timeout wrapper + namespace hygiene', () => {
     }
   });
 
+  test('bash-native watchdog kills a hung command at the deadline (exit 124, no timeout binary)', () => {
+    // Stock macOS ships neither gtimeout nor timeout(1) — the old fallback ran
+    // the command unwrapped, so a hung `codex exec` blocked the calling
+    // workflow forever. Force the fallback everywhere (Linux /bin has timeout
+    // via usrmerge) with a PATH holding ONLY bash and sleep, then prove a
+    // 30s sleep dies at the 1s deadline with timeout(1)'s exit code. The
+    // runProbe 5s spawnSync cap doubles as the "actually killed fast" bound.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-watchdog-'));
+    try {
+      const which = (tool: string) =>
+        spawnSync('bash', ['-c', `command -v ${tool}`]).stdout.toString().trim() || `/bin/${tool}`;
+      fs.symlinkSync(which('bash'), path.join(dir, 'bash'));
+      fs.symlinkSync(which('sleep'), path.join(dir, 'sleep'));
+      const r = runProbe({
+        snippet: `_gstack_codex_timeout_wrapper 1 sleep 30; echo "rc=$?"`,
+        env: { PATH: dir },
+      });
+      expect(r.stdout).toContain('rc=124');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('sourcing probe does NOT set errexit/trap/IFS in caller shell (namespace hygiene)', () => {
     // Capture `set -o` output before and after sourcing. Any drift means the
     // probe polluted the caller.
