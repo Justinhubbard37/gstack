@@ -158,6 +158,37 @@ describe('timeline-stop-hook (#2553, F5 fail-open)', () => {
     expect(runHook('').exitCode).toBe(0);
   });
 
+  test('tail window (P3): a recent dangling entry in a >256KB timeline is still repaired', () => {
+    const lines: string[] = [];
+    // An old dangling entry that falls OUTSIDE the 256KB tail window —
+    // beyond repair interest by design (its session is long gone).
+    lines.push(JSON.stringify({ skill: 'review', event: 'started', session: 'old-1' }));
+    // >512KB of closed pairs pushes the old entry well past the window while
+    // proving windowed parsing still walks real entries.
+    let n = 0;
+    while (lines.length * 100 < 512 * 1024) {
+      lines.push(
+        JSON.stringify({ skill: 'qa', event: 'started', session: `pad-${n}`, pad: '#'.repeat(40) }),
+      );
+      lines.push(JSON.stringify({ skill: 'qa', event: 'completed', session: `pad-${n}`, outcome: 'success' }));
+      n++;
+    }
+    lines.push(JSON.stringify({ skill: 'ship', event: 'started', session: 'recent-9' }));
+    fs.writeFileSync(timelinePath, lines.join('\n') + '\n');
+    expect(fs.statSync(timelinePath).size).toBeGreaterThan(256 * 1024);
+
+    const r = runHook(stopPayload());
+    expect(r.exitCode).toBe(0);
+    const repairs = timelineEntries().filter((e) => e.source === 'stop-hook');
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0]).toMatchObject({
+      skill: 'ship',
+      event: 'completed',
+      outcome: 'unknown',
+      session: 'recent-9',
+    });
+  });
+
   test('oversized timeline is skipped, untouched, and still exits 0 (fail-open size cap)', () => {
     const line = JSON.stringify({ skill: 'qa', event: 'started', session: '66-6' }) + '\n';
     const filler = '#'.repeat(1024 * 1024);

@@ -15,9 +15,17 @@
  *     stdin, unreadable slug). Errors go to ~/.gstack/hook-errors.log,
  *     best-effort.
  *   - Internal time budget (~2s): work is bounded up front — the timeline is
- *     skipped entirely over a size cap, and the deadline is re-checked before
- *     the write. Claude Code's own hook timeout is the outer belt.
+ *     skipped entirely over a size cap, only the last TAIL_WINDOW_BYTES are
+ *     read and parsed (P3: this hook runs on EVERY Stop event machine-wide,
+ *     and a full read+parse scaled to the cap at ~100-300ms/turn), and the
+ *     deadline is re-checked before the write. Claude Code's own hook
+ *     timeout is the outer belt.
  *   - Append-only: never rewrites timeline.jsonl.
+ *   - Tail-window semantics: a dangling "started" older than the last 256KB
+ *     of appends belongs to a session long gone — beyond repair interest.
+ *     A "completed" is always appended AFTER its "started", so any started
+ *     inside the window has its completion inside the window too: the window
+ *     can never fabricate a dangling entry, and idempotency holds.
  *
  * Correlation limits, on purpose: the preamble's session id is a shell-local
  * "$$-epoch", not the Claude session id this hook receives, so entries can't
@@ -33,7 +41,32 @@ import { runBin } from './spawn-bin';
 
 const DEADLINE_MS = 2000;
 const MAX_TIMELINE_BYTES = 10 * 1024 * 1024;
+const TAIL_WINDOW_BYTES = 256 * 1024;
 const startedAt = Date.now();
+
+/**
+ * Read only the last TAIL_WINDOW_BYTES of the timeline (P3). When the window
+ * starts mid-file, the first (partial) line is discarded — its entry is
+ * outside the window by definition. Throws on I/O errors; the caller owns
+ * the fail-open handling.
+ */
+function readTimelineTail(timelinePath: string, size: number): string {
+  const fd = fs.openSync(timelinePath, 'r');
+  try {
+    const offset = Math.max(0, size - TAIL_WINDOW_BYTES);
+    const length = size - offset;
+    const buf = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buf, 0, length, offset);
+    let text = buf.subarray(0, bytesRead).toString('utf8');
+    if (offset > 0) {
+      const firstNewline = text.indexOf('\n');
+      text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+    }
+    return text;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 function stateRoot(): string {
   return process.env.GSTACK_HOME || path.join(os.homedir(), '.gstack');
@@ -102,7 +135,7 @@ function main(): void {
 
   let raw: string;
   try {
-    raw = fs.readFileSync(timelinePath, 'utf8');
+    raw = readTimelineTail(timelinePath, stat.size);
   } catch (err) {
     logHookError(`could not read timeline: ${err instanceof Error ? err.message : String(err)}`);
     return;
