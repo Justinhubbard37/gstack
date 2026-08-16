@@ -70,6 +70,33 @@ function objectExists(sha: string): boolean {
   return r.status === 0;
 }
 
+/**
+ * The remote-tracking exclusion used when narrowing to "commits new to the
+ * remote" (#2592 catch-up merges, #2573 rebased force-pushes).
+ *
+ * Narrowed to the PUSH TARGET's namespace (S1): a bare `--remotes` excludes
+ * commits reachable from ANY remote-tracking ref, so a secret that had only
+ * ever been fetched from (or pushed to) a private/local-path remote was never
+ * scanned when later pushed to a PUBLIC remote — "already left this machine"
+ * is not "already reached THIS remote". Git hands pre-push the push remote's
+ * name as $1 (and its URL as $2); the installed hook wrapper forwards "$@".
+ * Fallbacks keep the historical all-remotes behavior when the name is
+ * unavailable (stdin/CLI invocation) or is not a configured remote (URL
+ * pushes have no remote-tracking namespace) — falling back scans LESS than
+ * the narrowed form would, but never less than the hook historically did.
+ */
+let _remotesExclusion: string | undefined;
+function remotesExclusion(): string {
+  if (_remotesExclusion === undefined) {
+    const name = process.argv[2];
+    const configured = name
+      ? git(["remote"]).split("\n").map((s) => s.trim()).filter(Boolean).includes(name)
+      : false;
+    _remotesExclusion = configured ? `--remotes=${name}/*` : "--remotes";
+  }
+  return _remotesExclusion;
+}
+
 function defaultRemoteBranch(): string {
   // origin/HEAD → origin/main, fall back to main/master.
   const sym = git(["symbolic-ref", "refs/remotes/origin/HEAD"]).trim();
@@ -104,12 +131,12 @@ function unknownRemoteTipBase(localSha: string): string | null {
   //    engine's byte cap, so `engine.input_too_large` blocks having scanned
   //    NOTHING — "scans more, never less" inverted into "scans nothing".
   //
-  //    `--remotes` covers every remote, not just the push target: content
-  //    already published anywhere has already left this machine, so treating it
-  //    as pre-existing is deliberate. Git hands the remote name to pre-push in
-  //    argv, which this hook does not read; narrowing to it would only matter
-  //    for a repo that pushes secrets to one remote but not another.
-  const newCommits = git(["rev-list", "--reverse", localSha, "--not", "--remotes"]).trim();
+  //    The exclusion is scoped to the PUSH TARGET's tracking refs (see
+  //    remotesExclusion): content on some OTHER remote has left this machine,
+  //    but it has not reached the remote being pushed to — a secret that only
+  //    ever hit a private remote must still be scanned on its way to a public
+  //    one (S1).
+  const newCommits = git(["rev-list", "--reverse", localSha, "--not", remotesExclusion()]).trim();
   if (newCommits) {
     const oldest = newCommits.split("\n")[0];
     const parent = git(["rev-parse", "--verify", `${oldest}^`]).trim();
@@ -149,10 +176,13 @@ function unknownRemoteTipBase(localSha: string): string | null {
  *
  * A two-dot range cannot express this: after merging main, neither the remote
  * tip nor the merge-base with main is an ancestor of the other, so no single
- * base excludes both. `rev-list --not --remotes` is the operation that does,
- * and this file already reasons that way in `unknownRemoteTipBase` step 2 —
- * including why `--remotes` (every remote, not just the push target) is the
- * right exclusion: content published anywhere has already left this machine.
+ * base excludes both. `rev-list --not --remotes=<push-remote>/*` is the
+ * operation that does, and this file already reasons that way in
+ * `unknownRemoteTipBase` step 2. The exclusion is scoped to the push target's
+ * tracking namespace (see remotesExclusion): the upstream commits a catch-up
+ * merge brings in came from the SAME remote being pushed to, so scoping keeps
+ * the #2592 fix intact while a secret known only to some OTHER (private)
+ * remote is still scanned on its way to this one (S1).
  *
  * Each commit is diffed alone. `--cc` on a merge shows only the conflict
  * RESOLUTION — content that exists in no parent — so a secret introduced while
@@ -168,7 +198,7 @@ function addedLinesFromNewCommits(localSha: string, remoteSha: string): string |
   // direction. So it stays the base; `--remotes` only ADDS exclusions on top.
   if (ZERO.test(remoteSha) || !objectExists(remoteSha)) return null;
 
-  const narrowed = git(["rev-list", localSha, "--not", remoteSha, "--remotes"]).trim();
+  const narrowed = git(["rev-list", localSha, "--not", remoteSha, remotesExclusion()]).trim();
   if (!narrowed) return null;
 
   // If excluding remote-tracking refs changes nothing, this push has no

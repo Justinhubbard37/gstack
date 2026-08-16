@@ -159,3 +159,118 @@ describe("narrowing the range does not narrow coverage", () => {
     expect(addedOnly(addedLinesFromNewCommits(dir))).toContain(FAKE_AWS_NOREMOT);
   });
 });
+
+// ── S1: the exclusion is scoped to the PUSH TARGET's remote ─────────────────
+//
+// A bare `--remotes` excludes commits reachable from ANY remote-tracking ref,
+// so a secret that had only ever reached a private/local-path remote was never
+// scanned when pushed to a PUBLIC remote. Git hands pre-push the push remote's
+// name as $1; the hook now scopes the exclusion to `--remotes=<name>/*`.
+// These run END-TO-END through the hook binary with the real argv + stdin
+// protocol, because the behavior under test is the argv threading itself.
+describe("S1: exclusion scoped to the push-target remote", () => {
+  const PREPUSH = join(import.meta.dir, "..", "bin", "gstack-redact-prepush");
+  const FAKE_AWS_OTHERREM = ["AKIA", "IOSFODNN7OTHERRM"].join("");
+
+  function runHook(stdinLines: string, argv: string[]): { code: number; stderr: string } {
+    const r = spawnSync("bun", [PREPUSH, ...argv], {
+      cwd: dir,
+      input: Buffer.from(stdinLines),
+      encoding: "utf8",
+      env: { ...process.env },
+    });
+    return { code: r.status ?? 0, stderr: r.stderr ?? "" };
+  }
+
+  /**
+   * Build the S1 shape. Returns the feature branch's last-pushed origin tip
+   * (what git hands the hook as remoteSha):
+   *   1. main + feature pushed to origin (T0 = feature's origin tip)
+   *   2. a HIGH-shaped secret commit reaches a SECOND remote only
+   *      (pushed there, fetched back → other/leaky tracking ref)
+   *   3. feature merges the secret commit — the next push to origin is
+   *      the first time this content heads anywhere public
+   */
+  function buildSecretOnSecondRemote(): { originTip: string } {
+    const origin = mkdtempSync(join(tmpdir(), "gstack-prepush-origin-"));
+    run(["init", "-q", "--bare", "-b", "main"], origin);
+    run(["remote", "add", "origin", origin]);
+    run(["push", "-q", "origin", "main"]);
+    run(["checkout", "-q", "-b", "feature"]);
+    commit("mine.ts", "export const mine = 1;\n", "my work");
+    run(["push", "-q", "-u", "origin", "feature"]);
+    const originTip = run(["rev-parse", "HEAD"]).trim();
+
+    const other = mkdtempSync(join(tmpdir(), "gstack-prepush-other-"));
+    run(["init", "-q", "--bare", "-b", "main"], other);
+    run(["remote", "add", "other", other]);
+    run(["checkout", "-q", "-b", "leaky"]);
+    commit("leak.ts", `const k = "${FAKE_AWS_OTHERREM}";\n`, "secret to private remote only");
+    run(["push", "-q", "other", "leaky"]);
+    run(["fetch", "-q", "other"]);
+
+    run(["checkout", "-q", "feature"]);
+    // --no-ff: a fast-forward would make the secret commit the branch TIP,
+    // where the remoteSha two-dot fallback catches it regardless of the
+    // --remotes exclusion. The hole shape needs a real merge commit, so the
+    // narrowed path (per-commit --cc diffs) is what decides coverage.
+    run(["merge", "-q", "--no-ff", "--no-edit", "leaky"]);
+    return { originTip };
+  }
+
+  test("a commit known only to a SECOND remote IS scanned when pushing to origin", () => {
+    const { originTip } = buildSecretOnSecondRemote();
+    const head = run(["rev-parse", "HEAD"]).trim();
+    const { code, stderr } = runHook(
+      `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
+      ["origin", "file:///ignored"],
+    );
+    expect(code).toBe(1);
+    expect(stderr).toContain("BLOCKED");
+    expect(stderr).toContain("aws.access_key");
+  });
+
+  test("origin-published commits still are NOT re-scanned (catch-up merge, #2592 kept)", () => {
+    setUpRemoteWithForeignFixture();
+    run(["checkout", "-q", "-b", "feature", "HEAD~1"]);
+    commit("mine.ts", "export const mine = 1;\n", "my work");
+    run(["push", "-q", "-u", "origin", "feature"]);
+    const originTip = run(["rev-parse", "HEAD"]).trim();
+    run(["merge", "-q", "--no-edit", "main"]); // catch-up merge brings the foreign fixture
+
+    const head = run(["rev-parse", "HEAD"]).trim();
+    const { code, stderr } = runHook(
+      `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
+      ["origin", "file:///ignored"],
+    );
+    expect(stderr).not.toContain("BLOCKED");
+    expect(code).toBe(0);
+  });
+
+  test("no argv (stdin/CLI invocation) falls back to the historical all-remotes exclusion", () => {
+    // Documented contract, not a gap being celebrated: without the remote
+    // name there is nothing to scope to, and the fallback scans exactly what
+    // the hook always scanned. The installed hook wrapper forwards "$@", so
+    // real pushes always carry the name.
+    const { originTip } = buildSecretOnSecondRemote();
+    const head = run(["rev-parse", "HEAD"]).trim();
+    const { code, stderr } = runHook(
+      `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
+      [],
+    );
+    expect(stderr).not.toContain("BLOCKED");
+    expect(code).toBe(0);
+  });
+
+  test("an unconfigured name (URL push) also falls back rather than erroring", () => {
+    const { originTip } = buildSecretOnSecondRemote();
+    const head = run(["rev-parse", "HEAD"]).trim();
+    const url = "file:///not-a-configured-remote";
+    const { code, stderr } = runHook(
+      `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
+      [url, url],
+    );
+    expect(stderr).not.toContain("could not");
+    expect(code).toBe(0);
+  });
+});

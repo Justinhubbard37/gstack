@@ -108,6 +108,39 @@ export function shannonEntropy(s: string): number {
   return h;
 }
 
+// env.kv name-shape calibration: the regex's zero-or-more-prefix net matches
+// ANY identifier ending in a credential suffix, so `cacheKey:`, `sortKey:`,
+// `partitionKey:`, `hotkey:`, even `monkey:` with an 8+-char entropic value
+// all hit a MEDIUM confirm prompt — a gate that cries wolf gets ignored.
+// A matched name only counts when its shape is credential-semantic:
+//   (i)   suffix separated from the prefix by _ / - / .  (api_key, x-access-key,
+//         AUTH.TOKEN)
+//   (ii)  the whole name IS the bare suffix              (key:, token:)
+//   (iii) the name is ALL-CAPS env style                 (APIKEY=, MY_APIKEY=)
+//   (iv)  a lowercase/camel compound whose prefix ends in a credential word
+//         (apiKey, authToken, clientSecret, stripeApiKey) — cacheKey/sortKey/
+//         monkey have no credential prefix and are rejected.
+const ENV_KV_NAME =
+  /^[ \t]*(?:export[ \t]+)?["']?([A-Za-z0-9_.-]*?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE))["']?[ \t]*[:=]/i;
+const ENV_KV_SUFFIX =
+  /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE)$/i;
+const ENV_KV_CRED_PREFIX =
+  /(api|auth|access|secret|private|app|client|server|master|admin|signing|encryption|session|csrf|jwt|oauth|bearer)$/i;
+
+/** True when the full env.kv match starts with a credential-shaped name. */
+export function isCredentialShapedEnvName(fullMatch: string): boolean {
+  const nameMatch = ENV_KV_NAME.exec(fullMatch);
+  if (!nameMatch) return false;
+  const name = nameMatch[1];
+  const suffixMatch = ENV_KV_SUFFIX.exec(name);
+  if (!suffixMatch) return false;
+  const prefix = name.slice(0, name.length - suffixMatch[1].length);
+  if (prefix === "") return true; // (ii) bare suffix
+  if (/[_.\-]$/.test(prefix)) return true; // (i) separator before suffix
+  if (!/[a-z]/.test(name)) return true; // (iii) ALL-CAPS env style
+  return ENV_KV_CRED_PREFIX.test(prefix); // (iv) credential-semantic compound
+}
+
 /** True when an IPv4 string is a public address (not RFC1918/loopback/etc). */
 export function isPublicIPv4(ip: string): boolean {
   const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -566,9 +599,16 @@ export const PATTERNS: RedactPattern[] = [
     // The name part is `[A-Za-z0-9_.-]*` + suffix (zero-or-more prefix, not
     // one-or-more): a mandatory first char would swallow the suffix's own
     // first letter and bare names like `password:` / `key:` would never match.
+    // The wide net is then calibrated by isCredentialShapedEnvName in
+    // validate — without it, any identifier that merely ENDS in a suffix
+    // (cacheKey:, sortKey:, monkey:) fires a MEDIUM confirm on entropic
+    // values. The value must stay capture group 1 (the engine masks group 1),
+    // so name-shape checking lives in validate, not in a second group.
     regex: /^[ \t]*(?:export[ \t]+)?["']?[A-Za-z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE)["']?[ \t]*[:=][ \t]*["']?([^\s'"]{8,})["']?/i,
-    // Only fire on high-entropy values — kills `FOO_KEY=changeme` FPs.
-    validate: (span) =>
+    // Only fire on credential-shaped names with high-entropy values — kills
+    // `FOO_KEY=changeme` and `cacheKey: <entropic-id>` FPs.
+    validate: (span, match) =>
+      isCredentialShapedEnvName(match[0]) &&
       !isPlaceholderSpan(span) &&
       !/^\$\{?[A-Za-z_]/.test(span) &&
       shannonEntropy(span) >= 3.0,
