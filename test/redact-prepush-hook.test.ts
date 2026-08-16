@@ -221,6 +221,82 @@ describe("install UX surfaces (#1946 / eng review D3+D10)", () => {
     expect(tmpl).toContain(".redact-prepush-prompted");
     expect(tmpl).toContain("redact_prepush_hook");
   });
+
+  // #1946 / maintainer decision 6: setup asks ONCE for consent on a real TTY,
+  // records the answer to the existing redact_prepush_hook key, and keeps the
+  // hint-only posture everywhere else. Default stays FALSE; setup never
+  // installs the hook itself (the assertion above pins that).
+  describe("one-time consent prompt in setup (#1946, decision 6)", () => {
+    const setup = fs.readFileSync(path.join(ROOT, "setup"), "utf8");
+    const block = setup.slice(setup.indexOf("# ─── Redact pre-push guard consent"));
+
+    test("prompt is gated on key ABSENCE and a real TTY, with a timed default-N read", () => {
+      expect(block).toContain("grep -q '^redact_prepush_hook:'");
+      expect(block).toContain('[ -t 0 ] && [ -t 1 ]');
+      expect(block).toContain("[y/N]");
+      expect(block).toContain('read -t "$_REDACT_PROMPT_TIMEOUT"');
+    });
+
+    test("an explicit answer persists true/false; timeout persists NOTHING", () => {
+      expect(block).toContain("set redact_prepush_hook true");
+      expect(block).toContain("set redact_prepush_hook false");
+      // The timeout branch must not write the key (a silent decline would
+      // permanently suppress the ask without the user ever seeing it). The
+      // branch's hint TEXT mentions the command; the executable invocation is
+      // the quoted "$GSTACK_CONFIG" form.
+      const timeoutBranch = block.slice(block.indexOf("*)"), block.indexOf("esac"));
+      expect(timeoutBranch).not.toContain('"$GSTACK_CONFIG" set redact_prepush_hook');
+    });
+
+    test("non-interactive setup keeps the hint-only posture (no prompt, no key write)", () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "gstack-consent-"));
+      try {
+        const script = [
+          "QUIET=0",
+          'log() { echo "$@"; }',
+          `GSTACK_CONFIG="${path.join(ROOT, "bin", "gstack-config")}"`,
+          block,
+        ].join("\n");
+        const r = spawnSync("bash", ["-c", script], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"], // stdin not a TTY
+          env: { ...process.env, GSTACK_HOME: home },
+          timeout: 15_000,
+        });
+        expect(r.status).toBe(0);
+        expect(r.stdout).toContain("Tip:");
+        expect(r.stdout).not.toContain("[y/N]");
+        const cfg = path.join(home, "config.yaml");
+        const cfgText = fs.existsSync(cfg) ? fs.readFileSync(cfg, "utf8") : "";
+        expect(cfgText).not.toContain("redact_prepush_hook");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    test("a recorded answer is never re-asked (key present → silent)", () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "gstack-consent-set-"));
+      try {
+        fs.writeFileSync(path.join(home, "config.yaml"), "redact_prepush_hook: false\n");
+        const script = [
+          "QUIET=0",
+          'log() { echo "$@"; }',
+          `GSTACK_CONFIG="${path.join(ROOT, "bin", "gstack-config")}"`,
+          block,
+        ].join("\n");
+        const r = spawnSync("bash", ["-c", script], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, GSTACK_HOME: home },
+          timeout: 15_000,
+        });
+        expect(r.status).toBe(0);
+        expect(r.stdout.trim()).toBe("");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe("escape valve", () => {

@@ -504,8 +504,17 @@ export const PATTERNS: RedactPattern[] = [
     id: "env.kv",
     tier: "MEDIUM",
     category: "secret",
-    description: "Env-style SECRET assignment with high-entropy value",
-    regex: /^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE)[ \t]*=[ \t]*['"]?([^\s'"]{8,})['"]?/,
+    description: "Secret-named assignment (env/YAML/JSON) with high-entropy value",
+    // #1946 gap 3: the original shape required an UPPERCASE name and an `=`
+    // assignment, so `api_key=…`, `apiKey: "…"`, and `password: …` (YAML/JSON
+    // colon form) produced NO finding at all — a detection fail-open on the
+    // most common config shapes. Now case-insensitive with `:` or `=`
+    // assignment and optional quotes around the key (JSON). Still MEDIUM and
+    // entropy-gated: this is the calibrated generic net, not a blocker.
+    // The name part is `[A-Za-z0-9_.-]*` + suffix (zero-or-more prefix, not
+    // one-or-more): a mandatory first char would swallow the suffix's own
+    // first letter and bare names like `password:` / `key:` would never match.
+    regex: /^[ \t]*(?:export[ \t]+)?["']?[A-Za-z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE)["']?[ \t]*[:=][ \t]*["']?([^\s'"]{8,})["']?/i,
     // Only fire on high-entropy values — kills `FOO_KEY=changeme` FPs.
     validate: (span) =>
       !isPlaceholderSpan(span) &&
