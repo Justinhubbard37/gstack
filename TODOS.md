@@ -2410,6 +2410,28 @@ by shard parallelism; the per-file wall cost remains.
 **Where:** test/gstack-gbrain-detect-mcp-mode.test.ts.
 **Effort:** S (human ~2h, CC ~15min).
 
+### P3: Diagnose the browser-manager-unit wedge on windows-latest
+
+**What:** The expanded Windows lane wedges to its wall deadline inside
+browse/test/browser-manager-unit.test.ts (in-flight at kill, PR #2593 run
+31919227507); the file is green on macOS and Linux. Excluded from the Windows
+curation with a receipt; needs a Windows repro to find which describe hangs
+(fake-timer/unref semantics under bun-windows are the suspects).
+**Where:** browse/test/browser-manager-unit.test.ts; scripts/test-free-shards.ts
+KNOWN_WINDOWS_INCOMPATIBLE (remove the entry once fixed).
+**Effort:** S (human ~2h with a Windows box, CC ~15min + CI rounds).
+
+### P3: skill-census Windows compatibility
+
+**What:** skillCensus() throws at module load on windows-latest
+(test/helpers/skill-census.ts:63) — the skills-tree symlink layout needs
+Developer Mode CI runners lack. Either branch the census walk on win32
+(treat copy-dirs as the setup script's _link_or_copy fallback produces) or
+keep the exclusion. Consumers (catalog budget, coverage matrix) currently
+have no Windows signal.
+**Where:** test/helpers/skill-census.ts; test/skill-census.test.ts.
+**Effort:** S (human ~3h, CC ~20min + CI rounds).
+
 ### P3: Tighten revived coverage-audit E2E assertions
 
 **What:** The revived skill-e2e-coverage-audit tests assert hasGap OR hasTested
