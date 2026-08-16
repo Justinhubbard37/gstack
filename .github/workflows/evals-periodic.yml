@@ -45,7 +45,7 @@ jobs:
           fi
 
       - if: steps.check.outputs.exists == 'false'
-        run: cp package.json bun.lock .github/docker/
+        run: cp package.json bun.lock .github/docker/ && cp -R patches .github/docker/patches
 
       # Registry cache export needs a docker-container builder — the default
       # `docker` driver hard-errors on cache-to.

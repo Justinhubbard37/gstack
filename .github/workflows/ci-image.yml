@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # Copy lockfile + package.json into Docker build context
-      - run: cp package.json bun.lock .github/docker/
+      - run: cp package.json bun.lock .github/docker/ && cp -R patches .github/docker/patches
 
       # Same content-hash tag expression as evals.yml / evals-periodic.yml.
       # This is the tag the eval matrix looks up first — without pushing it

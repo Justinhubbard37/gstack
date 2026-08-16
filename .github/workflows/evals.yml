@@ -54,7 +54,7 @@ jobs:
           fi
 
       - if: steps.check.outputs.exists == 'false'
-        run: cp package.json bun.lock .github/docker/
+        run: cp package.json bun.lock .github/docker/ && cp -R patches .github/docker/patches
 
       # A fork PR's GITHUB_TOKEN only has `packages: read`, so pushing fails.
       # Still BUILD (validates Dockerfile.ci changes), just don't publish. This
