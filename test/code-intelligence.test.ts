@@ -953,7 +953,9 @@ exit 1
       ...process.env,
       GSTACK_HOME: home,
       HOME: home,
-      GBRAIN_HOME: gbrainHome,
+      // #2521: GBRAIN_HOME is the PARENT of .gbrain per gbrain's configDir()
+      // contract — pointing it at `home` resolves to home/.gbrain/config.json.
+      GBRAIN_HOME: home,
       PATH: `${shimDir}:${process.env.PATH}`,
       // Dead loopback port → the Sourcebot probe fails fast + deterministically
       // (connection refused) instead of poking whatever operator dev server

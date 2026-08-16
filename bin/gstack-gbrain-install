@@ -235,7 +235,14 @@ fi
 # a hard gate so a broken gbrain is caught at setup, not at data-loss time.
 # Pre-init installs skip this (config not written yet); the full
 # `/sync-gbrain --dry-run` self-test runs from /setup-gbrain after `gbrain init`.
-_GBRAIN_HOME_CHECK="${GBRAIN_HOME:-$HOME/.gbrain}"
+# #2521: GBRAIN_HOME is a PARENT dir per gbrain's configDir() contract —
+# gbrain appends `.gbrain` itself, so the config lives at
+# $GBRAIN_HOME/.gbrain/config.json (or ~/.gbrain/config.json when unset).
+if [ -n "${GBRAIN_HOME:-}" ]; then
+  _GBRAIN_HOME_CHECK="$GBRAIN_HOME/.gbrain"
+else
+  _GBRAIN_HOME_CHECK="$HOME/.gbrain"
+fi
 if [ -f "$_GBRAIN_HOME_CHECK/config.json" ]; then
   if ! gbrain doctor --fast >/dev/null 2>&1; then
     echo "" >&2

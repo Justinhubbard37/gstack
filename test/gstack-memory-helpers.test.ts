@@ -462,10 +462,13 @@ describe("detectEngineTier", () => {
     // Regression test for #1415: gbrain >=0.25 doctor output dropped the
     // top-level `engine` field. The detect path must fall back to config.json.
     // We force the doctor call to fail (PATH stripped of gbrain) and write a
-    // synthetic config to GBRAIN_HOME so the fallback path is deterministic.
+    // synthetic config under GBRAIN_HOME so the fallback path is
+    // deterministic. Per gbrain's configDir() contract (#2521), GBRAIN_HOME
+    // is a parent dir — the config lives at $GBRAIN_HOME/.gbrain/config.json.
     process.env.PATH = "/nonexistent-no-gbrain-here";
+    mkdirSync(join(testGbrainHome, ".gbrain"), { recursive: true });
     writeFileSync(
-      join(testGbrainHome, "config.json"),
+      join(testGbrainHome, ".gbrain", "config.json"),
       JSON.stringify({ engine: "postgres", database_url: "postgresql://test/example" }),
       "utf-8"
     );
@@ -500,8 +503,9 @@ exit 0
       { mode: 0o755 }
     );
     process.env.PATH = `${binDir}:${process.env.PATH || ""}`;
+    mkdirSync(join(testGbrainHome, ".gbrain"), { recursive: true });
     writeFileSync(
-      join(testGbrainHome, "config.json"),
+      join(testGbrainHome, ".gbrain", "config.json"),
       JSON.stringify({ engine: "pglite" }),
       "utf-8"
     );

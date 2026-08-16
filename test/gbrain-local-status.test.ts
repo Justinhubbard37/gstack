@@ -269,20 +269,46 @@ describe("lib/gbrain-local-status — status classification", () => {
     expect(localEngineStatus({ noCache: true })).toBe("timeout");
   });
 
-  it("honors GBRAIN_HOME for config detection (codex D11)", () => {
-    // Config lives ONLY at the alternate GBRAIN_HOME; ~/.gbrain has none.
+  it("honors GBRAIN_HOME for config detection (codex D11) with gbrain's parent-dir semantics (#2521)", () => {
+    // Config lives ONLY under the alternate GBRAIN_HOME; ~/.gbrain has none.
+    // gbrain's configDir() treats GBRAIN_HOME as a PARENT dir and appends
+    // `.gbrain` itself: GBRAIN_HOME=/x → /x/.gbrain/config.json.
     env = makeEnv({ withGbrain: true, gbrainBehavior: "ok", withConfig: false });
     restoreEnv = applyEnv(env);
     const altHome = join(env.tmp, "alt-gbrain");
+    mkdirSync(join(altHome, ".gbrain"), { recursive: true });
+    writeFileSync(
+      join(altHome, ".gbrain", "config.json"),
+      JSON.stringify({ engine: "pglite", database_url: "pglite:///fake" }),
+    );
+    // Without GBRAIN_HOME: misclassified as missing-config.
+    expect(localEngineStatus({ noCache: true })).toBe("missing-config");
+    // With GBRAIN_HOME: the relocated config is found at $GBRAIN_HOME/.gbrain.
+    process.env.GBRAIN_HOME = altHome;
+    expect(localEngineStatus({ noCache: true })).toBe("ok");
+  });
+
+  it("does NOT read $GBRAIN_HOME/config.json directly — gbrain never reads that file (#2521)", () => {
+    // A config placed at gstack's OLD (wrong) resolution must be invisible:
+    // gbrain itself would report "No brain configured" for this layout, so
+    // gstack classifying "ok" from it is the #2521 split-brain.
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "ok", withConfig: false });
+    restoreEnv = applyEnv(env);
+    const altHome = join(env.tmp, "alt-gbrain-flat");
     mkdirSync(altHome, { recursive: true });
     writeFileSync(
       join(altHome, "config.json"),
       JSON.stringify({ engine: "pglite", database_url: "pglite:///fake" }),
     );
-    // Without GBRAIN_HOME: misclassified as missing-config.
-    expect(localEngineStatus({ noCache: true })).toBe("missing-config");
-    // With GBRAIN_HOME: the relocated config is found.
     process.env.GBRAIN_HOME = altHome;
+    expect(localEngineStatus({ noCache: true })).toBe("missing-config");
+  });
+
+  it("with GBRAIN_HOME unset, config resolution stays at ~/.gbrain (#2521 unset half)", () => {
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "ok", withConfig: true });
+    restoreEnv = applyEnv(env);
+    // applyEnv deletes GBRAIN_HOME; config was written at $HOME/.gbrain.
+    expect(process.env.GBRAIN_HOME).toBeUndefined();
     expect(localEngineStatus({ noCache: true })).toBe("ok");
   });
 });

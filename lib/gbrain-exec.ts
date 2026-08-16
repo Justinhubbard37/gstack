@@ -21,10 +21,12 @@
  *      spawn. This is the central bug the helper exists to prevent
  *      regressing on.
  *
- *   3. **`GBRAIN_HOME` honored consistently.** Other gstack helpers
- *      (`detectEngineTier`) already honor `GBRAIN_HOME`. `buildGbrainEnv`
- *      reads from `${GBRAIN_HOME:-$HOME/.gbrain}/config.json` so all
- *      gstack-side gbrain calls agree on which config file matters.
+ *   3. **`GBRAIN_HOME` honored consistently — with gbrain's own semantics
+ *      (#2521).** gbrain's configDir() treats `GBRAIN_HOME` as a PARENT
+ *      directory and always appends `.gbrain` itself (GBRAIN_HOME=/tmp/x
+ *      → /tmp/x/.gbrain/config.json). Every gstack-side read goes through
+ *      `gbrainConfigDir()` below so gstack and gbrain agree on which
+ *      config file matters.
  *
  * **Escape hatch:** `GSTACK_RESPECT_ENV_DATABASE_URL=1` returns the
  * caller's env unchanged. Use only when the brain intentionally lives in
@@ -75,8 +77,21 @@ export function isTransactionModePooler(url: string): boolean {
 }
 
 /**
- * Build an env dict with DATABASE_URL seeded from
- * `${GBRAIN_HOME:-$HOME/.gbrain}/config.json`. Returns the base env
+ * gbrain's config directory, matching gbrain's own configDir() contract
+ * (#2521): `GBRAIN_HOME` is a PARENT directory — gbrain always appends
+ * `.gbrain` itself, so GBRAIN_HOME=/tmp/x reads /tmp/x/.gbrain/config.json.
+ * Unset → ~/.gbrain. Every gstack-side gbrain-config read MUST resolve
+ * through this helper, or gstack classifies engine status from a file
+ * gbrain never reads.
+ */
+export function gbrainConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.GBRAIN_HOME) return join(env.GBRAIN_HOME, ".gbrain");
+  return join(env.HOME || homedir(), ".gbrain");
+}
+
+/**
+ * Build an env dict with DATABASE_URL seeded from gbrain's config.json
+ * (resolved via `gbrainConfigDir`). Returns the base env
  * unchanged when:
  *   - `GSTACK_RESPECT_ENV_DATABASE_URL=1` (intentional opt-out),
  *   - the config file is missing or unparseable,
@@ -98,9 +113,7 @@ export function buildGbrainEnv(opts: BuildGbrainEnvOptions = {}): NodeJS.Process
   const out: NodeJS.ProcessEnv = { ...baseEnv };
   if (baseEnv.GSTACK_RESPECT_ENV_DATABASE_URL === "1") return out;
 
-  const homeBase = baseEnv.HOME || homedir();
-  const gbrainHome = baseEnv.GBRAIN_HOME || join(homeBase, ".gbrain");
-  const configPath = join(gbrainHome, "config.json");
+  const configPath = join(gbrainConfigDir(baseEnv), "config.json");
   if (!existsSync(configPath)) return out;
 
   let cfg: GbrainConfig = {};
