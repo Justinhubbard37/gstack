@@ -3182,35 +3182,24 @@ rendering quirks"); or (c) move this test to periodic until (a)/(b) lands.
 `test/helpers/claude-pty-runner.ts:308` (`isNumberedOptionListVisible`). Evidence:
 `~/.gstack-dev/eval-runs/pdwu-verify-*.log`. **Effort:** M (human ~half day / CC ~30min).
 
-### P2: Follow-up fix waves from the 2026-08-14 tracker audit (v1.64.0.0)
+### P3: Residuals from the 2026-08-14 tracker-audit waves (mostly shipped in v1.67.0.0)
 
-The full-tracker audit behind v1.64.0.0 verified every open PR/issue against
-main and consciously deferred four coherent fix waves. Audit records:
-`~/.gstack/projects/garrytan-gstack/` eng-review artifacts + the v1.64 PR body.
+The four deferred waves (A: browse-daemon lifecycle, B: install integrity,
+C: gbrain trust boundary, D: ship/version allocator) LANDED in the v1.67.0.0
+fix wave: XProtect self-heal + Playwright bump + busy-daemon iron rule +
+signal policy (A); alias shadowing + cursor slice + runtime assets + Windows
+refresh (B); brain-sync disposition model + source pins + thin-client
+detection (C); version allocator end-state + subdir manifests + diff-scope
+globs (D). What remains, re-filed individually:
 
-**Wave A — browse-daemon lifecycle.** Watchdog kills headed handoff sessions
-(PRs 2565/2405/2346), macOS headed launch broken by the rebrand-invalidated
-Chromium signature + XProtect (issues 2554/2242/2138/1829/1379 — the three
-darwin-skipped handoff tests in browse/test/handoff.test.ts un-skip when this
-lands), busy-daemon kill (2219/2231), cosmetic SIGTERM ignore (2220),
-Playwright pin bump (PR 1761, #1703 — rebuilds the CI browser image).
-Start with the signature/re-sign question; everything else is small.
-
-**Wave B — install integrity.** connect-chrome alias shadowing (PR 2202,
-issues 2201/2511), Playwright bootstrap aborts/timeouts (PRs 2233/2359,
-issues 1902/2136), --host cursor/slate wiring (PRs 2547/2432, issue 2361),
-review checklist/specialists never copied (issues 2317/2518), Windows re-run
-refresh (#2444). Blast radius is `setup` — one focused PR.
-
-**Wave C — gbrain trust boundary.** Transcript trust/scope/source isolation
-(PR 2232, issue 2140), brain-sync queue truncation (#2549), worktree source
-pins (PR 2417, #2516), thin-client detection gaps (#2520/#2456), plus small
-absorbs (2371/2360/2406/2369/2368/2321). Needs never-double-store review.
-
-**Wave D — ship/version allocator.** Queue-down fallback (PRs 2545/2546),
-npm-invalid subdir manifest versions (PR 2531), versionless repos
-(2343/2334/2501, #1474), diff-scope specialist routing rewrite
-(#2526/#2299/#2455), /review token runaway (#2519).
-
-**Depends on:** v1.64.0.0 landing. Each wave is one bundled PR per the
-fix-wave pattern.
+- Watchdog kills headed handoff sessions (PRs 2565/2405/2346) and the three
+  darwin-skipped handoff tests in browse/test/handoff.test.ts — verify
+  whether the v1.67 XProtect + rebrand work un-blocks them, then un-skip or
+  fix. Effort S.
+- Transcript trust/scope/source isolation (PR 2232, issue 2140) — needs the
+  never-double-store review. Effort M.
+- Versionless-repo onboarding (#1474, issues 2343/2334) — the #2501 JSON
+  version-path half landed; the no-version-file-at-all flow did not.
+- Playwright bootstrap abort/timeout absorbs (PRs 2233/2359, issues
+  1902/2136) — partially superseded by v1.67's bounded bootstrap; verify
+  and close or extract the remainder.
