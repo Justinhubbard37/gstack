@@ -742,6 +742,14 @@ async function sendCommand(state: ServerState, command: string, args: string[], 
       if (action === 'report-busy') {
         reportDaemonBusyAndExit(oldState!.pid);
       }
+      // #2254: `stop` against a daemon that died mid-flight is SUCCESS — the
+      // desired end state (no daemon) already holds. Restarting a daemon just
+      // to stop it again was the crash-restart loop the issue reports.
+      if (action === 'restart-dead' && command === 'stop') {
+        safeUnlinkQuiet(config.stateFile);
+        console.log('Daemon already stopped (cleaned stale state).');
+        process.exit(0);
+      }
       // 'restart-dead' or explicit 'force-restart' → restart.
       if (retries >= 1) throw new Error('[browse] Server crashed twice in a row — aborting');
       if (action === 'force-restart') {
@@ -1496,6 +1504,26 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     safeUnlinkQuiet(config.stateFile);
     console.log('Disconnected (server was unresponsive — force cleaned).');
     process.exit(0);
+  }
+
+  // ─── Stop (pre-server short-circuit, #2254) ──────────────────
+  // stop must be handled BEFORE ensureServer(): stopping a daemon that is
+  // not running must not START one just to stop it. The old flow booted a
+  // fresh daemon + Chromium (multi-second, resource churn) and then told it
+  // to shut down — or crashed trying. No state, or dead pid + dead port →
+  // report "nothing to stop" and exit 0.
+  if (command === 'stop') {
+    const stopState = readState();
+    if (!stopState) {
+      console.log('No daemon running — nothing to stop.');
+      process.exit(0);
+    }
+    if (!isProcessAlive(stopState.pid) && !(await isServerHealthy(stopState.port))) {
+      safeUnlinkQuiet(config.stateFile);
+      console.log('No daemon running (cleaned stale state) — nothing to stop.');
+      process.exit(0);
+    }
+    // Live daemon → fall through to the normal sendCommand('stop') path.
   }
 
   // Special case: chain reads from stdin
