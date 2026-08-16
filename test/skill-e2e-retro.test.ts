@@ -80,17 +80,18 @@ Write your retrospective to ${dir}/retro-output.md`,
     });
 
     logCost('/retro base-branch', result);
+    // The report is the work product: a run that exits max-turns without
+    // writing it is a FAIL, not a pass — otherwise this test cannot detect
+    // the most basic regression (the skill stops producing its report).
+    const retroPath = path.join(dir, 'retro-output.md');
+    const wroteReport = fs.existsSync(retroPath);
     recordE2E(evalCollector, '/retro default branch detection', 'Base branch detection', result, {
-      passed: ['success', 'error_max_turns'].includes(result.exitReason),
+      passed: ['success', 'error_max_turns'].includes(result.exitReason) && wroteReport,
     });
     expect(['success', 'error_max_turns']).toContain(result.exitReason);
-
-    // Verify retro output was produced
-    const retroPath = path.join(dir, 'retro-output.md');
-    if (fs.existsSync(retroPath)) {
-      const content = fs.readFileSync(retroPath, 'utf-8');
-      expect(content.length).toBeGreaterThan(100);
-    }
+    expect(wroteReport).toBe(true);
+    const content = fs.readFileSync(retroPath, 'utf-8');
+    expect(content.length).toBeGreaterThan(100);
   }, 480_000);
 });
 
@@ -165,18 +166,18 @@ Analyze the git history and produce the narrative report as described in the SKI
     });
 
     logCost('/retro', result);
-    recordE2E(evalCollector, '/retro', 'Retro E2E', result, {
-      passed: ['success', 'error_max_turns'].includes(result.exitReason),
-    });
-    // Accept error_max_turns — retro does many git commands to analyze history
-    expect(['success', 'error_max_turns']).toContain(result.exitReason);
-
-    // Verify the retro was written
+    // Accept error_max_turns (retro does many git commands to analyze
+    // history) — but only WITH the report on disk. The report is the work
+    // product; max-turns with nothing written is a fail.
     const retroPath = path.join(retroDir, 'retro-output.md');
-    if (fs.existsSync(retroPath)) {
-      const retro = fs.readFileSync(retroPath, 'utf-8');
-      expect(retro.length).toBeGreaterThan(100);
-    }
+    const wroteReport = fs.existsSync(retroPath);
+    recordE2E(evalCollector, '/retro', 'Retro E2E', result, {
+      passed: ['success', 'error_max_turns'].includes(result.exitReason) && wroteReport,
+    });
+    expect(['success', 'error_max_turns']).toContain(result.exitReason);
+    expect(wroteReport).toBe(true);
+    const retro = fs.readFileSync(retroPath, 'utf-8');
+    expect(retro.length).toBeGreaterThan(100);
   }, 420_000);
 });
 
