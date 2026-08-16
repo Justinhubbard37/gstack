@@ -543,7 +543,7 @@ interface ParsedSession {
   partial: boolean;
 }
 
-function parseTranscriptJsonl(path: string): ParsedSession | null {
+export function parseTranscriptJsonl(path: string): ParsedSession | null {
   // Best-effort tolerant parser. Handles truncated last lines (D10 partial-flag).
   let raw: string;
   try {
@@ -619,10 +619,22 @@ function parseTranscriptJsonl(path: string): ParsedSession | null {
       const tool = rec?.name || rec?.tool || rec?.tool_call?.name || "tool";
       bodyParts.push(`### Tool call: ${tool}`);
     } else if (isCodex && rec?.payload?.message) {
-      // Codex shape: each record has payload.message
+      // Legacy Codex shape: each record has payload.message
       const msg = rec.payload.message;
       const role = msg.role || "user";
       const content = extractContentText(msg);
+      if (content) {
+        bodyParts.push(`## ${role.charAt(0).toUpperCase() + role.slice(1)}\n\n${content}`);
+        messageCount++;
+      }
+    } else if (isCodex && rec?.type === "response_item" && rec?.payload?.type === "message") {
+      // Current Codex rollout shape (#2105): records are
+      // { type: 'response_item', payload: { type: 'message', role, content: [...] } }.
+      // The legacy payload.message branch never fires on these, which rendered
+      // every Codex session as an empty shell (message_count: 0, 243/243 on
+      // the reporting machine). Flatten payload.content like the Claude branch.
+      const role = rec.payload.role || "user";
+      const content = extractContentText(rec.payload);
       if (content) {
         bodyParts.push(`## ${role.charAt(0).toUpperCase() + role.slice(1)}\n\n${content}`);
         messageCount++;

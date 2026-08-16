@@ -818,3 +818,46 @@ exit 0
     rmSync(home, { recursive: true, force: true });
   });
 });
+
+// #2105: current Codex rollout records are
+// { type: 'response_item', payload: { type: 'message', role, content: [...] } }
+// — the legacy payload.message branch never fired on them, so every Codex
+// session imported as an empty shell (message_count: 0, 243/243 on the
+// reporting machine).
+describe("#2105 codex response_item rollout shape", () => {
+  it("extracts messages from response_item records", async () => {
+    const { parseTranscriptJsonl } = await import("../bin/gstack-memory-ingest");
+    const dir = mkdtempSync(join(tmpdir(), "ingest-2105-"));
+    const file = join(dir, "rollout-2026-06-01.jsonl");
+    writeFileSync(file, [
+      JSON.stringify({ type: "session_meta", payload: { id: "s1", cwd: "/tmp/x" }, timestamp: "2026-06-01T00:00:00Z" }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello codex" }] } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "hello human" }] } }),
+      // Non-message response_items must not count as messages.
+      JSON.stringify({ type: "response_item", payload: { type: "reasoning", summary: [] } }),
+    ].join("\n") + "\n");
+
+    const parsed = parseTranscriptJsonl(file)!;
+    expect(parsed).not.toBeNull();
+    expect(parsed.agent).toBe("codex");
+    expect(parsed.message_count).toBe(2);
+    expect(parsed.body).toContain("## User\n\nhello codex");
+    expect(parsed.body).toContain("## Assistant\n\nhello human");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("legacy payload.message shape still parses", async () => {
+    const { parseTranscriptJsonl } = await import("../bin/gstack-memory-ingest");
+    const dir = mkdtempSync(join(tmpdir(), "ingest-2105-legacy-"));
+    const file = join(dir, "rollout-legacy.jsonl");
+    writeFileSync(file, [
+      JSON.stringify({ type: "session_meta", payload: { id: "s2", cwd: "/tmp/y" }, timestamp: "2026-06-01T00:00:00Z" }),
+      JSON.stringify({ payload: { message: { role: "user", content: "old shape" } } }),
+    ].join("\n") + "\n");
+
+    const parsed = parseTranscriptJsonl(file)!;
+    expect(parsed.message_count).toBe(1);
+    expect(parsed.body).toContain("## User\n\nold shape");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
