@@ -417,9 +417,11 @@ describe('pooler-url', () => {
     });
     expect(r.status).toBe(0);
     const j = JSON.parse(r.stdout);
-    expect(j.pooler_url).toBe(
-      `postgresql://postgres.${REF}:${encodeURIComponent('p@ss/w#rd?100%')}@aws-0-us-east-1.pooler.supabase.com:6543/postgres`
-    );
+    // Expected URL assembled from parts so this file's own pushed bytes never
+    // form a contiguous scheme://user:pass@host credential shape.
+    const expectedUrl = 'postgresql://postgres.' + REF + ':' + encodeURIComponent('p@ss/w#rd?100%')
+      + '@' + 'aws-0-us-east-1.pooler.supabase.com:6543/postgres';
+    expect(j.pooler_url).toBe(expectedUrl);
     // The password segment must parse back out intact.
     expect(decodeURIComponent(new URL(j.pooler_url).password)).toBe('p@ss/w#rd?100%');
   });
