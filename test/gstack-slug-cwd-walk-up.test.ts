@@ -39,9 +39,14 @@ function runSlug(
   tmpHome: string,
   extraEnv: Record<string, string> = {},
 ): SpawnSyncReturns<string> {
+  // GSTACK_HOME must be pinned to the temp home too: the cache dir is
+  // GSTACK_HOME-aware (matching lib/bin-context.ts's native port), and a
+  // sibling test file leaking process.env.GSTACK_HOME in a shared-process
+  // shard would otherwise point the bin at a different cache than the one
+  // these tests seed and assert on.
   // Scrub PATH so we always use system bash + system git; pass HOME so the
   // script's cache writes land in tmpHome, never AJ's real ~/.gstack.
-  const env = { ...process.env, HOME: tmpHome, ...extraEnv };
+  const env = { ...process.env, HOME: tmpHome, GSTACK_HOME: path.join(tmpHome, '.gstack'), ...extraEnv };
   return spawnSync('bash', [SCRIPT], {
     cwd,
     env,
