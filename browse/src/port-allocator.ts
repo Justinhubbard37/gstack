@@ -115,7 +115,7 @@ export function isPortAvailable(port: number, hostname: string = '127.0.0.1'): P
 
 /**
  * Find a port: the explicit override when given, otherwise a random port in
- * the fixed 10000-60000 scan range with bounded retries. NEVER `port: 0` —
+ * the fixed 10000-49151 scan range with bounded retries. NEVER `port: 0` —
  * see the module header for why the ephemeral range is off-limits.
  */
 export async function findAvailablePort(explicitPort?: number | null): Promise<number> {
