@@ -70,6 +70,18 @@ describe('CDP allowlist (T2: deny-default)', () => {
     expect(isCdpMethodAllowed('Page.captureScreenshot')).toBe(true);
   });
 
+  it('Emulation.setEmulatedMedia is allowed, tab-scoped, trusted (#2419)', () => {
+    // Media type/feature override (prefers-color-scheme, prefers-reduced-motion,
+    // prefers-contrast, forced-colors) so a11y and dark-mode CSS branches are
+    // testable via $B cdp. Returns an empty result — no page content, so
+    // trusted output is correct.
+    expect(isCdpMethodAllowed('Emulation.setEmulatedMedia')).toBe(true);
+    const e = lookupCdpMethod('Emulation.setEmulatedMedia');
+    expect(e).not.toBeNull();
+    expect(e!.scope).toBe('tab');
+    expect(e!.output).toBe('trusted');
+  });
+
   it('untrusted-output methods cover the read-everything-attacker-controlled cases', () => {
     // Anything that reads attacker-controlled strings (DOM/AX/CSS selectors)
     // should be tagged untrusted so the envelope wraps the result.
