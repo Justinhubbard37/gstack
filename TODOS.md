@@ -197,6 +197,14 @@ claim true.
 some orphans are deliberately manual (ios-device, opus-47 overlay harness), so a plain
 glob is wrong — needs a curated exclude list.
 
+**Fresh receipts (2026-08-16, v1.66.0.0 re-baseline):** the first full local
+periodic run in this store gave the never-baselined tail its first results:
+`skill-e2e-setup-gbrain-{bad-token,path4-local-pglite,remote}` all failed
+(spawned-process exit 1 — likely live-gbrain interference on a dev box) and
+`skill-e2e-ship-idempotency` timed out at the 1800s shard wall. None are in
+the weekly matrix, so these failures are invisible to CI — exactly this
+item's thesis. Start the burn-down with those four.
+
 **Context / where to start:** `.github/workflows/evals-periodic.yml:71` (matrix),
 `test/helpers/touchfiles.ts` E2E_TIERS (tier labels already exist per test), orphan
 list generated via `comm -23` between `ls test/skill-e2e-*.test.ts` and the file lists
