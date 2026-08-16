@@ -239,13 +239,14 @@ Skip the preamble, lake intro, telemetry, and all other ship steps.
 Write the dashboard output to ${dashDir}/dashboard-output.md`,
       workingDirectory: dashDir,
       maxTurns: 12,
-      // 300s, not 180s: on a saturated CI runner this file's concurrent
-      // sessions queue behind each other and session STARTUP can eat the
-      // whole budget — observed as deterministic timeout at 0 turns/$0.00
-      // for exactly 180s across 3 attempts (PR #2472 CI + its baseline),
-      // while the 240s-budget tests in the same job passed. Outer bun
-      // timeout below rises to 360s to keep headroom over the inner budget.
-      timeout: 300_000,
+      // 360s, third ratchet of the same contention story: 180s deterministic
+      // 0-turn timeouts (PR #2472) → 300s; then PR #2593 hit 302s timeouts
+      // on attempt 2 in two consecutive runs while five sibling rounds
+      // passed — the queue-behind-siblings startup tax under 40-way in-shard
+      // concurrency is real and marginal at 300s. Same headroom its
+      // contention-class sibling (retro-base-branch) already carries. Outer
+      // bun timeout below rises to 480s to keep headroom over the inner.
+      timeout: 360_000,
       testName: 'review-dashboard-via',
       runId,
     });
@@ -279,7 +280,7 @@ Write the dashboard output to ${dashDir}/dashboard-output.md`,
     );
     // Ship dashboard should not gate when eng review is clear
     expect(gateQuestions).toHaveLength(0);
-  }, 360_000);
+  }, 480_000);
 });
 
 // Module-level afterAll — finalize eval collector after all tests complete
