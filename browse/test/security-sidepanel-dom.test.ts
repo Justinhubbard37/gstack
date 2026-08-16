@@ -51,6 +51,18 @@ const CHROMIUM_AVAILABLE = (() => {
  * and window.fetch so the sidepanel code paths behave as if a real browse
  * server is responding.
  */
+/**
+ * Surface page-side failures in the test log: a silent pageerror (script
+ * load failure, stub mismatch) otherwise presents as a bare waitForFunction
+ * timeout, which is undiagnosable from CI output alone.
+ */
+function captureConsole(page: Page): void {
+  page.on('pageerror', (err) => console.error(`[sidepanel pageerror] ${err.message}`));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') console.error(`[sidepanel console.error] ${msg.text()}`);
+  });
+}
+
 async function installStubsBeforeLoad(page: Page, scenario: {
   healthSecurity?: { status: 'protected' | 'degraded' | 'inactive'; layers?: any };
   securityEntries?: any[];
@@ -128,7 +140,15 @@ let browser: Browser | null = null;
 
 beforeAll(async () => {
   if (!CHROMIUM_AVAILABLE) return;
-  browser = await chromium.launch({ headless: true });
+  // --no-sandbox on CI: gstack's own launcher always passes it, and every
+  // browse test that goes through it survived the first Linux run — this
+  // file launched raw, the sandboxed renderer died on first navigation
+  // (waitForFunction hung 15s, then every newContext failed with
+  // Target.createBrowserContext), and the suite went red.
+  browser = await chromium.launch({
+    headless: true,
+    args: process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox'] : [],
+  });
 }, 30000);
 
 afterAll(async () => {
@@ -141,6 +161,7 @@ describe('sidepanel security DOM', () => {
   test.skipIf(!CHROMIUM_AVAILABLE)('shield icon reflects /health.security.status', async () => {
     const context = await browser!.newContext();
     const page = await context.newPage();
+    captureConsole(page);
     await installStubsBeforeLoad(page, {
       healthSecurity: {
         status: 'protected',
@@ -165,6 +186,7 @@ describe('sidepanel security DOM', () => {
   test.skipIf(!CHROMIUM_AVAILABLE)('shield flips to degraded when classifier warmup is incomplete', async () => {
     const context = await browser!.newContext();
     const page = await context.newPage();
+    captureConsole(page);
     await installStubsBeforeLoad(page, {
       healthSecurity: {
         status: 'degraded',
@@ -201,6 +223,7 @@ describe('sidepanel security DOM', () => {
 
     const context = await browser!.newContext();
     const page = await context.newPage();
+    captureConsole(page);
     await installStubsBeforeLoad(page, {
       healthSecurity: {
         status: 'protected',
@@ -253,6 +276,7 @@ describe('sidepanel security DOM', () => {
     };
     const context = await browser!.newContext();
     const page = await context.newPage();
+    captureConsole(page);
     await installStubsBeforeLoad(page, {
       healthSecurity: { status: 'protected', layers: { testsavant: 'ok', canary: 'ok' } },
       securityEntries: [entry],
@@ -298,6 +322,7 @@ describe('sidepanel security DOM', () => {
     };
     const context = await browser!.newContext();
     const page = await context.newPage();
+    captureConsole(page);
     await installStubsBeforeLoad(page, {
       healthSecurity: { status: 'protected', layers: { testsavant: 'ok', canary: 'ok' } },
       securityEntries: [entry],
@@ -336,6 +361,7 @@ describe('sidepanel security DOM', () => {
     };
     const context = await browser!.newContext();
     const page = await context.newPage();
+    captureConsole(page);
     await installStubsBeforeLoad(page, {
       healthSecurity: { status: 'protected', layers: { testsavant: 'ok', canary: 'ok' } },
       securityEntries: [entry],
