@@ -36,7 +36,15 @@ export function safeKill(pid: number, signal: NodeJS.Signals | number): void {
   }
 }
 
-/** Check if a PID is alive. Pure boolean probe — returns false for ALL errors. */
+/**
+ * Check if a PID is alive. Pure boolean probe — never throws.
+ *
+ * EPERM means the process EXISTS but we lack rights to signal it. That is
+ * alive — returning false there makes callers that validate liveness before
+ * killing (killAgentByRecord, the terminal-agent watchdog) skip the kill and
+ * respawn around a survivor, leaking one process per watchdog tick (#2414,
+ * #2295).
+ */
 export function isProcessAlive(pid: number): boolean {
   if (IS_WINDOWS) {
     try {
@@ -52,7 +60,7 @@ export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err: any) {
+    return err?.code === 'EPERM';
   }
 }
