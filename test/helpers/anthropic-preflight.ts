@@ -27,6 +27,20 @@ export function preflightAnthropicApi(
     ['-c', 'echo "ping" | claude -p --max-turns 1 --output-format stream-json --verbose --dangerously-skip-permissions'],
     { stdio: 'pipe', timeout: 30_000 },
   );
+  // Fail fast on the failure modes that guarantee EVERY shard fails too:
+  // spawn error (sh/claude unlaunchable), a timeout kill (signal set), or
+  // exit 127 (command not found). Anything else stays fail-open — a flaky
+  // preflight must not block a run the shards could complete (auth prompts
+  // and transient non-zero exits are the shards' problem to report).
+  if (check.error) {
+    throw new Error(`Anthropic preflight could not run (${check.error.message}) — aborting E2E suite before spawning shards.`);
+  }
+  if (check.signal) {
+    throw new Error(`Anthropic preflight timed out (killed with ${check.signal}) — aborting E2E suite. Check connectivity/auth and retry.`);
+  }
+  if (check.status === 127) {
+    throw new Error('Anthropic preflight: `claude` not found on PATH (exit 127) — aborting E2E suite before spawning shards.');
+  }
   const output = check.stdout?.toString() || '';
   if (output.includes('ConnectionRefused') || output.includes('Unable to connect')) {
     throw new Error('Anthropic API unreachable — aborting E2E suite. Fix connectivity and retry.');

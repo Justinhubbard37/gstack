@@ -50,4 +50,33 @@ describe('preflightAnthropicApi', () => {
     expect(result).toBe('ok');
     expect(calls.length).toBe(1);
   });
+
+  // Failure modes that guarantee every shard fails too must fail the
+  // preflight — previously a missing binary, a timeout kill, and exit 127
+  // all returned 'ok' and the fleet burned its own discovery of the outage.
+  const shapedSpawn = (shape: Partial<ReturnType<typeof import('child_process').spawnSync>>) =>
+    ((() => ({ stdout: Buffer.from(''), stderr: Buffer.from(''), status: 0, ...shape })) as unknown as
+      typeof import('child_process').spawnSync);
+
+  test('spawn error (unlaunchable shell/binary) throws', () => {
+    expect(() =>
+      preflightAnthropicApi({}, shapedSpawn({ error: new Error('spawn sh ENOENT') })),
+    ).toThrow(/could not run/);
+  });
+
+  test('timeout kill (signal set) throws', () => {
+    expect(() =>
+      preflightAnthropicApi({}, shapedSpawn({ signal: 'SIGTERM' })),
+    ).toThrow(/timed out/);
+  });
+
+  test('exit 127 (claude not found) throws', () => {
+    expect(() =>
+      preflightAnthropicApi({}, shapedSpawn({ status: 127 })),
+    ).toThrow(/not found on PATH/);
+  });
+
+  test('other non-zero exits stay fail-open (a flaky preflight must not block a runnable suite)', () => {
+    expect(preflightAnthropicApi({}, shapedSpawn({ status: 1, stdout: Buffer.from('transient') }))).toBe('ok');
+  });
 });
