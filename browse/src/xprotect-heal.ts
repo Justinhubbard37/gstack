@@ -29,6 +29,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { chromium } from 'playwright';
@@ -139,10 +140,16 @@ export function findGstackInstallRoot(
     // __dirname points into the bunfs bundle and won't exist on disk,
     // so this candidate simply fails the existsSync below.
     path.resolve(__dirname, '..', '..'),
-    // Global install root (the ./setup target).
-    path.join(process.env.HOME || '', '.claude', 'skills', 'gstack'),
+    // Global install root (the ./setup target). os.homedir() rather than
+    // process.env.HOME: with HOME unset the env form produced the RELATIVE
+    // path '.claude/skills/gstack' under the daemon's cwd — often an
+    // untrusted repo being QA'd, whose planted node_modules would then be
+    // where the heal runs the playwright install (repo-controlled code
+    // execution). The absolute-or-skip guard below backstops the class.
+    path.join(os.homedir(), '.claude', 'skills', 'gstack'),
   ];
   for (const root of roots) {
+    if (!path.isAbsolute(root)) continue;
     try {
       const browsersJson = path.join(root, 'node_modules', 'playwright-core', 'browsers.json');
       if (!fs.existsSync(browsersJson)) continue;
@@ -409,7 +416,18 @@ export async function launchWithXProtectHeal<T>(
     const healed = await maybeHealXProtectKill(err, opts, deps);
     if (healed) {
       logHeal('retry-launch', {});
-      return await doLaunch();
+      try {
+        return await doLaunch();
+      } catch (retryErr) {
+        // The heal ran but the retry died too. Without this wrap the second
+        // error propagated raw and the manual-remediation guidance was lost
+        // exactly when the automatic path had just proven insufficient.
+        const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        if (isXProtectKillSignature(retryMessage, deps.platform ?? process.platform)) {
+          throw new Error(buildXProtectGuidance(retryMessage), { cause: retryErr });
+        }
+        throw retryErr;
+      }
     }
     const message = err instanceof Error ? err.message : String(err);
     if (isXProtectKillSignature(message, deps.platform ?? process.platform)) {
