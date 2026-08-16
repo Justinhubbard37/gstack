@@ -274,6 +274,11 @@ describe('setup: Windows re-run refresh — behavior fixture (#2444)', () => {
     // On Unix the asset is a SYMLINK into the working tree; pruning through
     // it would delete real build output from the repo. The prune is gated on
     // the Windows real-copy shape ([ -d ] && [ ! -L ]).
+    // Not runnable ON Windows: this sub-case models the UNIX shape, but Git
+    // Bash's `ln -snf` produces a real copy there (no Developer Mode on CI),
+    // so the symlink assertion is false by platform, not by regression. The
+    // Unix lanes (macOS dev boxes + Linux CI) own this case.
+    if (process.platform === 'win32') return;
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-rerun-prune-unix-'));
     try {
       const src = path.join(tmp, 'skill-src');

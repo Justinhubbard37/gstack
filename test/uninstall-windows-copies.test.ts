@@ -111,7 +111,9 @@ describe('gstack-uninstall removes Windows real-dir copies (#2563)', () => {
     expect(r.status).toBe(0);
     expect(fs.existsSync(usersOwn)).toBe(true);
     expect(fs.readFileSync(path.join(usersOwn, 'SKILL.md'), 'utf-8')).toContain('name: ship');
-    expect(r.stderr).toContain(path.join('skills', 'ship'));
+    // Separator-insensitive: the bash uninstall prints POSIX paths even on
+    // Windows (Git Bash), where path.join would demand a backslash.
+    expect(r.stderr.replace(/\\/g, '/')).toContain('skills/ship');
   });
 
   test('real dir without any SKILL.md is untouched and unlisted', () => {
@@ -206,7 +208,11 @@ describe.skipIf(process.platform === 'win32')(
       // the test's own expectations). Fall back to a fixed neutral root and
       // ASSERT neutrality so the precondition can never silently rot.
       let neutralRoot = os.tmpdir();
-      if (neutralRoot.includes('gstack')) neutralRoot = '/private' + path.sep + 'tmp';
+      // realpath'd literal /tmp: /private/tmp on macOS, /tmp on Linux. The
+      // hardcoded '/private/tmp' fallback ENOENT'd on Linux CI, where the
+      // shard runner's TMPDIR is the gstack-containing path that forces this
+      // branch. (Never taken on Windows — its TMPDIR carries no 'gstack'.)
+      if (neutralRoot.includes('gstack')) neutralRoot = fs.realpathSync('/tmp');
       const neutral = fs.mkdtempSync(path.join(neutralRoot, 'other-skill-src-'));
       expect(neutral.includes('gstack')).toBe(false);
       const elsewhere = path.join(neutral, 'elsewhere.md');

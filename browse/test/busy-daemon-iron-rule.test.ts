@@ -177,6 +177,12 @@ describe('#2219 iron rule (CLI integration)', () => {
   }, 45_000);
 
   test('wedged-alive daemon + --force-restart IS killed (explicit consent path)', async () => {
+    // Unix lanes only: the consent path must boot a REAL replacement daemon
+    // to answer the command, which the secretless/browserless Windows lane
+    // cannot do (no Chromium install), and the teardown relies on setsid
+    // process-group semantics Windows lacks. The Windows-relevant half of
+    // the iron rule — busy → refusal, never an implicit kill — runs above.
+    if (process.platform === 'win32') return;
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-iron-'));
     const stateFile = path.join(tmpDir, 'browse.json');
     const daemon = await startWedgedDaemon();

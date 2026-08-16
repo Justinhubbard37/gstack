@@ -170,6 +170,10 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
   // POSIX-ness is what they TEST, or arrives via a variable). Receipts:
   // PR #2593 windows-free-tests run 31918591602.
   {
+    file: 'test/codex-under-codex-detection.test.ts',
+    reason: 'drives the rendered preflight bash under a hardcoded POSIX PATH (/usr/bin:/bin) — bash is unreachable through that PATH on Windows, so every case sees empty output (v1.67 windows lane run 95234224148)',
+  },
+  {
     file: 'test/regression-pr1169-build-app-sed.test.ts',
     reason: 'tests sed escape sequences in build-app.sh — sed/bash are the subject under test',
   },
