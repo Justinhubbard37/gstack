@@ -6,6 +6,8 @@
  */
 
 import { describe, test, expect } from "bun:test";
+import * as fs from "fs";
+import * as path from "path";
 import { parseArgs, BOOLEAN_FLAGS } from "../src/cli";
 
 // parseArgs slices argv from index 2 (node/bun + script path).
@@ -38,10 +40,39 @@ describe("#2514 boolean flags do not swallow positionals", () => {
     expect(r.positional).toEqual(["doc.md"]);
   });
 
-  test("every registered boolean flag is covered by the set", () => {
-    // The generate command's no-value flags per commands.ts + usage text.
-    for (const f of ["cover", "toc", "no-chapter-breaks", "quiet", "verbose", "allow-network"]) {
-      expect(BOOLEAN_FLAGS.has(f)).toBe(true);
+  test("every boolean read in cli.ts is covered by the set (derived, not hardcoded)", () => {
+    // The original guard hardcoded six names, so --strict and --confidential
+    // shipped outside the set and still swallowed the next positional — the
+    // exact #2514 failure. Derive the list from the source's own boolean
+    // reads instead: `f.name === true` / `f["some-name"] === true` direct
+    // reads, plus booleanFlag("name", ...) pairs which read BOTH name and
+    // no-name. A new boolean read now fails this test until it joins the set.
+    const src = fs.readFileSync(path.join(import.meta.dir, "..", "src", "cli.ts"), "utf-8");
+    const derived = new Set<string>();
+    for (const m of src.matchAll(/\bf\.([a-zA-Z][\w-]*) === true/g)) derived.add(m[1]);
+    for (const m of src.matchAll(/\bf\["([\w-]+)"\] === true/g)) derived.add(m[1]);
+    for (const m of src.matchAll(/booleanFlag\("([\w-]+)"/g)) {
+      derived.add(m[1]);
+      derived.add(`no-${m[1]}`);
     }
+    expect(derived.size).toBeGreaterThanOrEqual(6); // regex went blind if this drops
+    for (const f of derived) {
+      expect(BOOLEAN_FLAGS.has(f), `boolean read '--${f}' is missing from BOOLEAN_FLAGS`).toBe(true);
+    }
+  });
+
+  test("--strict does not swallow the input (the documented CI-mode flag, #2514)", () => {
+    const r = parse("generate", "--strict", "essay.md");
+    expect(r.flags.strict).toBe(true);
+    expect(r.positional).toEqual(["essay.md"]);
+  });
+
+  test("--no-confidential and --confidential both stay valueless", () => {
+    const a = parse("generate", "--no-confidential", "memo.md");
+    expect(a.flags["no-confidential"]).toBe(true);
+    expect(a.positional).toEqual(["memo.md"]);
+    const b = parse("generate", "--confidential", "memo.md");
+    expect(b.flags.confidential).toBe(true);
+    expect(b.positional).toEqual(["memo.md"]);
   });
 });

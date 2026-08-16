@@ -28,9 +28,9 @@ interface ParsedArgs {
  * `essay.md` as --toc's value and failed with "missing input".
  */
 export const BOOLEAN_FLAGS = new Set([
-  "cover", "toc", "no-chapter-breaks", "no-confidential",
+  "cover", "toc", "no-chapter-breaks", "confidential", "no-confidential",
   "page-numbers", "no-page-numbers", "tagged", "no-tagged",
-  "outline", "no-outline", "quiet", "verbose", "allow-network",
+  "outline", "no-outline", "quiet", "verbose", "allow-network", "strict",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
