@@ -1561,7 +1561,14 @@ export function parseResolvedEdges(out: string): number | null {
 export function classifyDreamOutcome(out: string): string | null {
   // The active schema pack doesn't declare the code-symbol extraction phase, so
   // no symbols are extracted and resolve_symbol_edges has nothing to match.
-  if (/does not declare this phase/i.test(out)) {
+  // #2341: anchor the match to a GRAPH phase. The bare phrase false-positived
+  // on every base-pack brain — gbrain's only emitters of "active pack does not
+  // declare this phase" are the CONTENT phases (extract_atoms,
+  // synthesize_concepts), which base packs legitimately skip while
+  // resolve_symbol_edges still runs and builds the graph. Matching the bare
+  // phrase sent users pack-churning ("switch schema packs") for nothing and
+  // masked real graph bugs behind a wrong diagnosis.
+  if (/(resolve_symbol_edges|extract_code_symbols)[^\n]*does not declare/i.test(out)) {
     return (
       "dream ran, but this source's schema pack does not extract code symbols, " +
       "so the call graph stays empty. Switch this source to a code-aware schema " +
