@@ -164,6 +164,42 @@ describe('codex model probe (#2477)', () => {
     }
   });
 
+  test('TTL expiry: a cached MODEL_OK older than 3600s re-probes (T5)', () => {
+    const f = makeFixture();
+    try {
+      runProbe(f, 'ok');
+      expect(invocations(f)).toBe(1);
+      // Backdate the cache line's timestamp past the 1h TTL, keeping the
+      // signature valid — TTL alone must force the re-probe.
+      const cachePath = path.join(f.gstackHome, '.codex-model-probe');
+      const [status, ts, sig] = fs.readFileSync(cachePath, 'utf-8').trim().split(' ');
+      expect(status).toBe('MODEL_OK');
+      fs.writeFileSync(cachePath, `MODEL_OK ${Number(ts) - 3700} ${sig}\n`);
+      const r = runProbe(f, 'ok');
+      expect(r.stdout.trim()).toBe('MODEL_OK'); // not "(cached)"
+      expect(invocations(f)).toBe(2); // re-probed
+    } finally {
+      fs.rmSync(f.home, { recursive: true, force: true });
+    }
+  });
+
+  test('auth.json mtime change invalidates the cached MODEL_OK (T5: re-login re-probes)', () => {
+    const f = makeFixture();
+    try {
+      runProbe(f, 'ok');
+      expect(invocations(f)).toBe(1);
+      // A re-login rewrites auth.json; the mtime signature must invalidate
+      // the cache even though config.toml is untouched.
+      const future = Date.now() / 1000 + 10;
+      fs.utimesSync(path.join(f.codexHome, 'auth.json'), future, future);
+      const r = runProbe(f, 'ok');
+      expect(r.stdout.trim()).toBe('MODEL_OK');
+      expect(invocations(f)).toBe(2); // re-probed
+    } finally {
+      fs.rmSync(f.home, { recursive: true, force: true });
+    }
+  });
+
   test('config.toml change invalidates the cached MODEL_OK', () => {
     const f = makeFixture();
     try {

@@ -9,6 +9,7 @@ import { describe, test, expect } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import { parseArgs, BOOLEAN_FLAGS } from "../src/cli";
+import { COMMANDS } from "../src/commands";
 
 // parseArgs slices argv from index 2 (node/bun + script path).
 const parse = (...args: string[]) => parseArgs(["bun", "cli.ts", ...args]);
@@ -74,5 +75,20 @@ describe("#2514 boolean flags do not swallow positionals", () => {
     const b = parse("generate", "--confidential", "memo.md");
     expect(b.flags.confidential).toBe(true);
     expect(b.positional).toEqual(["memo.md"]);
+  });
+
+  test("structural (T4): every --no-* flag in the commands.ts registry is boolean", () => {
+    // A --no-* flag is a negation — it never takes a value. A new one added
+    // to the registry but missed in BOOLEAN_FLAGS silently re-opens #2514
+    // (it would swallow the next positional). Derived from the registry, so
+    // this cannot rot as commands grow.
+    const missing: string[] = [];
+    for (const [cmd, spec] of COMMANDS) {
+      for (const flag of spec.flags ?? []) {
+        if (!/^--no-/.test(flag)) continue;
+        if (!BOOLEAN_FLAGS.has(flag.replace(/^--/, ""))) missing.push(`${cmd}: ${flag}`);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 });

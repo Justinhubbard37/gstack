@@ -134,6 +134,34 @@ silent regression:
   extraFields or record as intentional); terse-build's stale "all 4" set
   (main-side 5th terse-gated resolver).
 
+### P2: v1.67 review-fix-batch deferrals (post-wave review army findings)
+
+Filed at review-fix-batch time, deferred with rationale:
+
+- **setup host-function dedup** — four near-verbatim `create_*_runtime_root`
+  + `link_*_skill_dirs` copies (codex/factory/opencode/cursor) drift
+  independently (the #2142 ownership gate had to be patched at every site).
+  Parameterize on host name + skills dir. Effort S with CC.
+- **cmd.exe `%VAR%` expansion in gbrainInvocation quoting** — Windows-only,
+  contrived escalation (requires attacker-controlled env var names), but the
+  quoting is not cmd.exe-safe. Fix direction: route win32 spawns through
+  cross-spawn (dependency decision — bun-polyfill.cjs already carries it for
+  the browse daemon). Effort S.
+- **make-pdf flag registry metadata** — commands.ts flags are bare strings;
+  add a takes-value field and DERIVE cli.ts's BOOLEAN_FLAGS from the
+  registry (the structural `--no-*` test added in this batch covers only the
+  negation shape). Effort S.
+- **legacy host-glob uninstall provenance gating** — gstack-uninstall's
+  codex/factory/kiro `gstack*` globs still rm -rf without a provenance
+  check; bring them to parity with the cursor banner gate added in this
+  batch (v1.67 added cursor; the legacy three are inherited behavior).
+  Effort S.
+- **cursor auto-detect breadth** — `-d ~/.cursor` triggers a full extra
+  render + install for every Cursor-having dev on every ./setup (the dir
+  exists for anyone who ever launched the IDE). Product call on narrowing to
+  CLI detection (`command -v cursor`) or an opt-in flag. Effort S, needs a
+  maintainer decision on the detection contract.
+
 ### P2: Persona-fleet hostile-user harness (fork port wave 2 deferral)
 
 **What:** Port the methodology behind time-attack/gstack's 87-hostile-user
