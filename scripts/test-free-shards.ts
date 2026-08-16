@@ -197,6 +197,15 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
     file: 'design/test/variants-retry-after.test.ts',
     reason: 'wall-clock retry-timing assertions — flaky on the slow windows-latest runner even with widened bounds',
   },
+  // Round-2 census (PR #2593 run 31919227507) after the first seven:
+  {
+    file: 'test/skill-census.test.ts',
+    reason: 'census walk throws at module load on Windows (skill-census.ts:63) — the skills-tree symlink layout needs Developer Mode that CI runners lack',
+  },
+  {
+    file: 'browse/test/browser-manager-unit.test.ts',
+    reason: 'wedges the shard to its wall deadline on windows-latest (in-flight at kill); needs a Windows repro to diagnose — macOS + Linux lanes cover the file',
+  },
 ];
 
 // Force-include overrides: files a WINDOWS_FRAGILE_PATTERNS regex excludes for
@@ -575,6 +584,14 @@ export interface FreeRunReport {
   /** Files that crashed a worker (bun retries once; a second crash is final). Deduped. */
   crashedFiles: string[];
   /**
+   * "# Unhandled error between tests" markers, attributed to the chunk they
+   * appeared in. These fail the shard via the strict classifier but produce
+   * NO (fail) lines — without surfacing them here, the epilogue reads
+   * "FAIL — 0 failing test(s)" and the culprit is undiscoverable from CI
+   * output (first Windows lane run: a module-load throw in skill-census).
+   */
+  unhandledErrors: Array<{ file: string | null }>;
+  /**
    * Wedge-suspect heuristic for a wall-timeout kill: files whose header was
    * seen but whose chunk never ENDED (chunk end = the next file's header, or
    * a final crash marker) before the terminal summary — i.e. "started but
@@ -620,6 +637,7 @@ export class FreeRunReporter {
   private readonly crashed = new Set<string>();
   private currentFile: string | null = null;
   private inRecap = false;
+  private readonly unhandled: Array<{ file: string | null }> = [];
   private testsRan: number | null = null;
   private filesRan: number | null = null;
   private sawSummary = false;
@@ -665,6 +683,7 @@ export class FreeRunReporter {
       sawTerminalSummary: this.sawSummary,
       failures: [...this.failures],
       crashedFiles: [...this.crashed].sort(),
+      unhandledErrors: [...this.unhandled],
       inFlight,
       filesWithNoOutput: this.plannedFiles.filter((f) => !this.progress.has(normalizeRelativePath(f))).length,
     };
@@ -687,6 +706,10 @@ export class FreeRunReporter {
       this.inRecap = true;
       if (this.currentFile) this.progressFor(this.currentFile).ended = true;
       this.currentFile = null;
+    }
+
+    if (line === '# Unhandled error between tests') {
+      this.unhandled.push({ file: this.currentFile });
     }
 
     const header = FILE_HEADER_RE.exec(line);
@@ -788,13 +811,16 @@ export function buildRunEpilogue(
   const failingFiles = new Set(report.failures.map((f) => f.file ?? '(unattributed)'));
   const lines = [
     `[test:free] FAIL — ${report.failures.length} failing test(s) in ${failingFiles.size} file(s), `
-    + `${report.crashedFiles.length} crashed worker(s). Full log: ${logPath}`,
+    + `${report.crashedFiles.length} crashed worker(s)${report.unhandledErrors.length > 0 ? `, ${report.unhandledErrors.length} unhandled error(s) between tests` : ''}. Full log: ${logPath}`,
   ];
   for (const failure of report.failures) {
     lines.push(`  ✗ ${failure.file ?? '(unattributed)'} — ${failure.testName}`);
   }
   for (const file of report.crashedFiles) {
     lines.push(`  ⚠ crashed+retried: ${file}`);
+  }
+  for (const u of report.unhandledErrors) {
+    lines.push(`  ⚠ unhandled error between tests (around ${u.file ?? 'unknown file'})`);
   }
   if (status === 'timed-out') {
     if (report.inFlight.length > 0) {
