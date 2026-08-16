@@ -258,10 +258,16 @@ describe('gen-skill-docs', () => {
     expect(violations).toEqual([]);
   });
 
-  test('package.json version matches VERSION file', () => {
+  test('package.json version matches VERSION file (npm-valid translation)', () => {
+    // Decision 11 (v1.67 wave): VERSION stays the 4-digit source of truth;
+    // package.json carries the npm-valid 3-digit translation (npm rejects a
+    // fourth component). The pre-v1.67 1:1 four-digit mirror is also accepted
+    // (grandfathered until the next write), matching gstack-version-bump's
+    // own drift contract.
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
     const version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf-8').trim();
-    expect(pkg.version).toBe(version);
+    const npmTranslation = version.split('.').slice(0, 3).join('.');
+    expect([npmTranslation, version]).toContain(pkg.version);
   });
 
   test('generated files are fresh (match --dry-run)', () => {
