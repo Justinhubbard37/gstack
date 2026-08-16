@@ -151,8 +151,17 @@ describe.skipIf(process.platform === 'win32')(
     test('SKILL.md symlink pointing elsewhere → kept and listed', () => {
       // Target path must not contain "gstack" anywhere (the provenance match
       // is a substring check, mirroring setup's cleanup helpers) — the suite
-      // tmpdir prefix does, so use a separate neutral tmpdir.
-      const neutral = fs.mkdtempSync(path.join(os.tmpdir(), 'other-skill-src-'));
+      // tmpdir prefix does, so use a separate neutral tmpdir. os.tmpdir()
+      // reads $TMPDIR at CALL time, and in shared-process shard runs a
+      // neighboring test can leave it pointing at a gstack-containing path —
+      // observed once in a full-suite shard (the "neutral" target then
+      // matched the provenance substring and the dir was wrongly deleted by
+      // the test's own expectations). Fall back to a fixed neutral root and
+      // ASSERT neutrality so the precondition can never silently rot.
+      let neutralRoot = os.tmpdir();
+      if (neutralRoot.includes('gstack')) neutralRoot = '/private' + path.sep + 'tmp';
+      const neutral = fs.mkdtempSync(path.join(neutralRoot, 'other-skill-src-'));
+      expect(neutral.includes('gstack')).toBe(false);
       const elsewhere = path.join(neutral, 'elsewhere.md');
       fs.writeFileSync(elsewhere, '# not ours\n');
       const dir = path.join(skillsDir, 'someone-elses');
