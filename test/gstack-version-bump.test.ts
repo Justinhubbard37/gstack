@@ -296,6 +296,104 @@ describe('package.json as the version source (monorepo, 3-digit, #2501)', () => 
   });
 });
 
+/**
+ * #2462: cmdClassify's current-version read resolved the .gstack/version-path
+ * pin, but versionRel — the repo-relative path fed to `git show
+ * origin/<base>:<path>` — came from the CLI flag alone. In a pinned repo with
+ * no --version-path flag, base and current therefore read DIFFERENT files:
+ * current from the pin, base from the root VERSION (which may not exist, so
+ * base always read 0.0.0.0 and every branch looked FRESH). The pin's
+ * repo-relative form now drives all three subcommands.
+ */
+describe('.gstack/version-path pin, no --version-path flag (#2462)', () => {
+  const mkPinned = (pinRel: string): string => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-pin-'));
+    fs.mkdirSync(path.dirname(path.join(d, pinRel)), { recursive: true });
+    fs.mkdirSync(path.join(d, '.gstack'), { recursive: true });
+    fs.writeFileSync(path.join(d, '.gstack', 'version-path'), pinRel + '\n');
+    return d;
+  };
+
+  const commitBase = (d: string): void => {
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: d });
+    execFileSync('git', ['config', 'user.email', 't@e.com'], { cwd: d });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: d });
+    execFileSync('git', ['add', '-A'], { cwd: d });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: d });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: d }).toString().trim();
+    fs.mkdirSync(path.join(d, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+    fs.writeFileSync(path.join(d, '.git', 'refs', 'remotes', 'origin', 'main'), head + '\n');
+  };
+
+  test('classify reads base AND current from the SAME pinned plain-text file', () => {
+    const pinRel = 'sub/VERSION';
+    const d = mkPinned(pinRel);
+    fs.writeFileSync(path.join(d, pinRel), '1.4.0.0\n');
+    commitBase(d);
+    // Move the pinned file past base — NO root VERSION file exists at all.
+    fs.writeFileSync(path.join(d, pinRel), '1.5.0.0\n');
+    const out = JSON.parse(execFileSync('bun', [BIN, 'classify', '--base', 'main'], { cwd: d }).toString());
+    // Before the fix: baseVersion read root VERSION → "0.0.0.0" and the
+    // branch misclassified as... current 1.5.0.0 vs base 0.0.0.0. The REAL
+    // base is the pinned file's committed value.
+    expect(out.baseVersion).toBe('1.4.0.0');
+    expect(out.currentVersion).toBe('1.5.0.0');
+    expect(out.state).toBe('ALREADY_BUMPED');
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  test('classify engages the pinned package.json JSON handling without a flag', () => {
+    const pinRel = 'frontend/package.json';
+    const d = mkPinned(pinRel);
+    fs.writeFileSync(path.join(d, pinRel), JSON.stringify({ name: 'f', version: '0.99.2' }, null, 2) + '\n');
+    commitBase(d);
+    const out = JSON.parse(execFileSync('bun', [BIN, 'classify', '--base', 'main'], { cwd: d }).toString());
+    // Before the fix: versionRel="VERSION" → the pinned JSON was read as raw
+    // text → currentVersion "0.0.0.0", pkgExists false, base from a
+    // nonexistent root VERSION.
+    expect(out.state).toBe('FRESH');
+    expect(out.baseVersion).toBe('0.99.2');
+    expect(out.currentVersion).toBe('0.99.2');
+    expect(out.pkgExists).toBe(true);
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  test('write honors the pin: updates the pinned package.json in place, no root VERSION invented', () => {
+    const pinRel = 'frontend/package.json';
+    const d = mkPinned(pinRel);
+    fs.writeFileSync(path.join(d, pinRel), JSON.stringify({ name: 'f', version: '0.99.2' }, null, 2) + '\n');
+    const out = JSON.parse(execFileSync('bun', [BIN, 'write', '--version', '0.99.3'], { cwd: d }).toString());
+    expect(out).toEqual({ wrote: '0.99.3', versionPath: pinRel, packageJson: true, packageLock: false });
+    expect(JSON.parse(fs.readFileSync(path.join(d, pinRel), 'utf-8')).version).toBe('0.99.3');
+    // Before the fix, write treated versionRel as "VERSION" and overwrote the
+    // pinned JSON file with a bare "0.99.3\n", destroying the manifest.
+    expect(fs.existsSync(path.join(d, 'VERSION'))).toBe(false);
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  test('repair honors the pin: pinned package.json is a no-op single source', () => {
+    const pinRel = 'frontend/package.json';
+    const d = mkPinned(pinRel);
+    fs.writeFileSync(path.join(d, pinRel), JSON.stringify({ name: 'f', version: '0.99.2' }, null, 2) + '\n');
+    const out = JSON.parse(execFileSync('bun', [BIN, 'repair'], { cwd: d }).toString());
+    expect(out.repaired).toBeNull();
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  test('--version-path flag still overrides the pin', () => {
+    const d = mkPinned('sub/VERSION');
+    fs.writeFileSync(path.join(d, 'sub', 'VERSION'), '1.0.0.0\n');
+    fs.writeFileSync(path.join(d, 'OTHER_VERSION'), '2.0.0.0\n');
+    commitBase(d);
+    const out = JSON.parse(
+      execFileSync('bun', [BIN, 'classify', '--base', 'main', '--version-path', 'OTHER_VERSION'], { cwd: d }).toString(),
+    );
+    expect(out.currentVersion).toBe('2.0.0.0');
+    expect(out.baseVersion).toBe('2.0.0.0');
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+});
+
 describe('subdirectory manifest (no root package.json, #2531)', () => {
   /**
    * The layout this tool used to silently no-op on: the only Node package

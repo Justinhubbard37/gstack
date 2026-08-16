@@ -73,16 +73,29 @@ function argVal(args: string[], flag: string): string | undefined {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
 }
 
-/** Resolve the VERSION file path: --version-path, else .gstack/version-path, else "VERSION". */
-function resolveVersionPath(cwd: string, explicit?: string): string {
-  if (explicit) return join(cwd, explicit);
+/**
+ * Resolve the version file's path RELATIVE to the repo root: --version-path,
+ * else .gstack/version-path, else "VERSION".
+ *
+ * The relative form is what matters — `git show origin/<base>:<rel>` needs it
+ * (an absolute path is unusable there). Callers used to
+ * derive versionRel from the CLI flag alone (#2462), so a repo using the
+ * .gstack/version-path pin had its local (pinned) version compared against
+ * the BASE's root VERSION file: two different files. On a repo with no root
+ * VERSION the base then always read 0.0.0.0, making every branch look FRESH —
+ * and the pinned-JSON handling never engaged without the explicit flag.
+ * Resolving once, here, keeps base and current reads in step.
+ */
+function resolveVersionRel(cwd: string, explicit?: string): string {
+  if (explicit) return explicit.trim();
   const pin = join(cwd, ".gstack", "version-path");
   if (existsSync(pin)) {
-    const p = readFileSync(pin, "utf-8").trim();
-    if (p) return join(cwd, p);
+    const p = readFileSync(pin, "utf-8").split("\n")[0]?.trim() ?? "";
+    if (p) return p;
   }
-  return join(cwd, "VERSION");
+  return "VERSION";
 }
+
 
 function readVersionFile(p: string, versionRel = "VERSION"): string {
   try {
@@ -98,7 +111,7 @@ function readVersionFile(p: string, versionRel = "VERSION"): string {
 /**
  * Resolve the manifest path: --package-json-path, else
  * .gstack/package-json-path, else "package.json" (#2531, mirrors
- * resolveVersionPath). A repo whose only Node package lives in a
+ * resolveVersionRel). A repo whose only Node package lives in a
  * subdirectory (web/, app/, frontend/) has no ROOT package.json, so the
  * old join(cwd, "package.json") reported pkgExists:false and every bump
  * silently wrote VERSION alone — leaving the manifest to be edited by
@@ -219,8 +232,8 @@ function classifyState(
 function cmdClassify(args: string[], cwd: string): void {
   const base = argVal(args, "--base");
   if (!base) fail("classify requires --base <branch>", 2);
-  const versionPath = resolveVersionPath(cwd, argVal(args, "--version-path"));
-  const versionRel = argVal(args, "--version-path") ?? "VERSION";
+  const versionRel = resolveVersionRel(cwd, argVal(args, "--version-path"));
+  const versionPath = join(cwd, versionRel);
   const current = readVersionFile(versionPath, versionRel);
   const baseV = baseVersion(cwd, base!, versionRel);
   // When the version-path IS a package.json (#2501), that file is the single
@@ -261,8 +274,8 @@ function cmdWrite(args: string[], cwd: string): void {
   if (!VERSION_RE.test(version!)) {
     fail(`NEW_VERSION (${version}) does not match MAJOR.MINOR.PATCH.MICRO. Aborting.`, 2);
   }
-  const versionPath = resolveVersionPath(cwd, argVal(args, "--version-path"));
-  const versionRel = argVal(args, "--version-path") ?? "VERSION";
+  const versionRel = resolveVersionRel(cwd, argVal(args, "--version-path"));
+  const versionPath = join(cwd, versionRel);
 
   // A package.json version-path (#2501) is written in place, keeping the rest
   // of the file intact — and it is the ONLY file written. Also syncing a root
@@ -325,8 +338,8 @@ function cmdWrite(args: string[], cwd: string): void {
 }
 
 function cmdRepair(args: string[], cwd: string): void {
-  const versionPath = resolveVersionPath(cwd, argVal(args, "--version-path"));
-  const versionRel = argVal(args, "--version-path") ?? "VERSION";
+  const versionRel = resolveVersionRel(cwd, argVal(args, "--version-path"));
+  const versionPath = join(cwd, versionRel);
   // Nothing to repair when the version lives in a package.json (#2501): there
   // is no second file to drift from, and classify never reports DRIFT_* for
   // that shape.
