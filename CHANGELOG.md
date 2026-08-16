@@ -21,8 +21,8 @@ Measured on this branch; re-run with `bun test`, `time bin/gstack-wtree`, and th
 | "Tests passed" binding | none (prose) | content fingerprint + command hash + max-age | new |
 | Tracker-text ingress points enveloped | 0 | 8, CI-scanner enforced | new |
 | /freeze deny on hostile/edge paths | silent no-op | blocks, fail-closed | fixed |
-| Working-tree fingerprint cost | — | ~0.2s warm (stat-cache seeded, 40x vs naive) | new |
-| Adversarial findings fixed pre-merge | — | 36 (4 specialists + red team), 5 critical | — |
+| Working-tree fingerprint cost | — | ~0.09s warm (stat-cache seeded, 40x vs naive) | new |
+| Adversarial findings fixed pre-merge | — | 50 (4 specialists + red team + fresh-context pass), 6 critical | — |
 
 The fingerprint survives commits of identical content, so the common flow — test on a dirty tree, commit, ship — keeps its evidence valid, while one untracked new source file invalidates it.
 
