@@ -318,6 +318,10 @@ if [ -x "$SETTINGS_HOOK" ]; then
   if "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral 2>/dev/null | grep -q "removed [1-9]"; then
     REMOVED+=("plan-tune cathedral hooks")
   fi
+  # Timeline Stop hook (#2553).
+  if "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop 2>/dev/null | grep -q "removed [1-9]"; then
+    REMOVED+=("timeline Stop hook")
+  fi
 fi
 
 # ─── Remove global state ────────────────────────────────────

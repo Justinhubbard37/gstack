@@ -1997,9 +1997,31 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
   fi
 fi
 
-# Also tear down plan-tune hooks on --no-team (matches the existing pattern).
+# ─── Timeline Stop hook (#2553) ──────────────────────────────────────────────
+# The preamble writes event:"started" to the project timeline at every skill
+# start; the completion write lives in end-of-workflow prose and is
+# unenforceable — interrupted sessions leaked started > completed forever.
+# Register a Stop-event hook that closes dangling entries. FAIL-OPEN contract
+# (F5): the hook always exits 0 and repairs best-effort — it can never block
+# a session. Idempotent via the (event, source) dedup in gstack-settings-hook;
+# removed by --no-team and gstack-uninstall.
+TIMELINE_STOP_HOOK="$SOURCE_GSTACK_DIR/hosts/claude/hooks/timeline-stop-hook"
+if [ "$NO_TEAM_MODE" -ne 1 ] && [ -x "$SETTINGS_HOOK" ] && [ -x "$TIMELINE_STOP_HOOK" ]; then
+  if ! "$SETTINGS_HOOK" list-sources 2>/dev/null | grep -q "gstack-timeline-stop"; then
+    if "$SETTINGS_HOOK" add-event \
+      --event Stop \
+      --command "$TIMELINE_STOP_HOOK" \
+      --source gstack-timeline-stop \
+      --timeout 5 >/dev/null 2>&1; then
+      log "  registered Stop hook: session timeline entries now close even when a skill is interrupted (backup: settings.json.bak.<ts>; remove: $SETTINGS_HOOK remove-source --source gstack-timeline-stop)"
+    fi
+  fi
+fi
+
+# Also tear down plan-tune + timeline hooks on --no-team (matches the existing pattern).
 if [ "$NO_TEAM_MODE" -eq 1 ] && [ -x "$SETTINGS_HOOK" ]; then
   "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral 2>/dev/null || true
+  "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop 2>/dev/null || true
 fi
 
 # ─── Redact pre-push guard consent (#1946) ───────────────────────────────────

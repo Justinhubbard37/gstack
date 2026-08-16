@@ -1,0 +1,162 @@
+#!/usr/bin/env bun
+/**
+ * Stop hook: close dangling "started" timeline entries (#2553).
+ *
+ * The preamble writes {"skill":X,"event":"started",...} at every skill start;
+ * the completion write lives in prose at the END of the skill workflow and is
+ * unenforceable — an interrupted session, a context blowout, or an agent that
+ * simply stops leaves started > completed forever, and the leak is
+ * unrepairable after the fact. This hook runs on Claude Code's Stop event and
+ * appends event:"completed" (outcome "unknown", source "stop-hook") for every
+ * "started" entry in the project's timeline that has no matching "completed".
+ *
+ * FAIL-OPEN CONTRACT (F5) — a telemetry repair must never block a session:
+ *   - ALWAYS exits 0, whatever happens (corrupt timeline, missing file, bad
+ *     stdin, unreadable slug). Errors go to ~/.gstack/hook-errors.log,
+ *     best-effort.
+ *   - Internal time budget (~2s): work is bounded up front — the timeline is
+ *     skipped entirely over a size cap, and the deadline is re-checked before
+ *     the write. Claude Code's own hook timeout is the outer belt.
+ *   - Append-only: never rewrites timeline.jsonl.
+ *
+ * Correlation limits, on purpose: the preamble's session id is a shell-local
+ * "$$-epoch", not the Claude session id this hook receives, so entries can't
+ * be attributed to THIS session specifically. Closing every dangling entry in
+ * the project is the repair semantics #2553 asks for; a concurrent session
+ * mid-skill in the same project may get its entry closed early, which shows
+ * up as a traceable source:"stop-hook" completion rather than a silent leak.
+ */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { runBin } from './spawn-bin';
+
+const DEADLINE_MS = 2000;
+const MAX_TIMELINE_BYTES = 10 * 1024 * 1024;
+const startedAt = Date.now();
+
+function stateRoot(): string {
+  return process.env.GSTACK_HOME || path.join(os.homedir(), '.gstack');
+}
+
+function logHookError(msg: string): void {
+  try {
+    const root = stateRoot();
+    fs.mkdirSync(root, { recursive: true });
+    fs.appendFileSync(
+      path.join(root, 'hook-errors.log'),
+      `${new Date().toISOString()} timeline-stop-hook: ${msg}\n`,
+    );
+  } catch {
+    // best-effort; never block the session because logging failed
+  }
+}
+
+interface TimelineEntry {
+  skill?: string;
+  event?: string;
+  session?: string;
+  branch?: string;
+  ts?: string;
+}
+
+function main(): void {
+  let cwd = process.cwd();
+  try {
+    const stdin = fs.readFileSync(0, 'utf8');
+    if (stdin.trim()) {
+      const payload = JSON.parse(stdin) as { cwd?: string };
+      if (payload.cwd && fs.existsSync(payload.cwd)) cwd = payload.cwd;
+    }
+  } catch {
+    // Bad/absent stdin: fall through with process.cwd() — repair is still valid.
+  }
+
+  // Resolve the project slug the same way the preamble did (GSTACK_PROJECT_SLUG
+  // override, project-root walk, remote-derived slug).
+  let slug = '';
+  try {
+    const r = runBin('gstack-slug', [], { cwd, encoding: 'utf8', timeout: DEADLINE_MS });
+    const m = (r.stdout ?? '').toString().match(/^SLUG=([A-Za-z0-9._-]+)$/m);
+    if (m) slug = m[1];
+  } catch {
+    // fall through
+  }
+  if (!slug) {
+    logHookError('could not resolve project slug — nothing repaired');
+    return;
+  }
+
+  const timelinePath = path.join(stateRoot(), 'projects', slug, 'timeline.jsonl');
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(timelinePath);
+  } catch {
+    return; // no timeline — nothing to repair
+  }
+  if (stat.size === 0) return;
+  if (stat.size > MAX_TIMELINE_BYTES) {
+    logHookError(`timeline over size cap (${stat.size} bytes) — skipped (fail-open)`);
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(timelinePath, 'utf8');
+  } catch (err) {
+    logHookError(`could not read timeline: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  // Corrupt LINES are skipped individually; a fully corrupt file repairs nothing.
+  const started = new Map<string, TimelineEntry>();
+  const completed = new Set<string>();
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let entry: TimelineEntry;
+    try {
+      entry = JSON.parse(line) as TimelineEntry;
+    } catch {
+      continue;
+    }
+    if (!entry || typeof entry.skill !== 'string') continue;
+    const key = `${entry.skill}\u0000${entry.session ?? ''}`;
+    if (entry.event === 'started' && !started.has(key)) started.set(key, entry);
+    if (entry.event === 'completed') completed.add(key);
+  }
+
+  const dangling = [...started.entries()].filter(([key]) => !completed.has(key));
+  if (dangling.length === 0) return;
+
+  if (Date.now() - startedAt > DEADLINE_MS) {
+    logHookError('internal 2s budget exhausted before write — skipped (fail-open)');
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const lines = dangling
+    .map(([, entry]) =>
+      JSON.stringify({
+        skill: entry.skill,
+        event: 'completed',
+        ...(entry.branch ? { branch: entry.branch } : {}),
+        outcome: 'unknown',
+        source: 'stop-hook',
+        ...(entry.session ? { session: entry.session } : {}),
+        ts: now,
+      }),
+    )
+    .join('\n');
+  try {
+    fs.appendFileSync(timelinePath, lines + '\n');
+  } catch (err) {
+    logHookError(`could not append completions: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+try {
+  main();
+} catch (err) {
+  logHookError(`unexpected: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+}
+process.exit(0);
