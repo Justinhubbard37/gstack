@@ -175,6 +175,26 @@ if ! $VALIDATE_ONLY; then
   ( cd "$INSTALL_DIR" && bun link --silent )
 fi
 
+# #2487: an npm-installed bun (`npm i -g bun`) puts a POSIX script + .cmd/.ps1
+# shims on %PATH% but never bun.exe — and the gbrain.exe shim that `bun link`
+# generates resolves bun.exe SPECIFICALLY. Link "succeeds", then every gbrain
+# call dies with bun's misleading "bun is not installed in %PATH%" (suggesting
+# a second parallel bun install). Detect the condition and name the real fix:
+# bun's own process.execPath IS the hidden bun.exe.
+_bun_exe_hint() {
+  [ "$IS_WINDOWS" -eq 1 ] || return 0
+  command -v bun.exe >/dev/null 2>&1 && return 0
+  local real_bun
+  real_bun=$(bun -e 'console.log(process.execPath)' 2>/dev/null | tr -d '\r' || true)
+  echo "  detected: bun was installed via npm — bun.exe is NOT on %PATH%, and the gbrain.exe shim needs it." >&2
+  if [ -n "$real_bun" ]; then
+    echo "  fix: add bun.exe's directory to PATH (persist it in your shell profile):" >&2
+    echo "       export PATH=\"$(dirname "$real_bun"):\$PATH\"" >&2
+  else
+    echo "  fix: install bun via the official installer (https://bun.sh) or add the directory containing bun.exe to %PATH%." >&2
+  fi
+}
+
 # --- D19 PATH-shadowing validation ---
 # Read the version from the install-dir's package.json; compare to
 # `gbrain --version`. If they disagree, PATH is returning a DIFFERENT
@@ -185,11 +205,13 @@ if [ -z "$expected_version" ]; then
 fi
 
 if ! command -v gbrain >/dev/null 2>&1; then
+  _bun_exe_hint
   fail "bun link completed but 'gbrain' is not on PATH. Ensure ~/.bun/bin is in your PATH."
 fi
 
 actual_version=$(gbrain --version 2>/dev/null | head -1 | awk '{print $NF}' | tr -d '[:space:]' || true)
 if [ -z "$actual_version" ]; then
+  _bun_exe_hint
   fail "gbrain is on PATH but 'gbrain --version' produced no output — the binary may be broken."
 fi
 
