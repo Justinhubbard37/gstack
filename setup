@@ -784,24 +784,40 @@ link_claude_skill_dirs() {
   fi
 }
 
+# ─── Helper: install an alias SKILL.md as a rewritten COPY ───────────────────
+# Alias dirs (_gstack-command, connect-chrome) must NOT symlink the canonical
+# SKILL.md: the alias then carries the canonical frontmatter name:, Claude Code
+# sees two skills with the same name, and drops the ENTIRE personal-skills set
+# (#2511, #2201). Copy-then-rewrite instead: sed reads the SOURCE and writes a
+# fresh copy with name: set to the alias. It must never edit through an
+# existing symlink — that would rewrite the generated source file itself.
+_install_alias_skill_md() {
+  local src_skill_md="$1"
+  local dst_dir="$2"
+  local alias_name="$3"
+  [ -f "$src_skill_md" ] || return 0
+  # Old installs left the alias as a whole-dir symlink — replace it.
+  if [ -L "$dst_dir" ]; then rm -f "$dst_dir"; fi
+  mkdir -p "$dst_dir"
+  # Remove any prior symlinked SKILL.md so the redirect below cannot write
+  # through it into the generated source.
+  rm -f "$dst_dir/SKILL.md"
+  sed "1,/^---\$/ s/^name:[[:space:]].*/name: $alias_name/" "$src_skill_md" > "$dst_dir/SKILL.md"
+}
+
 # Claude Code skips the repo-shaped ~/.claude/skills/gstack directory when
 # building the user-facing slash-command list. Keep the repo path for runtime
-# assets, and add a separate thin wrapper whose frontmatter name remains
-# `gstack` so `/gstack` can autocomplete.
+# assets, and add a separate thin wrapper. Its frontmatter name is rewritten to
+# `_gstack-command` (the dir name) so it never collides with the canonical
+# `gstack` name (#2511).
 link_claude_root_skill_alias() {
   local gstack_dir="$1"
   local skills_dir="$2"
   local target="$skills_dir/_gstack-command"
 
   [ -f "$gstack_dir/SKILL.md" ] || return 0
-  if [ -L "$target" ]; then
-    rm -f "$target"
-  fi
-  mkdir -p "$target"
-  if [ -L "$target/SKILL.md" ]; then rm "$target/SKILL.md"; fi
-  _link_or_copy "$gstack_dir/SKILL.md" "$target/SKILL.md"
+  _install_alias_skill_md "$gstack_dir/SKILL.md" "$target" "_gstack-command"
   echo "  linked root skill alias: gstack"
-  _print_windows_copy_note_once
 }
 
 # ─── Helper: remove old unprefixed Claude skill entries ───────────────────────
@@ -1231,13 +1247,16 @@ if [ "$INSTALL_CLAUDE" -eq 1 ]; then
       GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" >/dev/null 2>&1 || true
     fi
     # Backwards-compat alias: /connect-chrome → /open-gstack-browser
+    # Rewritten copy, not a symlink: a symlinked alias re-serves the canonical
+    # name: open-gstack-browser, so one of the two silently shadows the other
+    # (#2201) — and duplicate names can drop the whole skill set (#2511).
     _OGB_LINK="$INSTALL_SKILLS_DIR/connect-chrome"
+    _OGB_ALIAS_NAME="connect-chrome"
     if [ "$SKILL_PREFIX" -eq 1 ]; then
       _OGB_LINK="$INSTALL_SKILLS_DIR/gstack-connect-chrome"
+      _OGB_ALIAS_NAME="gstack-connect-chrome"
     fi
-    if [ -L "$_OGB_LINK" ] || [ ! -e "$_OGB_LINK" ]; then
-      _link_or_copy "gstack/open-gstack-browser" "$_OGB_LINK"
-    fi
+    _install_alias_skill_md "$SOURCE_GSTACK_DIR/open-gstack-browser/SKILL.md" "$_OGB_LINK" "$_OGB_ALIAS_NAME"
     if [ "$LOCAL_INSTALL" -eq 1 ]; then
       log "gstack ready (project-local)."
       log "  skills: $INSTALL_SKILLS_DIR"
@@ -1299,13 +1318,17 @@ if [ "$INSTALL_CLAUDE" -eq 1 ]; then
       if [ -x "$GSTACK_RELINK" ]; then
         GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" >/dev/null 2>&1 || true
       fi
+      # Rewritten copy, not a symlink: a symlinked alias re-serves the
+      # canonical name: open-gstack-browser, so one of the two silently
+      # shadows the other (#2201) — and duplicate names can drop the whole
+      # skill set (#2511).
       _OGB_LINK="$INSTALL_SKILLS_DIR/connect-chrome"
+      _OGB_ALIAS_NAME="connect-chrome"
       if [ "$SKILL_PREFIX" -eq 1 ]; then
         _OGB_LINK="$INSTALL_SKILLS_DIR/gstack-connect-chrome"
+        _OGB_ALIAS_NAME="gstack-connect-chrome"
       fi
-      if [ -L "$_OGB_LINK" ] || [ ! -e "$_OGB_LINK" ]; then
-        _link_or_copy "gstack/open-gstack-browser" "$_OGB_LINK"
-      fi
+      _install_alias_skill_md "$SOURCE_GSTACK_DIR/open-gstack-browser/SKILL.md" "$_OGB_LINK" "$_OGB_ALIAS_NAME"
       log "gstack ready (claude)."
       log "  browse: $BROWSE_BIN"
     fi

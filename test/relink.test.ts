@@ -215,15 +215,55 @@ describe('gstack-relink (#578)', () => {
     const aliasSkill = path.join(aliasDir, 'SKILL.md');
     expect(fs.lstatSync(aliasDir).isDirectory()).toBe(true);
     expect(fs.lstatSync(aliasDir).isSymbolicLink()).toBe(false);
-    expect(fs.lstatSync(aliasSkill).isSymbolicLink()).toBe(true);
-    expect(fs.readlinkSync(aliasSkill)).toBe(path.join(installDir, 'SKILL.md'));
-    expect(fs.readFileSync(aliasSkill, 'utf-8')).toContain('name: gstack');
+    // #2511: the alias is a rewritten COPY, never a symlink. A symlinked
+    // alias re-serves the canonical `name: gstack`; Claude Code refuses
+    // duplicate skill names and drops the entire personal-skills set.
+    expect(fs.lstatSync(aliasSkill).isSymbolicLink()).toBe(false);
+    const aliasContent = fs.readFileSync(aliasSkill, 'utf-8');
+    expect(aliasContent).toContain('name: _gstack-command');
+    expect(aliasContent).not.toContain('name: gstack\n');
+    // The rewrite happened on the COPY: the canonical source keeps its name.
+    expect(fs.readFileSync(path.join(installDir, 'SKILL.md'), 'utf-8')).toContain('name: gstack');
 
     run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix true`, {
       GSTACK_INSTALL_DIR: installDir,
       GSTACK_SKILLS_DIR: skillsDir,
     });
     expect(fs.existsSync(aliasSkill)).toBe(true);
+  });
+
+  // #2201: connect-chrome ships as a dir SYMLINK to open-gstack-browser. The
+  // discovery loop used to link it under its own basename while its SKILL.md
+  // carried `name: open-gstack-browser` — a duplicate name that silently
+  // shadows the real skill (readdir-order roulette). Symlinked source dirs
+  // must be skipped; setup owns the rewritten-copy alias.
+  test('symlinked skill dirs are skipped, so no duplicate frontmatter names (#2201)', () => {
+    setupMockInstall(['open-gstack-browser', 'qa']);
+    fs.symlinkSync(
+      path.join(installDir, 'open-gstack-browser'),
+      path.join(installDir, 'connect-chrome'),
+    );
+    run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix false`, {
+      GSTACK_INSTALL_DIR: installDir,
+      GSTACK_SKILLS_DIR: skillsDir,
+    });
+    run(`${path.join(installDir, 'bin', 'gstack-relink')}`, {
+      GSTACK_INSTALL_DIR: installDir,
+      GSTACK_SKILLS_DIR: skillsDir,
+    });
+
+    expect(fs.existsSync(path.join(skillsDir, 'open-gstack-browser'))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, 'connect-chrome'))).toBe(false);
+
+    // No two installed SKILL.md files may share a frontmatter name.
+    const names: string[] = [];
+    for (const entry of fs.readdirSync(skillsDir)) {
+      const skillMd = path.join(skillsDir, entry, 'SKILL.md');
+      if (!fs.existsSync(skillMd)) continue;
+      const m = fs.readFileSync(skillMd, 'utf-8').match(/^name:\s*(\S+)/m);
+      if (m) names.push(m[1]);
+    }
+    expect(new Set(names).size).toBe(names.length);
   });
 
   // FIRST INSTALL: --no-prefix must create ONLY flat names, zero gstack-* pollution

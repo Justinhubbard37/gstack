@@ -2435,7 +2435,10 @@ describe('setup script validation', () => {
     const fnEnd = setupContent.indexOf('# ─── Helper: remove old unprefixed Claude skill entries', fnStart);
     const fnBody = setupContent.slice(fnStart, fnEnd);
     expect(fnBody).toContain('_gstack-command');
-    expect(fnBody).toContain('_link_or_copy "$gstack_dir/SKILL.md" "$target/SKILL.md"');
+    // #2511: the alias must be a rewritten COPY (unique frontmatter name),
+    // never a verbatim symlink of the canonical SKILL.md.
+    expect(fnBody).toContain('_install_alias_skill_md "$gstack_dir/SKILL.md" "$target" "_gstack-command"');
+    expect(fnBody).not.toContain('_link_or_copy "$gstack_dir/SKILL.md"');
 
     const claudeSection = setupContent.slice(
       setupContent.indexOf('# 4. Install for Claude'),
