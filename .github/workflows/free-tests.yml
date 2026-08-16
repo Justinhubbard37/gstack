@@ -79,6 +79,13 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
+      # Headed-browser tests (handoff, extension sidepanel DOM) need a real
+      # DISPLAY — first Linux run failed with Playwright's "launched a headed
+      # browser without an XServer" banner. xvfb-run below provides it;
+      # x11-utils ships xdpyinfo for display probing.
+      - name: Install Xvfb + X11 utilities
+        run: sudo apt-get install -y --no-install-recommends xvfb x11-utils
+
       - name: Configure git identity (tests init temp repos)
         run: |
           git config --global user.email "free-tests-ci@gstack.test"
@@ -96,7 +103,7 @@ jobs:
         run: bash browse/scripts/build-node-server.sh
 
       - name: Run free suite
-        run: bun run test:free
+        run: xvfb-run -a bun run test:free
 
       # The runner streams the full child output to per-run logs under the OS
       # tmpdir and prints only the quiet contract to the console. Without this
