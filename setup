@@ -843,6 +843,10 @@ link_claude_skill_dirs() {
 # (#2511, #2201). Copy-then-rewrite instead: sed reads the SOURCE and writes a
 # fresh copy with name: set to the alias. It must never edit through an
 # existing symlink — that would rewrite the generated source file itself.
+# NOTE: every alias name passed to this helper (_gstack-command,
+# connect-chrome, gstack-connect-chrome) is hardcoded in the _INVENTORY seed
+# list in bin/gstack-uninstall — keep the two sites in sync when adding or
+# renaming an alias, or uninstall will refuse to delete the new alias dir.
 _install_alias_skill_md() {
   local src_skill_md="$1"
   local dst_dir="$2"

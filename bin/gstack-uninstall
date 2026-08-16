@@ -140,6 +140,9 @@ CLAUDE_SKILLS="$HOME/.claude/skills"
 # prefixed variants, and the alias dirs. Built BEFORE the install root is
 # removed. A real directory in ~/.claude/skills is only deletable when its
 # name is in this inventory AND its SKILL.md carries the generated banner.
+# The seed names below are the alias dirs setup's _install_alias_skill_md
+# creates (setup: link_claude_root_skill_alias + the connect-chrome call
+# sites) — keep in sync with setup if an alias is added or renamed there.
 _INVENTORY=" _gstack-command connect-chrome gstack-connect-chrome "
 if [ -d "$GSTACK_DIR" ]; then
   for _SRC in "$GSTACK_DIR"/*/; do
@@ -172,13 +175,21 @@ if [ -d "$CLAUDE_SKILLS/gstack" ] || [ -L "$CLAUDE_SKILLS/gstack" ]; then
       esac
     elif [ -d "$_ENTRY" ] && { [ -f "$_ENTRY/SKILL.md" ] || [ -L "$_ENTRY/SKILL.md" ]; }; then
       if [ -L "$_ENTRY/SKILL.md" ]; then
-        # Shape 2: provenance readable from the symlink target itself
-        # (mirrors setup's cleanup_old_claude_symlinks semantics).
+        # Shape 2: provenance readable from the symlink target itself.
+        # Gate 1: the name must be in gstack's skill inventory (parity with
+        # shape 3). Gate 2: the target must contain "gstack" as an ANCHORED
+        # path segment (gstack/*|*/gstack/*, same pattern as shape 1) — a
+        # bare *gstack* substring match would wipe a user's own skill whose
+        # SKILL.md merely lives under e.g. ~/tools/gstack-fork/.
         _TARGET="$(readlink "$_ENTRY/SKILL.md" 2>/dev/null || true)"
-        case "$_TARGET" in
-          *gstack*) rm -rf "$_ENTRY"; REMOVED+=("claude/$_NAME") ;;
-          *) _SKIPPED_DIRS+=("$_ENTRY") ;;
-        esac
+        if _in_skill_inventory "$_NAME"; then
+          case "$_TARGET" in
+            gstack/*|*/gstack/*) rm -rf "$_ENTRY"; REMOVED+=("claude/$_NAME") ;;
+            *) _SKIPPED_DIRS+=("$_ENTRY") ;;
+          esac
+        else
+          _SKIPPED_DIRS+=("$_ENTRY")
+        fi
       elif _in_skill_inventory "$_NAME" && grep -q '<!-- AUTO-GENERATED from' "$_ENTRY/SKILL.md" 2>/dev/null; then
         # Shape 3: delete ONLY when BOTH gates pass (F8) — the name is in
         # gstack's skill inventory AND the SKILL.md carries the existing
@@ -197,13 +208,6 @@ if [ -d "$CLAUDE_SKILLS/gstack" ] || [ -L "$CLAUDE_SKILLS/gstack" ]; then
 
   rm -rf "$CLAUDE_SKILLS/gstack"
   REMOVED+=("~/.claude/skills/gstack")
-fi
-
-if [ ${#_SKIPPED_DIRS[@]} -gt 0 ]; then
-  echo "left in place (not provably gstack-managed — remove by hand if they are yours):" >&2
-  for _D in "${_SKIPPED_DIRS[@]}"; do
-    echo "  $_D" >&2
-  done
 fi
 
 # ─── Remove project-local Claude skills (--local installs) ──
@@ -252,12 +256,28 @@ if [ -d "$KIRO_SKILLS" ]; then
 fi
 
 # ─── Remove Cursor skills ───────────────────────────────────
+# Cursor installs are rendered REAL directories, so a bare gstack* glob could
+# sweep a user's own dir that merely starts with "gstack" (e.g.
+# ~/.cursor/skills/gstack-fork-notes). Provenance gate: a real dir is only
+# deleted when its SKILL.md carries the generated banner; anything else is
+# listed, never deleted. Symlinks stay ungated — removing a link never
+# destroys user content.
+_cursor_item_is_gstack_managed() {
+  # Symlinks and plain files are safe to remove; real dirs need the banner.
+  if [ -L "$1" ] || [ ! -d "$1" ]; then return 0; fi
+  grep -q '<!-- AUTO-GENERATED from' "$1/SKILL.md" 2>/dev/null
+}
+
 CURSOR_SKILLS="$HOME/.cursor/skills"
 if [ -d "$CURSOR_SKILLS" ]; then
   for _ITEM in "$CURSOR_SKILLS"/gstack*; do
     [ -e "$_ITEM" ] || [ -L "$_ITEM" ] || continue
-    rm -rf "$_ITEM"
-    REMOVED+=("cursor/$(basename "$_ITEM")")
+    if _cursor_item_is_gstack_managed "$_ITEM"; then
+      rm -rf "$_ITEM"
+      REMOVED+=("cursor/$(basename "$_ITEM")")
+    else
+      _SKIPPED_DIRS+=("$_ITEM")
+    fi
   done
 fi
 
@@ -287,11 +307,16 @@ fi
 
 # ─── Remove per-project .cursor/skills/gstack* ──────────────
 # Never rmdir .cursor itself — Cursor IDE stores rules and other user config there.
+# Same provenance gate as the global cursor block above.
 if [ -n "$_GIT_ROOT" ] && [ -d "$_GIT_ROOT/.cursor/skills" ]; then
   for _ITEM in "$_GIT_ROOT/.cursor/skills"/gstack*; do
     [ -e "$_ITEM" ] || [ -L "$_ITEM" ] || continue
-    rm -rf "$_ITEM"
-    REMOVED+=("cursor/$(basename "$_ITEM")")
+    if _cursor_item_is_gstack_managed "$_ITEM"; then
+      rm -rf "$_ITEM"
+      REMOVED+=("cursor/$(basename "$_ITEM")")
+    else
+      _SKIPPED_DIRS+=("$_ITEM")
+    fi
   done
 
   rmdir "$_GIT_ROOT/.cursor/skills" 2>/dev/null || true
@@ -337,6 +362,16 @@ for _TMP in /tmp/gstack-latest-version /tmp/gstack-sketch-*.html /tmp/gstack-ske
     REMOVED+=("$(basename "$_TMP")")
   fi
 done
+
+# ─── Skipped-entry report ───────────────────────────────────
+# Everything any provenance gate refused to delete (Claude shapes 2/3,
+# cursor real dirs) — listed once, at the end, so nothing is silent.
+if [ ${#_SKIPPED_DIRS[@]} -gt 0 ]; then
+  echo "left in place (not provably gstack-managed — remove by hand if they are yours):" >&2
+  for _D in "${_SKIPPED_DIRS[@]}"; do
+    echo "  $_D" >&2
+  done
+fi
 
 # ─── Summary ────────────────────────────────────────────────
 if [ ${#REMOVED[@]} -gt 0 ]; then

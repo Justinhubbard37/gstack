@@ -148,9 +148,56 @@ describe.skipIf(process.platform === 'win32')(
       expect(fs.existsSync(dir)).toBe(false);
     });
 
+    test('SKILL.md symlink into a gstack-SUBSTRING path (gstack-fork) → kept and listed', () => {
+      // DM5: the shape-2 gate must match "gstack" as an anchored path
+      // segment, not a substring — a user's own skill whose SKILL.md links
+      // into ~/tools/gstack-fork/ is NOT ours, even when the dir name
+      // collides with a real gstack skill (here: review, in the inventory).
+      // The anchored gate only matches a literal /gstack/ path segment, so
+      // the tmpdir must not carry one (shared-process shard runs can leave
+      // $TMPDIR pointing into a gstack worktree — same hazard as the
+      // "pointing elsewhere" test below). Fall back to a fixed neutral root
+      // and ASSERT the precondition.
+      let neutralRoot = os.tmpdir();
+      if (neutralRoot.split(path.sep).includes('gstack')) neutralRoot = '/private' + path.sep + 'tmp';
+      const forkRoot = fs.mkdtempSync(path.join(neutralRoot, 'tools-'));
+      expect(forkRoot.split(path.sep).includes('gstack')).toBe(false);
+      const forkSrc = path.join(forkRoot, 'gstack-fork', 'review');
+      fs.mkdirSync(forkSrc, { recursive: true });
+      fs.writeFileSync(path.join(forkSrc, 'SKILL.md'), skillMd('review'));
+      const dir = path.join(skillsDir, 'review');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.symlinkSync(path.join(forkSrc, 'SKILL.md'), path.join(dir, 'SKILL.md'));
+
+      try {
+        const r = runUninstall();
+        expect(r.status).toBe(0);
+        expect(fs.existsSync(dir)).toBe(true);
+        expect(r.stderr).toContain('left in place');
+        expect(r.stderr).toContain(path.join('skills', 'review'));
+      } finally {
+        fs.rmSync(forkRoot, { recursive: true, force: true });
+      }
+    });
+
+    test('SKILL.md symlink into gstack but name NOT in inventory → kept and listed', () => {
+      // Shape 2 now carries the same inventory gate as shape 3: a dir whose
+      // name setup could never have created is skipped even when its
+      // SKILL.md target resolves into the install root.
+      const dir = path.join(skillsDir, 'my-custom-wrapper');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.symlinkSync(path.join(installRoot, 'qa', 'SKILL.md'), path.join(dir, 'SKILL.md'));
+
+      const r = runUninstall();
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(dir)).toBe(true);
+      expect(r.stderr).toContain('my-custom-wrapper');
+    });
+
     test('SKILL.md symlink pointing elsewhere → kept and listed', () => {
-      // Target path must not contain "gstack" anywhere (the provenance match
-      // is a substring check, mirroring setup's cleanup helpers) — the suite
+      // Target path must not contain a gstack path segment (the provenance
+      // match is anchored: gstack/*|*/gstack/*; keeping the stricter
+      // no-substring precondition costs nothing) — the suite
       // tmpdir prefix does, so use a separate neutral tmpdir. os.tmpdir()
       // reads $TMPDIR at CALL time, and in shared-process shard runs a
       // neighboring test can leave it pointing at a gstack-containing path —
