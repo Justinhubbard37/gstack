@@ -3604,3 +3604,83 @@ describe('PREAMBLE resolution requires declared preamble-tier', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2499: gbrain MCP detection must read BOTH ~/.claude.json scopes.
+// Claude Code registers MCP servers at user scope (.mcpServers) and project
+// scope (.projects["/abs/path"].mcpServers — what `claude mcp add` without
+// --scope user writes). The rendered brain-sync block previously read only
+// user scope, so a correctly configured project-scoped brain was invisible.
+// ---------------------------------------------------------------------------
+describe('brain-sync block reads project-scoped MCP registrations (#2499)', () => {
+  const rendered = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
+
+  test('rendered _GBRAIN_MCP_ENTRY jq resolves project scope with nearest-ancestor cwd match', () => {
+    const line = rendered.split('\n').find((l) => l.includes('_GBRAIN_MCP_ENTRY=$('));
+    expect(line).toBeDefined();
+    // Project-scope read present, driven by $PWD.
+    expect(line!).toContain('--arg cwd "$PWD"');
+    expect(line!).toContain('.projects');
+    // User scope still resolved first.
+    expect(line!).toContain('.mcpServers.gbrain');
+    // The old user-scope-only filter is gone from the rendered output.
+    expect(rendered).not.toContain('.mcpServers.gbrain.type // .mcpServers.gbrain.transport');
+    expect(rendered).not.toContain(".mcpServers.gbrain.url // empty");
+  });
+
+  test('rendered _GBRAIN_MCP_TYPE and _GBRAIN_HOST extract from the resolved entry', () => {
+    const typeLine = rendered.split('\n').find((l) => l.includes('_GBRAIN_MCP_TYPE=$('));
+    const hostLine = rendered.split('\n').find((l) => l.includes('_GBRAIN_HOST=$('));
+    expect(typeLine).toBeDefined();
+    expect(hostLine).toBeDefined();
+    expect(typeLine!).toContain('_GBRAIN_MCP_ENTRY');
+    expect(hostLine!).toContain('_GBRAIN_MCP_ENTRY');
+  });
+
+  test('rendered jq lines FUNCTION: project-scoped registration resolves for a cwd inside the project', () => {
+    // Execute the exact rendered bytes, not a re-derivation: extract the
+    // _GBRAIN_MCP_ENTRY + _GBRAIN_MCP_TYPE lines from the generated SKILL.md
+    // and run them in bash against a fixture ~/.claude.json that carries ONLY
+    // a project-scoped gbrain registration.
+    const lines = rendered.split('\n');
+    const entryLine = lines.find((l) => l.includes('_GBRAIN_MCP_ENTRY=$('));
+    const typeLine = lines.find((l) => l.includes('_GBRAIN_MCP_TYPE=$('));
+    expect(entryLine).toBeDefined();
+    expect(typeLine).toBeDefined();
+
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-2499-home-'));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-2499-proj-'));
+    const nestedCwd = path.join(projectDir, 'src', 'deep');
+    fs.mkdirSync(nestedCwd, { recursive: true });
+    try {
+      fs.writeFileSync(
+        path.join(tmpHome, '.claude.json'),
+        JSON.stringify({
+          projects: {
+            [projectDir]: {
+              mcpServers: { gbrain: { type: 'http', url: 'https://brain.example.com/mcp' } },
+            },
+          },
+        }),
+      );
+      const script = `cd "$1" || exit 1\n${entryLine!.trim()}\n${typeLine!.trim()}\necho "RESOLVED:$_GBRAIN_MCP_TYPE"`;
+      const r = spawnSync('bash', ['-c', script, 'bash', nestedCwd], {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: tmpHome },
+        timeout: 10_000,
+      });
+      expect(r.stdout).toContain('RESOLVED:http');
+
+      // Discriminator: a cwd OUTSIDE the project must NOT resolve it.
+      const outside = spawnSync('bash', ['-c', script, 'bash', os.tmpdir()], {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: tmpHome },
+        timeout: 10_000,
+      });
+      expect(outside.stdout).toContain('RESOLVED:\n');
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});

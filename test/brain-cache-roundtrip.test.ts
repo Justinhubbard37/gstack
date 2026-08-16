@@ -131,6 +131,59 @@ describe('brain-cache endpoint detection', () => {
     expect(typeof hash).toBe('string');
     expect(hash.length).toBeGreaterThan(0);
   });
+
+  // #2499: project-scoped registrations (.projects["/path"].mcpServers.gbrain)
+  // were never read — two different project-scoped brains both hashed to
+  // 'local', so switching between them never invalidated the cache.
+  test('detectEndpointHash resolves a project-scoped gbrain URL for a cwd inside the project (#2499)', async () => {
+    const mod = await importCache();
+    const cj = join(TMP_HOME, 'claude.json');
+    writeFileSync(cj, JSON.stringify({
+      projects: {
+        '/w/repo': { mcpServers: { gbrain: { type: 'http', url: 'https://a.example/mcp' } } },
+      },
+    }));
+    const inside = mod.detectEndpointHash(cj, '/w/repo/src/deep');
+    expect(inside).not.toBe('local');
+    expect(inside).toHaveLength(8);
+    // Path-boundary check: /w/repo2 is NOT inside /w/repo.
+    expect(mod.detectEndpointHash(cj, '/w/repo2')).toBe('local');
+  });
+
+  test('detectEndpointHash prefers the nearest-ancestor project entry (#2499)', async () => {
+    const mod = await importCache();
+    const cj = join(TMP_HOME, 'claude.json');
+    writeFileSync(cj, JSON.stringify({
+      projects: {
+        '/w/repo': { mcpServers: { gbrain: { url: 'https://outer.example/mcp' } } },
+        '/w/repo/nested': { mcpServers: { gbrain: { url: 'https://inner.example/mcp' } } },
+      },
+    }));
+    const inner = mod.detectEndpointHash(cj, '/w/repo/nested/sub');
+    const outer = mod.detectEndpointHash(cj, '/w/repo/other');
+    expect(inner).not.toBe(outer); // two brains → two hashes (the docstring scenario)
+    expect(inner).not.toBe('local');
+    expect(outer).not.toBe('local');
+  });
+
+  test('detectEndpointHash still prefers user scope over project scope (#2499)', async () => {
+    const mod = await importCache();
+    const cj = join(TMP_HOME, 'claude.json');
+    writeFileSync(cj, JSON.stringify({
+      mcpServers: { gbrain: { url: 'https://user.example/mcp' } },
+      projects: {
+        '/w/repo': { mcpServers: { gbrain: { url: 'https://proj.example/mcp' } } },
+      },
+    }));
+    const userScoped = mod.detectEndpointHash(cj, '/w/repo');
+    // Same file minus the user-scope entry → different hash proves user scope won.
+    writeFileSync(cj, JSON.stringify({
+      projects: {
+        '/w/repo': { mcpServers: { gbrain: { url: 'https://proj.example/mcp' } } },
+      },
+    }));
+    expect(mod.detectEndpointHash(cj, '/w/repo')).not.toBe(userScoped);
+  });
 });
 
 describe('brain-cache schema mismatch behavior', () => {

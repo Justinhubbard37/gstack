@@ -181,7 +181,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // v1.65 merge: provisional larger-of-both-waves budget; re-measured below.
         // Fork port wave 2 (#703): the repo-doc-preference block in the design
     // check grew every plan-review skeleton ~0.7KB. Measured values noted.
-    maxSkeletonBytes: 70_000, // measured 68,780
+    // #2499 project-scope MCP jq in the brain-sync block grew every tier-2+
+    // skeleton ~1.5KB (entry resolution emitted once per SKILL.md).
+    maxSkeletonBytes: 70_500, // measured 70,318
     minUnionBytes: 70_000,
     mustContain: ['Architecture', 'Code Quality', 'Test', 'Performance'],
     // Cross-cutting preamble growth (v1.57.2.0 AUQ-failure prose fallback + the
@@ -236,7 +238,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble.
         // Fork port wave 2 (#703): the repo-doc-preference block in the design
     // check grew every plan-review skeleton ~0.7KB. Measured values noted.
-    maxSkeletonBytes: 82_000, // measured 80,493
+    // #2499 project-scope MCP jq in the brain-sync block grew every tier-2+
+    // skeleton ~1.5KB (entry resolution emitted once per SKILL.md).
+    maxSkeletonBytes: 82_500, // measured 82,031
     minUnionBytes: 70_000,
     mustContain: ['developer experience', 'Getting Started'],
     // Default-on Codex outside-voice (codexPreflight block + CODEX_MODE branch
@@ -264,7 +268,9 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // (judgment must be visible before the workflow directs the user to a
     // vendor site), plus the #703 dual-write + repo-doc-preference block and
     // the #538 opt-out + D1 evidence directive — ratio 1.104 measured.
-    maxSkeletonBytes: 101_000,
+    // #2499 project-scope MCP jq in the brain-sync block grew every tier-2+
+    // skeleton ~1.5KB (entry resolution emitted once per SKILL.md).
+    maxSkeletonBytes: 101_500, // measured 101,314
     minUnionBytes: 70_000,
     mustContain: ['design doc', 'problem statement'],
     maxSizeRatio: 1.12,
