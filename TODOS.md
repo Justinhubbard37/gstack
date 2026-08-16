@@ -40,6 +40,62 @@ evidence-before-claimed-limitations rule.
 
 **Effort:** S per run. **Priority:** P3. **Depends on:** a paid ADP account.
 
+### P2: Eval-run evidence records (extend the content-binding lattice to E2E/evals)
+
+**What:** Wire `bin/gstack-evidence run` into the eval entrypoints (`eval:bg*`,
+`scripts/test-paid-shards.ts`) so E2E/eval claims carry the same
+working-tree-fingerprint binding as free tests, and /land-and-deploy 3.5b reads
+evidence records instead of `~/.gstack-dev/evals` file mtimes.
+
+**Why:** Today "E2E ran today" is an mtime heuristic that proves nothing about
+what content the run tested. **Effort:** M → S with CC. **Priority:** P2.
+**Depends on:** the content-binding wave; touches the sharded runner that
+concurrent worktrees share — coordinate timing.
+
+### P2: Spec-spawn outcome ledger
+
+**What:** `/spec`'s spawned `claude -p` agents are fire-and-forget: nothing
+records whether the spawn finished, died, or stalled. Add a runs.jsonl
+(spawn id, branch, worktree, pid, outcome) written at spawn + updated by a
+lease/heartbeat check, surfaced as a /landing-report row.
+
+**Why:** A dead spawn is currently invisible until someone hunts the PID.
+**Effort:** M → S with CC. **Priority:** P2. **Depends on:** nothing; the
+lease + heartbeat liveness pattern is documented in the local CEO plan record
+(2026-08-15, binding wave).
+
+### P3: Merge-SHA chain of custody in /land-and-deploy
+
+**What:** Post-merge, record {merge sha, merged tree, reviewed wtree match?}
+so a deployed artifact traces back to a reviewed content state.
+
+**Why:** Pre-merge checks bind reviews to content; after a squash-merge onto a
+moved base the linkage is unrecorded. Needs a noise model (base movement
+legitimately changes the tree) before it can alert rather than log.
+**Effort:** M → S with CC. **Priority:** P3. **Depends on:** content-binding
+wave fields (wtree in review records).
+
+### P3: default-if-silent escalation contract for background loops
+
+**What:** Long-running/background skill loops (/canary first) get an
+escalation shape that carries options + a default-if-silent choice with a
+timeout, so an unattended loop never stalls on a question a human isn't
+around to answer.
+
+**Why:** Autonomy currently either blocks on AskUserQuestion or guesses.
+**Effort:** S/M → S with CC. **Priority:** P3. **Depends on:** consent-model
+review (changes AskUserQuestion semantics — needs its own design pass).
+
+### P3: E2E eval case — staleness grading actually applied
+
+**What:** A paid gate/periodic eval asserting an agent following the rendered
+/ship dashboard + /land 3.5a text applies the wtree content-first rule (grades
+CURRENT on identical content, falls back on mismatch).
+
+**Why:** The grading rule is prompt-followed prose pinned only by a free
+template-drift tripwire; this proves agents actually execute it. **Effort:** S.
+**Priority:** P3. **Depends on:** content-binding wave.
+
 ### P2: office-hours design-doc dual-write functional E2E (fork port wave 2 review shortfall)
 
 **What:** A paid E2E (claude -p) that runs the office-hours Phase 5 handoff in
