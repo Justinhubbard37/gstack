@@ -23,9 +23,9 @@
  *   3. No per-shard env / eval dir. Each shard needs its own GSTACK_EVAL_DIR
  *      so eval baselines are per-test-file instead of last-flush-wins.
  *
- * Worst-case wall clock = ceil(shards / jobs) × shard timeout. At the time of
- * writing: gate is 44 one-file shards → ceil(44/4) × 30min = 5.5h; periodic is
- * 63 → 8h. Do NOT hand-derive the eval:bg:* detach timeouts from a snapshot of
+ * Worst-case wall clock = ceil(shards / jobs) × shard timeout. Shard counts
+ * drift as test files land, so treat any number written here as stale.
+ * Do NOT hand-derive the eval:bg:* detach timeouts from a snapshot of
  * these counts — test/eval-detach-timeout-floor.test.ts recomputes the bound
  * from the live shard census every run and fails CI if package.json's numbers
  * dip below it (undersized detach timeouts recreate never-started truncation).

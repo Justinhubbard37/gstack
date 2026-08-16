@@ -5,7 +5,7 @@
 **The full ~7,000-test suite in about 90 seconds, verified honest.**
 **Paid evals now bill by diff, not $38 flat.**
 
-`bun run test` used to take 454 seconds. It now runs as six concurrent shard processes and finishes in about 90 to 100 seconds, under a strict output contract: a shard that exits without bun's own terminal summary line is a failure, a wedged shard is killed at a size-scaled deadline and named in the epilogue, and the console shows only what you need (per-shard status, then `✗ file — test name` for anything red, full stream in a per-run log, `--verbose` for the firehose). Twelve test files that ran under no script and no CI are wired in. A 3,372-line dead eval monolith is deleted, with four never-run tests revived out of it.
+`bun run test` used to take 454 seconds. It now runs as up to six concurrent shard processes and finishes in about 90 to 100 seconds, under a strict output contract: a shard that exits without bun's own terminal summary line is a failure, a wedged shard is killed at a size-scaled deadline and named in the epilogue, and the console shows only what you need (per-shard status, then `✗ file — test name` for anything red, full stream in a per-run log, `--verbose` for the firehose). Twelve test files that ran under no script and no CI are wired in. A 3,372-line dead eval monolith is deleted, with four never-run tests revived out of it.
 
 Paid evals select by diff. Edit one skill and the runner executes only the shards your change touches, reports the rest as skipped-by-diff, and prints the reason. Selection sees uncommitted and untracked work, fails closed with a named cause on git errors, and an edit to the selection data itself re-runs only the changed keys instead of forcing the full suite.
 
@@ -41,7 +41,7 @@ Runs you used to schedule around now fit inside a thought. `bun run test` before
 - Free suite architecture: N concurrent shard processes (serial within each); tree-mutating tests and tree-measuring ratchet readers run in one serial shard after the parallel phase, so measurements never race regeneration. Shard curation lists are pinned against the live file census, and wall deadlines scale with shard size.
 - Agent SDK capture default Opus → Sonnet (D1a). The judge default stays Sonnet: a live A/B on the health rubric scored Haiku 2/2/2 against Sonnet's 4/3/4, so the downgrade was pinned back per D1a's regressor clause (receipts in `test/helpers/llm-judge.ts`).
 - Four expensive posture tests demoted gate → periodic (D2a).
-- Paid runners: `EVALS_JOBS` (shard process count) split from `EVALS_CONCURRENCY` (within-shard), `--retry 1` on every paid path, one preflight API ping per run instead of ~30, detach timeouts floor-enforced against the live shard census by `test/eval-detach-timeout-floor.test.ts`.
+- Paid runners: `EVALS_JOBS` (shard process count) split from `EVALS_CONCURRENCY` (within-shard), `--retry 1` on every retry-bearing paid path, one preflight API ping per run instead of ~30, detach timeouts floor-enforced against the live shard census by `test/eval-detach-timeout-floor.test.ts`.
 - CI: eval Docker image cache keyed on Dockerfile + bun.lock so version bumps stop rebuilding it; Bun 1.3.13 in the image; `skill-e2e-review` split into three matrix shards; actionlint runs a digest-pinned prebuilt image; five single-core jobs right-sized; lint and skill-docs stop double-running every PR commit; the Windows lane caches bun installs and runs the curated suite instead of a hand list.
 - Skill-routing E2E fixture installs skill heads, not ~18 full SKILL.md files.
 

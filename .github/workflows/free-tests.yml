@@ -30,8 +30,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Keyed on the PR number, not head_ref: a bare branch name carries no fork
+# prefix, so same-name branches from two forks would share one group and a
+# push to fork B's PR would cancel fork A's in-flight REQUIRED check.
 concurrency:
-  group: free-tests-${{ github.head_ref || github.run_id }}
+  group: free-tests-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 # Least privilege: this job executes PR-controlled code (install lifecycle
@@ -94,3 +97,16 @@ jobs:
 
       - name: Run free suite
         run: bun run test:free
+
+      # The runner streams the full child output to per-run logs under the OS
+      # tmpdir and prints only the quiet contract to the console. Without this
+      # upload, a red required check names WHICH test failed but the why
+      # (assertion detail, stack) dies with the runner — every diagnosis would
+      # need a local re-run, which fork contributors can't do on this image.
+      - name: Upload shard logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-test-shard-logs
+          path: /tmp/gstack-free-test-*.log
+          if-no-files-found: ignore

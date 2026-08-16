@@ -12,7 +12,7 @@
  *   per-kind default                                         — last resort
  *
  * Kinds and their defaults:
- *   capture — AskUserQuestion SDK capture runs (quality matters): opus
+ *   capture — AskUserQuestion SDK capture runs: sonnet (D1a)
  *   warmup  — PTY warm-up ping (cheapest thing that answers): haiku
  *   distill — free-text distillation (cheap, structured): haiku (pinned)
  */
