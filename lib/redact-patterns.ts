@@ -263,7 +263,11 @@ export function insideUuid(match: RegExpExecArray): boolean {
  * Shared by db.url_with_password and creds.basic_auth_url so the two
  * validators cannot drift.
  */
-const INTERPOLATED_PASSWORD_RE = /^(\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Z_][A-Z0-9_]*)$/;
+// Fully-braced `${...}` spanning the whole password segment is template code
+// regardless of content — `${dbPass}` and `${encodeURIComponent(dbPass)}`
+// alike (the identifier-only form flagged the DSN-encoding call site as a
+// pushed secret). Bare `$word` stays uppercase-only: `$hunter2` must block.
+const INTERPOLATED_PASSWORD_RE = /^(\$\{.+\}|\$[A-Z_][A-Z0-9_]*)$/;
 function urlPasswordIsPlaceholder(span: string): boolean {
   const m = span.match(/:\/\/[^:]+:([^@]+)@/);
   const pw = m?.[1] ?? "";

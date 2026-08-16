@@ -119,8 +119,13 @@ describe("HIGH credential patterns", () => {
     // still block (both-braces-optional would have let it through).
     expect(ids("postgres://user:$DB_PASSWORD@host/app")).not.toContain("db.url_with_password");
     expect(ids("postgres://admin:$" + "hun" + "ter2@db.internal/app")).toContain("db.url_with_password");
-    // Mismatched brace is not an interpolation either.
-    expect(ids("postgres://admin:${dbPass@db.internal/app")).toContain("db.url_with_password");
+    // Mismatched brace is not an interpolation either (assembled at runtime
+    // so this file's own pushed bytes carry no blockable URL shape).
+    expect(ids("postgres://admin:${" + "dbPass@db.internal/app")).toContain("db.url_with_password");
+    // A fully-braced interpolation is code whatever it contains — the DSN
+    // builder's `${encodeURIComponent(dbPass)}` call site must not scan as a
+    // pushed secret.
+    expect(ids("postgresql://user:${encodeURIComponent(dbPass)}@host:5432/db")).not.toContain("db.url_with_password");
     // A LOWERCASE literal 'password'/'pass' at the URL-password position is a
     // real (terrible) credential, not a doc placeholder — only the ALL-CAPS
     // doc convention (USER:PASSWORD) is suppressed. Assembled at runtime so
