@@ -1,5 +1,58 @@
 # Changelog
 
+## [1.66.1.0] - 2026-08-16
+
+**Every claim gstack makes now binds to the content it was made on.**
+**Tracker text is data. Guard hooks actually guard.**
+
+Reviews and test results used to be prose claims: "review is recent" meant a commit-count guess that a rebase could crash, and "tests passed" meant trusting output from a tree that may have changed since. Both now carry a working-tree content fingerprint (`bin/gstack-wtree`, ~0.2s). A review of identical content grades CURRENT through rebases, amends, and squashes. A test run recorded by the new `bin/gstack-evidence` ledger stays citable at /ship's verification gate only while the content is byte-identical (release files carve out), the command hash matches, and nothing edited the tree mid-run. /ship and /land-and-deploy cite fresh evidence instead of re-running, and re-run live when anything moved.
+
+PR bodies, PR comments, and model-judged issue titles now enter agent context only through a trust envelope (`bin/gstack-issue-guard`): content is data even when clean, injection-shaped lines get labeled through fullwidth and invisible-character evasion, forged envelope banners are defused, and a CI scanner fails the suite on any raw tracker-text read at all 8 ingress points. Write-backs keep a raw artifact so envelope markup can never reach a live PR.
+
+/freeze now fails closed: unparseable payloads, quote or newline paths (the deny used to silently no-op on them), boundaries with spaces, symlinks pointing outside the boundary, and a broken install all block instead of passing. /careful gains a hard-deny tier for `rm -rf /`-class deletes and force-pushes to the default branch — including the flag-less `git push origin +main` form and quoted or refspec targets — plus additive-only custom warn patterns that can never weaken the built-ins.
+
+### The numbers that matter
+
+Measured on this branch; re-run with `bun test`, `time bin/gstack-wtree`, and the commands in each bin's header.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Review staleness on rebased/amended identical content | crash or STALE | CURRENT | correct |
+| "Tests passed" binding | none (prose) | content fingerprint + command hash + max-age | new |
+| Tracker-text ingress points enveloped | 0 | 8, CI-scanner enforced | new |
+| /freeze deny on hostile/edge paths | silent no-op | blocks, fail-closed | fixed |
+| Working-tree fingerprint cost | — | ~0.09s warm (stat-cache seeded, 40x vs naive) | new |
+| Adversarial findings fixed pre-merge | — | 50 (4 specialists + red team + fresh-context pass), 6 critical | — |
+
+The fingerprint survives commits of identical content, so the common flow — test on a dirty tree, commit, ship — keeps its evidence valid, while one untracked new source file invalidates it.
+
+### What this means for you
+
+/ship stops re-running suites the content already proved green and stops trusting suites the content has outgrown — the IRON LAW is now a mechanical check, not an honor system. A hostile PR comment can no longer speak to your agent with authority, and /guard's boundary actually holds on the paths where it used to silently fail. Nothing to configure: the bins ship wired into /ship, /land-and-deploy, /review, /spec, and /document-release.
+
+### Itemized changes
+
+### Added
+- `bin/gstack-wtree` — working-tree content fingerprint (temp-index, stat-cache-seeded; identical hash to a full re-hash at ~40x less cost).
+- `bin/gstack-evidence` — verification-evidence ledger: `run` wraps any command transparently (exit code always passes through; 0600 per-run logs with 2MB cap and 30-day prune; HIGH credentials in commands stored redacted; mid-run tree edits void the fingerprint) and `check` grades FRESH/STALE/MISSING per label with `--expect-cmd`, `--max-age`, and `--allow-paths` binding.
+- `lib/tracker-guard.ts` + `bin/gstack-issue-guard` — trust envelope for tracker text: envelope-always, detection-only NFKC + full Unicode format-character sweep, banner-forgery defusal, no-envelope-on-fetch-failure, numeric argv validation.
+- `/careful` HIGH tier (hard deny: root/home recursive deletes incl. `--no-preserve-root` and `/*` forms; default-branch force-pushes incl. plus-refspec, refspec-colon, and quoted targets; simple commands only, `--force-with-lease` never matches) and additive-only project warn patterns (`~/.gstack/careful-patterns.txt`, per-project variant).
+- CI wiring scanner (`test/tracker-guard-wiring.test.ts`) failing the suite on raw tracker-text reads outside the guard, with reasoned, liveness-checked exemptions; template-drift tripwire pinning the grading rules and the write-side banner tripwire.
+
+### Changed
+- Review records (`bin/gstack-review-log`) stamp `commit_full`/`tree`/`dirty`/`wtree` authoritatively — caller-supplied binding fields are ignored; `bin/gstack-review-read` emits `---WTREE---`/`---TREE---`/`---DIRTY---`; the /ship dashboard and /land-and-deploy grade diff-scoped reviews content-first (plan-tier reviews keep time-based logic), and a rebased-away commit grades UNKNOWN instead of erroring.
+- /ship Step 5 test lanes run wrapped with per-lane labels and per-run logs (no shared /tmp collisions between concurrent ships); Step 16 and /land-and-deploy 3.5b check the ledger first and cite fresh evidence, advisory-never-blocking.
+- /document-release PR/MR body updates use a two-artifact flow (enveloped copy for reading, raw copy for the splice-and-write-back) with a banner tripwire that compares against the fetched original.
+- /spec issue-title dedupe reads titles through the envelope and distinguishes pipeline failure from zero matches instead of silently skipping.
+
+### Fixed
+- /freeze: five boundary defects — deny JSON silently no-oped on quote/newline paths, internal spaces in the boundary path were stripped (space-bearing project dirs could never match), symlink final components weren't resolved (in-boundary symlink wrote outside the boundary), the JSON extractor truncated at escaped quotes and failed open, and a missing helper file passed edits through instead of blocking.
+- /careful and /freeze now share one JSON extractor and one analytics writer (both honor `GSTACK_HOME`), ending the two-copy drift that let one hook keep a bug the other had fixed.
+
+### For contributors
+- `test/helpers/scratch-repo.ts` — shared hermetic git fixture (identity pinned, gpg signing disabled so fixture commits never invoke the operator's gpg-agent) and a PATH `gh` shim for exercising real gh success/failure branches.
+- ~150 new tests across six files, including the keystone case: evidence recorded on a dirty tree stays FRESH after committing the exact tested content.
+
 ## [1.66.0.0] - 2026-08-15
 
 **The full ~7,000-test suite in about 90 seconds, verified honest.**
