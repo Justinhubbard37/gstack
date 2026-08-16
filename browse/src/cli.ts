@@ -270,15 +270,62 @@ async function killOrphanChromium(profileDir: string = chromiumProfileDir()): Pr
   }
 }
 
-/** Bounded /health probe. Returns true if the server answers within `attempts`
- * tries spaced `backoffMs` apart — distinguishes a busy-but-alive daemon from a
- * dead one (#1781) so a slow server isn't killed and restarted into a crash-loop. */
-async function probeHealthWithBackoff(port: number, attempts = 3, backoffMs = 250): Promise<boolean> {
-  for (let i = 0; i < attempts; i++) {
+/** Total wall-clock budget for the busy-vs-dead health probe (#2219,
+ * decision F10). The old ~1s window (3 × 250ms) was shorter than how long a
+ * daemon stays unresponsive while Chromium chews a heavy dev-mode page with a
+ * timed-out navigation still in flight — so live daemons got killed and every
+ * kill lost the session's cookies/tabs/logins. ~8s covers the observed busy
+ * windows; past it we REPORT busy instead of killing (never auto-kill). */
+export const HEALTH_PROBE_TOTAL_BUDGET_MS = 8_000;
+
+/** Bounded /health probe. Returns true if the server answers within the
+ * total budget — distinguishes a busy-but-alive daemon from a dead one
+ * (#1781, #2219) so a slow server isn't killed and restarted into a
+ * crash-loop. Each individual probe self-bounds at 2s (isServerHealthy). */
+async function probeHealthWithBackoff(
+  port: number,
+  totalBudgetMs = HEALTH_PROBE_TOTAL_BUDGET_MS,
+  intervalMs = 500,
+): Promise<boolean> {
+  const deadline = Date.now() + totalBudgetMs;
+  for (;;) {
     if (await isServerHealthy(port)) return true;
-    if (i < attempts - 1) await Bun.sleep(backoffMs);
+    if (Date.now() + intervalMs >= deadline) return false;
+    await Bun.sleep(intervalMs);
   }
-  return false;
+}
+
+export type DaemonRestartAction =
+  | 'retry-command'   // healthy again after the bounded probe — retry against the SAME daemon
+  | 'report-busy'     // alive but unresponsive — report + nonzero exit, daemon untouched
+  | 'force-restart'   // alive but the user explicitly passed --force-restart
+  | 'restart-dead';   // process is gone — safe to clean up and restart
+
+/**
+ * Decide what to do about a daemon that failed to answer (#2219, decision 9).
+ *
+ * IRON RULE: an alive pid is NEVER auto-killed. A kill loses the session's
+ * tabs, cookies, and logins — strictly worse than a slow command. The ONLY
+ * path that kills a live daemon is the user explicitly passing
+ * --force-restart. Pure and exported for unit coverage.
+ */
+export function decideDaemonRestart(opts: {
+  pidAlive: boolean;
+  healthyAfterProbe: boolean;
+  forceRestart: boolean;
+}): DaemonRestartAction {
+  if (opts.pidAlive && opts.healthyAfterProbe) return 'retry-command';
+  if (opts.pidAlive && opts.forceRestart) return 'force-restart';
+  if (opts.pidAlive) return 'report-busy';
+  return 'restart-dead';
+}
+
+/** The busy report (F10): what happened, what to do, what a force costs. */
+function reportDaemonBusyAndExit(pid: number): never {
+  console.error(`[browse] Daemon busy — process ${pid} is alive but did not answer /health within ~${HEALTH_PROBE_TOTAL_BUDGET_MS / 1000}s.`);
+  console.error('[browse] Retry shortly (heavy page loads pass), or force a restart — which LOSES tabs, cookies, and logins:');
+  console.error('[browse]   browse --force-restart <command>');
+  process.exit(1);
 }
 
 /**
@@ -483,7 +530,12 @@ async function ensureServer(flags?: GlobalFlags): Promise<ServerState> {
   // Health-check-first: HTTP is definitive proof the server is alive and responsive.
   // This replaces the PID-gated approach which breaks on Windows (Bun's process.kill
   // always throws ESRCH for Windows PIDs in compiled binaries).
-  if (state && await isServerHealthy(state.port)) {
+  //
+  // #2219: when the single 2s probe fails but the PID is alive, extend to the
+  // bounded ~8s probe before concluding anything — a daemon chewing a heavy
+  // page is busy, not dead, and killing it loses the session.
+  const daemonPidAlive = Boolean(state?.pid && isProcessAlive(state.pid));
+  if (state && (await isServerHealthy(state.port) || (daemonPidAlive && await probeHealthWithBackoff(state.port)))) {
     // D2 daemon-mismatch check: existing daemon's configHash must match the
     // CLI's resolved hash. If --proxy or --headed are passed and the existing
     // daemon was started with different config, refuse with a `disconnect`
@@ -529,6 +581,18 @@ async function ensureServer(flags?: GlobalFlags): Promise<ServerState> {
     console.error(`[browse] Headed server running (PID ${state.pid}) but not responding.`);
     console.error(`[browse] Run '/open-gstack-browser' to restart.`);
     process.exit(1);
+  }
+
+  // #2219 IRON RULE: never auto-kill an alive pid. The daemon didn't answer
+  // /health within the bounded ~8s budget but its process is alive — that's
+  // busy, not dead. Report + nonzero exit; only an explicit --force-restart
+  // proceeds to the kill-and-restart below.
+  if (state && daemonPidAlive) {
+    if (flags?.forceRestart) {
+      console.error('[browse] --force-restart: replacing live-but-unresponsive daemon (tabs/cookies/logins will be lost)...');
+    } else {
+      reportDaemonBusyAndExit(state.pid);
+    }
   }
 
   // Ensure state directory exists before lock acquisition (lock file lives there)
@@ -657,18 +721,34 @@ async function sendCommand(state: ServerState, command: string, args: string[], 
     // Connection error — server may have crashed, OR may just be busy.
     if (err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET' || err.message?.includes('fetch failed')) {
       const oldState = readState();
-      // #1781 busy-vs-dead: a single-threaded daemon under beacon/extension load
-      // can briefly stop answering HTTP while still alive. Before declaring a
-      // crash, if the process is alive give /health a bounded chance to recover
-      // and just retry the command — never kill+restart a live-but-busy server.
-      if (oldState?.pid && isProcessAlive(oldState.pid) && await probeHealthWithBackoff(oldState.port)) {
+      // #1781/#2219 busy-vs-dead: a single-threaded daemon under beacon/
+      // extension load (or with a timed-out navigation still churning) can
+      // stop answering HTTP for seconds while fully alive. Give /health a
+      // bounded ~8s to recover, then decide via the pure rule: retry against
+      // the same daemon, report busy (NEVER kill an alive pid), or restart a
+      // genuinely dead one. Only --force-restart may kill a live daemon.
+      const pidAlive = Boolean(oldState?.pid && isProcessAlive(oldState.pid));
+      const healthyAfterProbe = pidAlive ? await probeHealthWithBackoff(oldState!.port) : false;
+      const action = decideDaemonRestart({
+        pidAlive,
+        healthyAfterProbe,
+        forceRestart: Boolean(_globalFlags?.forceRestart),
+      });
+      if (action === 'retry-command') {
         if (retries >= 1) throw new Error('[browse] Server unresponsive after retry — aborting');
         console.error('[browse] Server was briefly unresponsive (busy); retrying command...');
-        return sendCommand(oldState, command, args, retries + 1);
+        return sendCommand(oldState!, command, args, retries + 1);
       }
-      // Truly dead (or health never recovered) → restart.
+      if (action === 'report-busy') {
+        reportDaemonBusyAndExit(oldState!.pid);
+      }
+      // 'restart-dead' or explicit 'force-restart' → restart.
       if (retries >= 1) throw new Error('[browse] Server crashed twice in a row — aborting');
-      console.error('[browse] Server connection lost. Restarting...');
+      if (action === 'force-restart') {
+        console.error('[browse] --force-restart: killing live daemon and restarting (tabs/cookies/logins will be lost)...');
+      } else {
+        console.error('[browse] Server connection lost. Restarting...');
+      }
       if (oldState && oldState.pid) {
         await killServer(oldState.pid);
       }
@@ -845,6 +925,9 @@ export interface GlobalFlags {
   configHash: string;
   /** Redacted form of proxyUrl, safe for logs. */
   redactedProxyUrl: string;
+  /** Whether --force-restart was passed (#2219): the ONLY thing that may
+   * kill a live-but-unresponsive daemon. */
+  forceRestart: boolean;
 }
 
 /**
@@ -858,9 +941,11 @@ export function extractGlobalFlags(rawArgs: string[], env: NodeJS.ProcessEnv): G
   const out: string[] = [];
   let proxyUrl: string | null = null;
   let headed = false;
+  let forceRestart = false;
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
+    if (arg === '--force-restart') { forceRestart = true; continue; }
     if (arg === '--proxy') {
       const value = rawArgs[i + 1];
       if (!value) {
@@ -903,6 +988,7 @@ export function extractGlobalFlags(rawArgs: string[], env: NodeJS.ProcessEnv): G
     headed,
     configHash: computeConfigHash({ proxyUrl: canonicalProxyUrl, headed }),
     redactedProxyUrl: redactProxyUrl(canonicalProxyUrl),
+    forceRestart,
   };
 }
 
@@ -1108,6 +1194,8 @@ Multi-step:     chain (reads JSON from stdin)
 Tabs:           tabs | tab <id> | newtab [url] | closetab [id]
 Server:         status | cookie <n>=<v> | header <n>:<v>
                 useragent <str> | stop | restart
+                --force-restart: replace a live-but-busy daemon (any command;
+                LOSES tabs/cookies/logins — never done automatically)
 Dialogs:        dialog-accept [text] | dialog-dismiss
 
 Refs:           After 'snapshot', use @e1, @e2... as selectors:
@@ -1138,12 +1226,35 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
           process.exit(0);
         }
       } catch {
-        // Headed server alive but not responding — kill and restart
+        // Headed server alive but not responding — handled below (#2219:
+        // busy semantics; only --force-restart may kill it).
       }
     }
 
-    // Kill ANY existing server (SIGTERM → wait 2s → SIGKILL)
+    // #2219 IRON RULE: a HEALTHY daemon survives connect. The old behavior
+    // ("kill ANY existing server") silently destroyed a working headless
+    // session — tabs, cookies, logins — whenever someone opened the headed
+    // browser. A live daemon is only replaced with explicit consent.
+    if (existingState && isProcessAlive(existingState.pid) && !globalFlags.forceRestart) {
+      if (await isServerHealthy(existingState.port)) {
+        console.error(`[browse] A healthy daemon is already running (PID ${existingState.pid}, ${existingState.mode} mode).`);
+        console.error('[browse] Connecting headed would kill it and lose its tabs/cookies/logins.');
+        console.error("[browse] Run 'browse disconnect' first, or pass --force-restart to replace it.");
+        process.exit(1);
+      }
+      // Alive but unhealthy after the bounded probe → busy, not dead.
+      if (await probeHealthWithBackoff(existingState.port)) {
+        console.error(`[browse] A healthy daemon is already running (PID ${existingState.pid}, ${existingState.mode} mode).`);
+        console.error("[browse] Run 'browse disconnect' first, or pass --force-restart to replace it.");
+        process.exit(1);
+      }
+      reportDaemonBusyAndExit(existingState.pid);
+    }
+
+    // Explicit --force-restart (or a dead pid): kill any remnant
+    // (SIGTERM → wait 2s → SIGKILL).
     if (existingState && isProcessAlive(existingState.pid)) {
+      console.error('[browse] --force-restart: replacing live daemon (tabs/cookies/logins will be lost)...');
       safeKill(existingState.pid, 'SIGTERM');
       await new Promise(resolve => setTimeout(resolve, 2000));
       if (isProcessAlive(existingState.pid)) {
@@ -1404,7 +1515,10 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       // In compiled binaries, process.argv[1] is /$bunfs/... (virtual).
       // Use process.execPath which is the real binary on disk.
       const browseBin = process.execPath;
-      const connectProc = Bun.spawn([browseBin, 'connect'], {
+      // --force-restart: the headed switch is this command's explicit purpose
+      // (the user asked to SEE the shared browser), and connect's #2219 guard
+      // would otherwise refuse to replace the healthy headless daemon.
+      const connectProc = Bun.spawn([browseBin, 'connect', '--force-restart'], {
         cwd: process.cwd(),
         stdio: ['ignore', 'inherit', 'inherit'],
         // Disable parent-PID monitoring: pair-agent needs the server to outlive
