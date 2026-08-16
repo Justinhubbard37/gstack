@@ -17,10 +17,13 @@
 
 import { runProvision } from '../lib/gbrain-supabase-provision';
 
+// exitCode, not process.exit(): exit() drops pending stdout writes, which
+// truncates piped JSON / large listings; setting exitCode lets writes drain
+// and the process exit naturally.
 runProvision(process.argv.slice(2)).then(
-  (code) => process.exit(code),
+  (code) => { process.exitCode = code; },
   (error) => {
     process.stderr.write(`gstack-gbrain-supabase-provision: ${(error as Error)?.stack ?? error}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   },
 );

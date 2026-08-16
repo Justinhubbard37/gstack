@@ -403,6 +403,27 @@ describe('pooler-url', () => {
     expect(j.pooler_url).not.toContain('[PASSWORD]');
   });
 
+  test('percent-encodes reserved characters in DB_PASS (DSN stays parseable)', async () => {
+    // Raw interpolation of a password containing / # ? % @ changes URI
+    // structure: provisioning succeeds, every consumer then fails to parse
+    // the DSN — an unusable billable orphan.
+    mock = startMock({
+      [`GET /v1/projects/${REF}/config/database/pooler`]: () => jsonResp(POOLER_OK),
+    });
+    const r = await runCmd(['pooler-url', REF, '--json'], {
+      SUPABASE_ACCESS_TOKEN: 'sbp_test',
+      DB_PASS: 'p@ss/w#rd?100%',
+      SUPABASE_API_BASE: mock.url,
+    });
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.pooler_url).toBe(
+      `postgresql://postgres.${REF}:${encodeURIComponent('p@ss/w#rd?100%')}@aws-0-us-east-1.pooler.supabase.com:6543/postgres`
+    );
+    // The password segment must parse back out intact.
+    expect(decodeURIComponent(new URL(j.pooler_url).password)).toBe('p@ss/w#rd?100%');
+  });
+
   test('handles array response by preferring session pool_mode entry', async () => {
     mock = startMock({
       [`GET /v1/projects/${REF}/config/database/pooler`]: () =>

@@ -250,6 +250,7 @@ async function apiCall(ctx: Ctx, method: string, apipath: string, body?: string)
     }
 
     let res: Response;
+    let text: string;
     try {
       res = await ctx.fetchImpl(url, {
         method,
@@ -262,6 +263,10 @@ async function apiCall(ctx: Ctx, method: string, apipath: string, body?: string)
         body,
         signal: AbortSignal.timeout(CURL_TIMEOUT_MS),
       });
+      // Body read stays INSIDE the transport try: a server that sends
+      // headers then resets or stalls the stream is a transport failure
+      // (retry, then exit 8) — not an uncaught exception at exit 1.
+      text = await res.text();
     } catch {
       // Transport failure (connect refused, timeout, DNS). Best-effort
       // outcome record, then retry — same as the bash curl-failed branch.
@@ -278,7 +283,6 @@ async function apiCall(ctx: Ctx, method: string, apipath: string, body?: string)
       continue;
     }
 
-    const text = await res.text();
     try {
       writeOutcome({ env: ctx.env, receipt: receiptId, status: 'exit:0' });
     } catch {
@@ -508,7 +512,11 @@ async function cmdPoolerUrl(ctx: Ctx, args: string[]): Promise<void> {
     poolMode = 'session';
   }
 
-  const url = `postgresql://${dbUser}:${dbPass}@${dbHost}:${dbPort}/${dbName}`;
+  // Percent-encode the password segment: DB_PASS is caller-controlled and a
+  // reserved character (/ # ? % @) changes URI structure — the project
+  // provisions fine and then every consumer fails to parse the DSN, leaving
+  // an unusable billable orphan.
+  const url = `postgresql://${dbUser}:${encodeURIComponent(dbPass)}@${dbHost}:${dbPort}/${dbName}`;
 
   if (jsonMode) {
     ctx.stdout(JSON.stringify({ ref, pooler_url: url }, null, 2) + '\n');
