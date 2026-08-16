@@ -28,6 +28,7 @@ import {
   launchWithXProtectHeal,
   resetXProtectHealForTests,
   buildXProtectGuidance,
+  runBoundedChromiumReinstall,
 } from '../src/xprotect-heal';
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..');
@@ -389,5 +390,68 @@ describe('buildXProtectGuidance', () => {
     expect(out).toContain('original launch error');
     expect(out).toContain('bunx playwright install chromium');
     expect(out).toContain('#2554');
+  });
+});
+
+// ─── runBoundedChromiumReinstall (T3) — previously zero coverage ──────────
+//
+// Exercised end-to-end against a STUB `bunx` on a prepended PATH: real spawn,
+// real process group, real timer — only the binary is fake. Shell stubs
+// don't exist on Windows, and the group-kill path is POSIX (`kill(-pid)`),
+// so the suite is Unix-only like the shape it tests.
+describe.skipIf(process.platform === 'win32')('runBoundedChromiumReinstall', () => {
+  let stubDir: string;
+  let savedPath: string | undefined;
+
+  function installStubBunx(script: string): void {
+    const stub = path.join(stubDir, 'bunx');
+    fs.writeFileSync(stub, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+  }
+
+  beforeEach(() => {
+    stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xprotect-stub-'));
+    savedPath = process.env.PATH;
+    process.env.PATH = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
+  });
+
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    fs.rmSync(stubDir, { recursive: true, force: true });
+  });
+
+  it('resolves ok on exit 0', async () => {
+    installStubBunx('exit 0');
+    const result = await runBoundedChromiumReinstall(stubDir, 10_000);
+    expect(result).toEqual({ ok: true, exitCode: 0 });
+  });
+
+  it('reports install-exit-N with the stderr tail on a nonzero exit', async () => {
+    installStubBunx('echo "download failed: mirror unreachable" >&2\nexit 7');
+    const result = await runBoundedChromiumReinstall(stubDir, 10_000);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(7);
+    expect(result.reason).toStartWith('install-exit-7');
+    expect(result.reason).toContain('download failed: mirror unreachable');
+  });
+
+  it('group-kills a hung install at timeoutMs and reports timeout', async () => {
+    // The stub spawns its own child (like bunx → playwright CLI → download
+    // workers) and sleeps well past the bound; the detached process group
+    // must take BOTH down, and the result must arrive at ~timeoutMs, not
+    // after the sleep.
+    installStubBunx('sleep 30 &\nsleep 30');
+    const started = Date.now();
+    const result = await runBoundedChromiumReinstall(stubDir, 500);
+    const elapsed = Date.now() - started;
+    expect(result).toEqual({ ok: false, reason: 'timeout' });
+    expect(elapsed).toBeLessThan(5_000); // resolved at the bound, not the sleep
+  });
+
+  it('reports spawn-error when the binary cannot be executed', async () => {
+    // No stub installed and PATH reduced to the empty stub dir only.
+    process.env.PATH = stubDir;
+    const result = await runBoundedChromiumReinstall(stubDir, 10_000);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toStartWith('spawn-error:');
   });
 });

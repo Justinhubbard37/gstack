@@ -40,8 +40,48 @@ describe('#2461 daemon log wiring', () => {
 
   test('log sink is append-mode (accumulates across respawns)', () => {
     const cli = SRC('cli.ts');
-    expect(cli).toMatch(/openSync\(path\.join\(config\.stateDir, 'browse-daemon\.log'\), 'a'\)/);
+    // Both spawn paths open through the single daemonLogPath() source (M4),
+    // which itself must build from the state dir.
+    expect(cli).toMatch(/openSync\(daemonLogPath\(\), 'a'\)/);
+    expect(cli).toMatch(/path\.join\(config\.stateDir, 'browse-daemon\.log'\)/);
     expect(cli).toMatch(/openSync\(\$\{daemonLogPathStr\},'a'\)/);
+  });
+
+  test('append-mode log is growth-bounded: rotated at 10MB before daemon start', () => {
+    const cli = SRC('cli.ts');
+    expect(cli).toMatch(/DAEMON_LOG_MAX_BYTES = 10 \* 1024 \* 1024/);
+    expect(cli).toMatch(/rotateDaemonLogIfOversized\(\);/);
+    // Single generation: rename to .1, matching the repo's 10MB conventions.
+    expect(cli).toMatch(/renameSync\(p, `\$\{p\}\.1`\)/);
+  });
+
+  test('rotation behavior: oversized rotates to a single .1 generation, small/missing are no-ops', () => {
+    const os = require('os');
+    const { rotateDaemonLogIfOversized } = require('../src/cli');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-daemon-log-'));
+    try {
+      const p = path.join(tmp, 'browse-daemon.log');
+      // Missing log: no throw (first launch).
+      rotateDaemonLogIfOversized(p, 1024);
+      // Under the cap: untouched, no generation created.
+      fs.writeFileSync(p, 'x'.repeat(10));
+      rotateDaemonLogIfOversized(p, 1024);
+      expect(fs.existsSync(p)).toBe(true);
+      expect(fs.existsSync(`${p}.1`)).toBe(false);
+      // Over the cap: rotated out of the way so the daemon starts fresh.
+      fs.writeFileSync(p, 'y'.repeat(2048));
+      rotateDaemonLogIfOversized(p, 1024);
+      expect(fs.existsSync(p)).toBe(false);
+      expect(fs.readFileSync(`${p}.1`, 'utf-8')).toContain('y');
+      // Single generation: the next rotation REPLACES .1 (bounded at ~2x cap
+      // total, never a .2).
+      fs.writeFileSync(p, 'z'.repeat(2048));
+      rotateDaemonLogIfOversized(p, 1024);
+      expect(fs.readFileSync(`${p}.1`, 'utf-8')).toContain('z');
+      expect(fs.existsSync(`${p}.2`)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   test('bun-polyfill routes Windows spawns through cross-spawn (ENOENT + cmd.exe injection fix)', () => {

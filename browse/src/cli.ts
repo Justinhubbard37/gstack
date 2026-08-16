@@ -146,10 +146,10 @@ function readState(): ServerState | null {
  * HTTP health check — definitive proof the server is alive and responsive.
  * Used in all polling loops instead of isProcessAlive() (which is slow on Windows).
  */
-export async function isServerHealthy(port: number): Promise<boolean> {
+export async function isServerHealthy(port: number, timeoutMs = 2000): Promise<boolean> {
   try {
     const resp = await fetch(`http://127.0.0.1:${port}/health`, {
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!resp.ok) return false;
     const health = await resp.json() as any;
@@ -281,7 +281,13 @@ export const HEALTH_PROBE_TOTAL_BUDGET_MS = 8_000;
 /** Bounded /health probe. Returns true if the server answers within the
  * total budget — distinguishes a busy-but-alive daemon from a dead one
  * (#1781, #2219) so a slow server isn't killed and restarted into a
- * crash-loop. Each individual probe self-bounds at 2s (isServerHealthy). */
+ * crash-loop.
+ *
+ * P4 wall-time honesty: every call site reaches here right after a probe or
+ * command already failed, so iterations START with the sleep (an immediate
+ * re-probe would just re-fail), and each probe's timeout is clamped to the
+ * remaining budget — otherwise the last 2s probe could start 1ms before the
+ * deadline and the reported "~8s" budget would really be ~10s. */
 async function probeHealthWithBackoff(
   port: number,
   totalBudgetMs = HEALTH_PROBE_TOTAL_BUDGET_MS,
@@ -289,9 +295,11 @@ async function probeHealthWithBackoff(
 ): Promise<boolean> {
   const deadline = Date.now() + totalBudgetMs;
   for (;;) {
-    if (await isServerHealthy(port)) return true;
     if (Date.now() + intervalMs >= deadline) return false;
     await Bun.sleep(intervalMs);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    if (await isServerHealthy(port, Math.min(2000, remainingMs))) return true;
   }
 }
 
@@ -318,6 +326,18 @@ export function decideDaemonRestart(opts: {
   if (opts.pidAlive && opts.forceRestart) return 'force-restart';
   if (opts.pidAlive) return 'report-busy';
   return 'restart-dead';
+}
+
+/** #2219 IRON RULE refusal for `connect`: a live daemon is never replaced
+ * without explicit consent. Single source for the refusal text (M7) — the
+ * two call sites (healthy fast-path, busy-but-alive after the bounded probe)
+ * previously duplicated it, and the tabs/cookies/logins explainer had
+ * already drifted out of one of them. */
+function refuseHeadedOverLiveDaemon(state: { pid: number; mode?: string }): never {
+  console.error(`[browse] A healthy daemon is already running (PID ${state.pid}, ${state.mode} mode).`);
+  console.error('[browse] Connecting headed would kill it and lose its tabs/cookies/logins.');
+  console.error("[browse] Run 'browse disconnect' first, or pass --force-restart to replace it.");
+  process.exit(1);
 }
 
 /** The busy report (F10): what happened, what to do, what a force costs. */
@@ -378,9 +398,38 @@ function raiseHeadedWindowMacOS(): void {
 // F6 log hygiene: nothing that reaches the daemon's stdout/stderr may carry
 // an auth token or unsanitized page-derived strings —
 // browse/test/daemon-log-hygiene.test.ts pins this with needle tests.
+//
+// Single source for the log path (M4): the Unix fd-open path and the Windows
+// launcher string both build it, and a drifted spelling would silently split
+// the daemon's history across two files.
+function daemonLogPath(): string {
+  return path.join(config.stateDir, 'browse-daemon.log');
+}
+
+/** Append-mode growth bound: the log accumulates across every respawn (a
+ * crash-respawn loop would otherwise fill the disk), so on daemon start a
+ * log past 10MB (the repo's rotation convention — tunnel-denial-log.ts uses
+ * the same cap) is renamed to browse-daemon.log.1, single generation.
+ * Best-effort: a failed stat/rename must never block the launch.
+ * Path + cap injectable for unit coverage; exported for the same reason. */
+export const DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024;
+export function rotateDaemonLogIfOversized(
+  p: string = daemonLogPath(),
+  maxBytes: number = DAEMON_LOG_MAX_BYTES,
+): void {
+  try {
+    if (fs.statSync(p).size > maxBytes) {
+      fs.renameSync(p, `${p}.1`);
+    }
+  } catch {
+    // Missing log (first launch) or unwritable state dir — rotation is
+    // best-effort, the launch matters more.
+  }
+}
+
 function openDaemonLogSink(): number | 'ignore' {
   try {
-    return fs.openSync(path.join(config.stateDir, 'browse-daemon.log'), 'a');
+    return fs.openSync(daemonLogPath(), 'a');
   } catch {
     // stateDir not writable (permissions, disk full) — fall back to the
     // previous behavior rather than fail the whole launch over logging.
@@ -390,6 +439,9 @@ function openDaemonLogSink(): number | 'ignore' {
 
 async function startServer(extraEnv?: Record<string, string>): Promise<ServerState> {
   ensureStateDir(config);
+
+  // Bound the append-mode daemon log before the new daemon starts writing.
+  rotateDaemonLogIfOversized();
 
   // Clean up stale state file and error log
   safeUnlink(config.stateFile);
@@ -421,7 +473,7 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
     // to be opened from inside the launcher string too; an fd opened here
     // in cli.ts wouldn't cross the spawn boundary. Falls back to 'ignore'
     // the same way openDaemonLogSink() does if the state dir isn't writable.
-    const daemonLogPathStr = JSON.stringify(path.join(config.stateDir, 'browse-daemon.log'));
+    const daemonLogPathStr = JSON.stringify(daemonLogPath());
     const launcherCode =
       `const{spawn}=require('child_process');` +
       `const fs=require('fs');` +
@@ -1277,16 +1329,11 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     // browser. A live daemon is only replaced with explicit consent.
     if (existingState && isProcessAlive(existingState.pid) && !globalFlags.forceRestart) {
       if (await isServerHealthy(existingState.port)) {
-        console.error(`[browse] A healthy daemon is already running (PID ${existingState.pid}, ${existingState.mode} mode).`);
-        console.error('[browse] Connecting headed would kill it and lose its tabs/cookies/logins.');
-        console.error("[browse] Run 'browse disconnect' first, or pass --force-restart to replace it.");
-        process.exit(1);
+        refuseHeadedOverLiveDaemon(existingState);
       }
       // Alive but unhealthy after the bounded probe → busy, not dead.
       if (await probeHealthWithBackoff(existingState.port)) {
-        console.error(`[browse] A healthy daemon is already running (PID ${existingState.pid}, ${existingState.mode} mode).`);
-        console.error("[browse] Run 'browse disconnect' first, or pass --force-restart to replace it.");
-        process.exit(1);
+        refuseHeadedOverLiveDaemon(existingState);
       }
       reportDaemonBusyAndExit(existingState.pid);
     }

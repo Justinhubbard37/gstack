@@ -54,6 +54,15 @@ describe('process liveness probe (Windows terminal-agent leak)', () => {
     expect(isProcessAlive(2147483646)).toBe(false);
   });
 
+  test('2b. EPERM means ALIVE: an unsignalable-but-existing PID is not dead (T2)', () => {
+    // signal-0 to a process we lack permission over throws EPERM — the
+    // process EXISTS, we just can't signal it. Treating EPERM as "dead" is
+    // the false negative that leaked agents. PID 1 (launchd/init) on POSIX
+    // and PID 4 (System) on Windows always exist and are either signalable
+    // or EPERM — both must read as alive.
+    expect(isProcessAlive(process.platform === 'win32' ? 4 : 1)).toBe(true);
+  });
+
   test('3. isProcessAlive spawns NO subprocess on ANY platform (signal-0, #1952)', () => {
     // The heart of the bug: a liveness probe that forks is slow enough to
     // time out, and a timed-out probe silently answers "dead". Signal 0
