@@ -37,8 +37,13 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { extractVersion, isJsonVersionPath, setVersionInJson } from "../lib/version-source";
 
-const VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/;
+// 3- or 4-digit (#2501). gstack's own VERSION stays 4-digit MAJOR.MINOR.PATCH.
+// MICRO and stays the source of truth, but a repo whose pinned version source
+// is a package.json holds plain 3-digit semver, and rejecting it here meant
+// /ship could not write a version at all in such a repo. See lib/version-source.ts.
+const VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$/;
 const DEFAULT = "0.0.0.0";
 
 type State = "FRESH" | "ALREADY_BUMPED" | "DRIFT_STALE_PKG" | "DRIFT_UNEXPECTED";
@@ -64,9 +69,11 @@ function resolveVersionPath(cwd: string, explicit?: string): string {
   return join(cwd, "VERSION");
 }
 
-function readVersionFile(p: string): string {
+function readVersionFile(p: string, versionRel = "VERSION"): string {
   try {
-    const v = readFileSync(p, "utf-8").replace(/[\r\n\s]/g, "");
+    // extractVersion (#2501): a .json version-path is read as JSON (.version),
+    // not whitespace-stripped raw text that turns a package.json into garbage.
+    const v = extractVersion(readFileSync(p, "utf-8"), versionRel);
     return v || DEFAULT;
   } catch {
     return DEFAULT;
@@ -110,8 +117,7 @@ function baseVersion(cwd: string, base: string, versionRel: string): string {
   }
   try {
     const out = execFileSync("git", ["show", `origin/${base}:${versionRel}`], { cwd }).toString();
-    const v = out.replace(/[\r\n\s]/g, "");
-    return v || DEFAULT;
+    return extractVersion(out, versionRel) || DEFAULT;
   } catch {
     // VERSION absent on base (new repo / new file) → treat as 0.0.0.0.
     return DEFAULT;
@@ -135,9 +141,16 @@ function cmdClassify(args: string[], cwd: string): void {
   if (!base) fail("classify requires --base <branch>", 2);
   const versionPath = resolveVersionPath(cwd, argVal(args, "--version-path"));
   const versionRel = argVal(args, "--version-path") ?? "VERSION";
-  const current = readVersionFile(versionPath);
+  const current = readVersionFile(versionPath, versionRel);
   const baseV = baseVersion(cwd, base!, versionRel);
-  const pkg = readPkgVersion(cwd);
+  // When the version-path IS a package.json (#2501), that file is the single
+  // source of truth and the "VERSION vs package.json" drift states cannot
+  // arise — they are the same file. Reporting it as its own pkg keeps DRIFT_*
+  // out of the classification instead of inventing a disagreement between a
+  // file and itself.
+  const pkg = isJsonVersionPath(versionRel)
+    ? { exists: existsSync(versionPath), version: current === DEFAULT ? "" : current }
+    : readPkgVersion(cwd);
   const state = classifyState(current, baseV, pkg.exists, pkg.version);
   process.stdout.write(
     JSON.stringify({
@@ -160,6 +173,26 @@ function cmdWrite(args: string[], cwd: string): void {
     fail(`NEW_VERSION (${version}) does not match MAJOR.MINOR.PATCH.MICRO. Aborting.`, 2);
   }
   const versionPath = resolveVersionPath(cwd, argVal(args, "--version-path"));
+  const versionRel = argVal(args, "--version-path") ?? "VERSION";
+
+  // A package.json version-path (#2501) is written in place, keeping the rest
+  // of the file intact — and it is the ONLY file written. Also syncing a root
+  // package.json here would be a guess about which of two JSON files the repo
+  // actually publishes from; in a monorepo whose truth is frontend/package.json
+  // the root one either doesn't exist or isn't the version users see.
+  if (isJsonVersionPath(versionRel)) {
+    if (!existsSync(versionPath)) {
+      fail(`write: ${versionRel} does not exist. Check --version-path / .gstack/version-path.`, 2);
+    }
+    try {
+      writeFileSync(versionPath, setVersionInJson(readFileSync(versionPath, "utf-8"), version!));
+    } catch {
+      fail(`write: failed to update ${versionRel} (is it valid JSON?).`, 3);
+    }
+    process.stdout.write(JSON.stringify({ wrote: version, versionPath: versionRel, packageJson: true }) + "\n");
+    return;
+  }
+
   writeFileSync(versionPath, version + "\n");
   if (existsSync(join(cwd, "package.json"))) {
     try {
@@ -177,7 +210,17 @@ function cmdWrite(args: string[], cwd: string): void {
 
 function cmdRepair(args: string[], cwd: string): void {
   const versionPath = resolveVersionPath(cwd, argVal(args, "--version-path"));
-  const current = readVersionFile(versionPath);
+  const versionRel = argVal(args, "--version-path") ?? "VERSION";
+  // Nothing to repair when the version lives in a package.json (#2501): there
+  // is no second file to drift from, and classify never reports DRIFT_* for
+  // that shape.
+  if (isJsonVersionPath(versionRel)) {
+    process.stdout.write(
+      JSON.stringify({ repaired: null, reason: `${versionRel} is the single source of truth; no drift possible` }) + "\n",
+    );
+    return;
+  }
+  const current = readVersionFile(versionPath, versionRel);
   if (!VERSION_RE.test(current)) {
     fail(
       `VERSION file contents (${current}) do not match MAJOR.MINOR.PATCH.MICRO. ` +
