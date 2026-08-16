@@ -125,12 +125,22 @@ Use the install type and directory detected in Step 2:
 **For git installs** (global-git, local-git):
 ```bash
 cd "$INSTALL_DIR"
+# Discard render-footprint dirt BEFORE stashing (#2569): pre-v1.67
+# gbrain-enabled installs ran gen:skill-docs:user IN PLACE, leaving
+# generated SKILL.md / sections/*.md files permanently modified. Stashing
+# that dirt poisons the stash: the post-upgrade `git stash pop` would
+# restore STALE generated markdown over the fresh checkout permanently.
+# These files are regenerable (setup re-renders brain-aware variants to
+# ~/.gstack/render), so discarding is lossless; anything else the user
+# changed still reaches the stash untouched. Same file classification as
+# migrations/v1.67.0.0.sh, which remains for manual git-pull flows.
+git checkout -- 'SKILL.md' '*/SKILL.md' '*/sections/*.md' 2>/dev/null || true
 STASH_OUTPUT=$(git stash 2>&1)
 git fetch origin
 git reset --hard origin/main
 ./setup
 ```
-If `$STASH_OUTPUT` contains "Saved working directory", warn the user: "Note: local changes were stashed. Run `git stash pop` in the skill directory to restore them."
+If `$STASH_OUTPUT` contains "Saved working directory", warn the user: "Note: local changes were stashed (any modified generated SKILL.md/sections files were discarded first — they regenerate on setup). Run `git stash pop` in the skill directory to restore your own changes."
 
 **For vendored installs** (vendored, vendored-global):
 ```bash
@@ -207,7 +217,10 @@ if [ -d "$MIGRATIONS_DIR" ]; then
     # (simple string compare works for dotted versions with same segment count)
     if [ "$OLD_VERSION" != "unknown" ] && [ "$(printf '%s\n%s' "$OLD_VERSION" "$m_ver" | sort -V | head -1)" = "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$m_ver" ]; then
       echo "Running migration $m_ver..."
-      bash "$migration" || echo "  Warning: migration $m_ver had errors (non-fatal)"
+      # GSTACK_INSTALL_DIR: migrations that clean the INSTALL (not just
+      # ~/.gstack state) default to ~/.claude/skills/gstack when unset —
+      # a repo-local install would silently no-op without this.
+      GSTACK_INSTALL_DIR="$INSTALL_DIR" bash "$migration" || echo "  Warning: migration $m_ver had errors (non-fatal)"
     fi
   done
 fi
