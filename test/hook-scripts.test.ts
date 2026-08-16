@@ -31,7 +31,7 @@ function withGitRepo(defaultBranch: string, currentBranch: string, fn: (repoDir:
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-careful-git-'));
   try {
     const git = (args: string[]) =>
-      spawnSync('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args], { cwd: repoDir, timeout: 5000 });
+      spawnSync('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...args], { cwd: repoDir, timeout: 5000 });
     git(['init', '-q', '-b', defaultBranch]);
     git(['commit', '--allow-empty', '-q', '-m', 'init']);
     // A symbolic ref may dangle; the hook only reads its NAME.

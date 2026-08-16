@@ -145,7 +145,7 @@ describe('gstack-wtree', () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-wtree-'));
     try {
       const git = (args: string) =>
-        execSync(`git -c user.email=t@test -c user.name=t ${args}`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 });
+        execSync(`git -c user.email=t@test -c user.name=t -c commit.gpgsign=false -c tag.gpgsign=false ${args}`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 });
       git('init -q -b main');
       fs.writeFileSync(path.join(repoDir, 'a.txt'), 'hello\n');
       fs.writeFileSync(path.join(repoDir, '.gitignore'), 'scratch.txt\n');
@@ -177,7 +177,7 @@ describe('gstack-wtree', () => {
     withScratchRepo((repoDir, wtree) => {
       fs.writeFileSync(path.join(repoDir, 'a.txt'), 'edited\n');
       const dirtyFingerprint = wtree();
-      execSync('git -c user.email=t@test -c user.name=t commit -q -am edit', { cwd: repoDir, timeout: 10000 });
+      execSync('git -c user.email=t@test -c user.name=t -c commit.gpgsign=false commit -q -am edit', { cwd: repoDir, timeout: 10000 });
       expect(wtree()).toBe(dirtyFingerprint);
     });
   });

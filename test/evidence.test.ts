@@ -11,7 +11,7 @@ let gstackHome: string;
 let repoDir: string;
 
 function git(args: string) {
-  execSync(`git -c user.email=t@test -c user.name=t ${args}`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 });
+  execSync(`git -c user.email=t@test -c user.name=t -c commit.gpgsign=false -c tag.gpgsign=false ${args}`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 });
 }
 
 function run(args: string[], opts: { cwd?: string } = {}): { status: number; stdout: string; stderr: string } {
