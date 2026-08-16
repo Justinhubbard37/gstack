@@ -64,6 +64,34 @@ The hook reads the command from the tool input JSON, checks it against the
 patterns above, and returns a `hookSpecificOutput` payload with
 `permissionDecision: "ask"` and a warning reason if a match is found (the
 decision must be nested under `hookSpecificOutput` — Claude Code ignores a
-top-level `permissionDecision`). You can always override the warning and proceed.
+top-level `permissionDecision`). You can always override a MEDIUM warning and
+proceed.
+
+## HIGH tier (hard deny)
+
+A tiny set of catastrophic commands is **denied outright** while /careful is
+active, not just warned:
+
+- `rm -r`/`-R` targeting exactly `/`, `~`, or `$HOME`
+- `git push --force` / `-f` to the repo's **default branch**
+
+HIGH only fires on SIMPLE commands (no `;`, `&&`, `||`, `|`, newline) — string
+matching cannot resolve what a compound command does, so compound shapes fall
+through to the ordinary MEDIUM ask. `--force-with-lease` is deliberately not
+matched (it's the safe force variant). This is a best-effort advisory
+hard-stop, not a policy boundary: /careful is opt-in and session-scoped, so
+the escape hatch is ending the /careful session.
+
+## Project patterns (additive only)
+
+Add your own warn rules — one POSIX ERE per line, `#` comments allowed — in:
+
+- `~/.gstack/careful-patterns.txt` (all projects)
+- `~/.gstack/projects/<slug>/careful-patterns.txt` (this project)
+
+Matching lines warn with `[careful] Project rule matched: <pattern>`. Config
+can only ADD rules: the files are consulted after the built-in families, so no
+file content can suppress or weaken a baseline warning. Invalid regex lines
+are skipped.
 
 To deactivate, end the conversation or start a new one. Hooks are session-scoped.

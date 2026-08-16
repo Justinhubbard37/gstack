@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # check-careful.sh — PreToolUse hook for /careful skill
 # Reads JSON from stdin, checks Bash command for destructive patterns.
-# Returns a PreToolUse hookSpecificOutput with permissionDecision "ask" to warn,
-# or {} to allow. The decision MUST be nested under hookSpecificOutput — Claude
-# Code ignores a top-level permissionDecision, which silently no-ops the warning.
+# Two tiers:
+#   HIGH   — a tiny set of catastrophic SIMPLE commands returns "deny"
+#            (best-effort advisory hard-stop, not a policy boundary).
+#   MEDIUM — the destructive families below return "ask" (always overridable).
+# The decision MUST be nested under hookSpecificOutput — Claude Code ignores a
+# top-level permissionDecision, which silently no-ops the warning.
 set -euo pipefail
 
 # Read stdin (JSON with tool_input)
 INPUT=$(cat)
+
+# Shared JSON helpers (extractor + encoder) — one copy for careful AND freeze.
+# See hook-extract.sh for the drift history that motivated the shared file.
+_HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=careful/bin/hook-extract.sh
+. "$_HOOK_DIR/hook-extract.sh"
 
 # Extract the "command" field value from tool_input with a real JSON parser.
 #
@@ -21,31 +30,17 @@ INPUT=$(cat)
 #   bash -c "rm -rf /"                ->  CMD='bash -c \'         -> allowed
 #   echo "x"; rm -rf ~                ->  CMD='echo \'            -> allowed
 #
-# The python3 fallback never rescued these because CMD was non-empty, so the
-# `[ -z "$CMD" ]` guard did not fire. Parse the payload properly instead, and
-# fail CLOSED when it cannot be parsed at all — a hook that gates destructive
-# commands must not allow-by-default on unreadable input.
-#
-# python3 is tried first because it ships with macOS and most Linux distros and
-# is reliably on PATH in a hook environment; node is the fallback.
-extract_cmd() {
-  if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$INPUT" | python3 -c 'import sys,json; d=json.loads(sys.stdin.read()); c=d.get("tool_input",{}).get("command",""); sys.stdout.write(c if isinstance(c,str) else "")' 2>/dev/null && return 0
-  fi
-  if command -v node >/dev/null 2>&1; then
-    printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const c=(j&&j.tool_input&&j.tool_input.command)||"";process.stdout.write(typeof c==="string"?c:"")}catch(e){process.exit(3)}})' 2>/dev/null && return 0
-  fi
-  return 1
-}
-
+# Parse the payload properly instead, and fail CLOSED when it cannot be parsed
+# at all — a hook that gates destructive commands must not allow-by-default on
+# unreadable input.
 set +e
-CMD=$(extract_cmd)
+CMD=$(gstack_hook_extract_field "$INPUT" command)
 EXTRACT_RC=$?
 set -e
 
 # No parser available, or the payload is not parseable JSON. Fail closed.
 if [ "$EXTRACT_RC" -ne 0 ] && [ -n "$INPUT" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] Could not parse the tool payload to safety-check this command. Approve only if you know what it does."}}\n'
+  gstack_hook_decision ask "[careful] Could not parse the tool payload to safety-check this command. Approve only if you know what it does."
   exit 0
 fi
 
@@ -54,6 +49,12 @@ if [ -z "$CMD" ]; then
   echo '{}'
   exit 0
 fi
+
+# Log a hook fire event (pattern name only, never command content).
+_careful_log_fire() {
+  mkdir -p ~/.gstack/analytics 2>/dev/null || true
+  echo '{"event":"hook_fire","skill":"careful","pattern":"'"$1"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+}
 
 # Normalize: lowercase for case-insensitive SQL matching
 CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
@@ -71,8 +72,52 @@ CMD_LOWER=$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')
 # primitives as a reason to ask: they are vanishingly rare in commands a human
 # actually means to run unattended.
 if printf '%s' "$CMD" | grep -qE '\$\{IFS\}|\$IFS|\$\(echo[^)]*base64[^)]*\)|base64[[:space:]]+(-d|--decode)[^|]*\|[[:space:]]*(sh|bash)' 2>/dev/null; then
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] Shell obfuscation detected (IFS word-splitting or base64-to-shell). Read the command carefully before approving."}}\n'
+  gstack_hook_decision ask "[careful] Shell obfuscation detected (IFS word-splitting or base64-to-shell). Read the command carefully before approving."
   exit 0
+fi
+
+# --- HIGH tier: hard deny (best-effort advisory hard-stop, NOT a policy boundary) ---
+# Only SIMPLE commands are eligible: string matching cannot resolve what a
+# compound command does (`cd X && git push --force` — whose cwd? which repo?),
+# so anything containing ; && || | or a newline falls through to the MEDIUM ask
+# families below — conservative failure = ask, never guess.
+# --force-with-lease is deliberately NOT matched here (it is the safe variant).
+# curl|sh stays MEDIUM/allow territory: hard-denying it would block legitimate
+# installer flows, including gstack's own setup pattern.
+_IS_SIMPLE=1
+case "$CMD" in
+  *';'*|*'&&'*|*'||'*|*'|'*|*$'\n'*) _IS_SIMPLE=0 ;;
+esac
+if [ "$_IS_SIMPLE" -eq 1 ]; then
+  # Recursive delete aimed at the filesystem root or the whole home directory.
+  if printf '%s' "$CMD" | grep -qE '^[[:space:]]*(sudo[[:space:]]+)?rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+)+(/|~|\$HOME)/?[[:space:]]*$' 2>/dev/null; then
+    _careful_log_fire "high_rm_root"
+    gstack_hook_decision deny "[careful][HIGH] Recursive delete of / or the home directory is blocked while /careful is active. If you truly mean it, end the /careful session first."
+    exit 0
+  fi
+  # Force-push to the repo's default branch (the shared history everyone pulls).
+  if printf '%s' "$CMD" | grep -qE '^[[:space:]]*git[[:space:]]+push([[:space:]]|$)' 2>/dev/null \
+    && printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(-f|--force)($|[[:space:]])' 2>/dev/null; then
+    _DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|.*/||' || true)
+    if [ -n "$_DEFAULT_BRANCH" ]; then
+      _TARGETS_DEFAULT=0
+      if printf '%s' "$CMD" | grep -qE "(^|[[:space:]])${_DEFAULT_BRANCH}([[:space:]]|$)" 2>/dev/null; then
+        _TARGETS_DEFAULT=1
+      elif printf '%s' "$CMD" | grep -qE '^[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force))*[[:space:]]*$' 2>/dev/null; then
+        # Bare `git push --force` (force flags only, no remote/ref): it targets
+        # the current branch's upstream, which is the default branch only when
+        # we are ON it. Any other arg shape (explicit remote + feature ref,
+        # exotic refspecs) falls through to the MEDIUM ask below.
+        _CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
+        [ -n "$_CURRENT_BRANCH" ] && [ "$_CURRENT_BRANCH" = "$_DEFAULT_BRANCH" ] && _TARGETS_DEFAULT=1
+      fi
+      if [ "$_TARGETS_DEFAULT" -eq 1 ]; then
+        _careful_log_fire "high_force_push_default"
+        gstack_hook_decision deny "[careful][HIGH] Force-push to the default branch ($_DEFAULT_BRANCH) is blocked while /careful is active. Use --force-with-lease on a feature branch, or end the /careful session if you truly mean it."
+        exit 0
+      fi
+    fi
+  fi
 fi
 
 # --- Check for safe exceptions (one standalone rm of build artifacts) ---
@@ -102,7 +147,7 @@ case "$CMD" in
     ;;
 esac
 
-# --- Destructive pattern checks ---
+# --- Destructive pattern checks (MEDIUM tier — always overridable) ---
 WARN=""
 PATTERN=""
 
@@ -154,14 +199,43 @@ if [ -z "$WARN" ] && printf '%s' "$CMD" | grep -qE 'docker\s+(rm\s+-f|system\s+p
   PATTERN="docker_destructive"
 fi
 
+# --- Additive project patterns ---
+# Config can only ADD warn rules, never remove or weaken a baseline family:
+# these files are consulted AFTER the hardcoded checks and only when none of
+# them matched, so no file content can suppress a baseline warning. One POSIX
+# ERE per line; blank lines and #-comments skipped; an invalid regex is
+# skipped (never fatal — the hook must not break on a typo in config).
+if [ -z "$WARN" ]; then
+  _GSTACK_HOME_DIR="${GSTACK_HOME:-$HOME/.gstack}"
+  _PATTERN_FILES="$_GSTACK_HOME_DIR/careful-patterns.txt"
+  eval "$("$_HOOK_DIR/../../bin/gstack-slug" 2>/dev/null)" 2>/dev/null || true
+  if [ -n "${SLUG:-}" ]; then
+    _PATTERN_FILES="$_PATTERN_FILES
+$_GSTACK_HOME_DIR/projects/$SLUG/careful-patterns.txt"
+  fi
+  while IFS= read -r _PF; do
+    [ -f "$_PF" ] || continue
+    while IFS= read -r _PAT || [ -n "$_PAT" ]; do
+      case "$_PAT" in ''|'#'*) continue ;; esac
+      _PAT_RC=0
+      printf '' | grep -qE "$_PAT" 2>/dev/null || _PAT_RC=$?
+      [ "$_PAT_RC" -eq 2 ] && continue # invalid ERE — skip the line
+      if printf '%s' "$CMD" | grep -qE "$_PAT" 2>/dev/null; then
+        WARN="Project rule matched: $_PAT"
+        PATTERN="project_rule"
+        break
+      fi
+    done < "$_PF"
+    [ -n "$WARN" ] && break
+  done <<EOF_PATTERN_FILES
+$_PATTERN_FILES
+EOF_PATTERN_FILES
+fi
+
 # --- Output ---
 if [ -n "$WARN" ]; then
-  # Log hook fire event (pattern name only, never command content)
-  mkdir -p ~/.gstack/analytics 2>/dev/null || true
-  echo '{"event":"hook_fire","skill":"careful","pattern":"'"$PATTERN"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}' >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
-
-  WARN_ESCAPED=$(printf '%s' "$WARN" | sed 's/"/\\"/g')
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"[careful] %s"}}\n' "$WARN_ESCAPED"
+  _careful_log_fire "$PATTERN"
+  gstack_hook_decision ask "[careful] $WARN"
 else
   echo '{}'
 fi
