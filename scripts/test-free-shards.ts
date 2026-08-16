@@ -156,7 +156,7 @@ const WINDOWS_FRAGILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 // pattern. Listed here with the precise reason. Prefer adding a pattern above
 // when possible; this list is for environment-/runtime-specific tests where
 // the failure mode is structural rather than detectable via source-file scan.
-const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
+export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
   {
     file: 'test/host-config.test.ts',
     reason: 'asserts "claude" binary on PATH (only true when running inside Claude Code, not on bare CI runner)',
@@ -164,6 +164,38 @@ const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
   {
     file: 'browse/test/findport.test.ts',
     reason: 'asserts Bun.serve.stop() is fire-and-forget — Bun behavior differs on Windows for this polyfill',
+  },
+  // First full run of the expanded lane (v1.66, 13 → ~258 files) surfaced
+  // seven POSIX-bound files the content patterns cannot see (their
+  // POSIX-ness is what they TEST, or arrives via a variable). Receipts:
+  // PR #2593 windows-free-tests run 31918591602.
+  {
+    file: 'test/regression-pr1169-build-app-sed.test.ts',
+    reason: 'tests sed escape sequences in build-app.sh — sed/bash are the subject under test',
+  },
+  {
+    file: 'test/setup-conductor-worktree.test.ts',
+    reason: 'tests ln -snf symlink semantics in the setup script — POSIX ln is the subject under test',
+  },
+  {
+    file: 'test/artifacts-init-migration.test.ts',
+    reason: 'runs a bash migration script + jq against a scaffolded git state — POSIX toolchain paths break under cmd spawn',
+  },
+  {
+    file: 'test/gstack-decision-semantic.test.ts',
+    reason: 'installs a fake gbrain SHEBANG SHIM on PATH; Windows spawn cannot exec shebang scripts',
+  },
+  {
+    file: 'test/question-log-hook.test.ts',
+    reason: 'spawns the PostToolUse hook script (bash shebang) directly; Windows spawn cannot exec it',
+  },
+  {
+    file: 'browse/test/browser-skills-e2e.test.ts',
+    reason: 'asserts forward-slash tier paths (<repo>/browser-skills/) that resolve with backslashes on Windows',
+  },
+  {
+    file: 'design/test/variants-retry-after.test.ts',
+    reason: 'wall-clock retry-timing assertions — flaky on the slow windows-latest runner even with widened bounds',
   },
 ];
 

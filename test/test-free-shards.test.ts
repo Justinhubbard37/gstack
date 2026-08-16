@@ -18,6 +18,7 @@ import {
   DEFAULT_WALL_TIMEOUT_MS,
   PER_FILE_WALL_MS,
   wallTimeoutForShard,
+  KNOWN_WINDOWS_INCOMPATIBLE,
   TEST_ROOTS,
   TREE_MUTATING,
   WORKER_HOSTILE,
@@ -532,6 +533,12 @@ describe('test-free-shards: curated-list census pins', () => {
     const census = new Set(collectFreeTestFiles(ROOT));
     const stale = [...Object.keys(TREE_MUTATING), ...Object.keys(WORKER_HOSTILE)]
       .filter((key) => !census.has(key));
+    expect(stale).toEqual([]);
+  });
+
+  test('every KNOWN_WINDOWS_INCOMPATIBLE entry names a real free test file', () => {
+    const census = new Set(collectFreeTestFiles(ROOT));
+    const stale = KNOWN_WINDOWS_INCOMPATIBLE.map((e) => e.file).filter((f) => !census.has(f));
     expect(stale).toEqual([]);
   });
 
