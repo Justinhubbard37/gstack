@@ -206,6 +206,38 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
     file: 'browse/test/browser-manager-unit.test.ts',
     reason: 'wedges the shard to its wall deadline on windows-latest (in-flight at kill); needs a Windows repro to diagnose — macOS + Linux lanes cover the file',
   },
+  // Round-3 census (PR #2593 run 31919871680): the round-2 wedge had been
+  // TRUNCATING its shard, so these seven only surfaced once shard 2 completed.
+  // All the same POSIX-environment classes: PID/cmdline identity probing,
+  // bash scripts as the subject under test, env-scrubbed child spawns.
+  {
+    file: 'browse/test/server-embedder-terminal-port.test.ts',
+    reason: 'identity-based terminal-agent kill probes PID/cmdline with POSIX semantics; teardown asserts fail on windows-latest',
+  },
+  {
+    file: 'design/test/daemon-discovery.test.ts',
+    reason: 'verifyIdentity matches a spawned daemon via /proc-style cmdline probing — POSIX identity semantics',
+  },
+  {
+    file: 'test/context-save-hardening.test.ts',
+    reason: 'bash context-save/migration scripts (HOME-unset semantics, random-suffix path) are the subject under test',
+  },
+  {
+    file: 'test/eval-list-cli.test.ts',
+    reason: 'spawns the eval:list CLI via bun with a constructed env — bun resolution fails under Windows spawn',
+  },
+  {
+    file: 'test/memory-cache-injection.test.ts',
+    reason: 'exercises hook/deny-enforcement shell scripts — POSIX toolchain is the subject under test',
+  },
+  {
+    file: 'test/migrations-v1.65.0.0.test.ts',
+    reason: 'bash migration script (bunx re-fetch, .done markers) is the subject under test',
+  },
+  {
+    file: 'test/question-preference-hook.test.ts',
+    reason: 'spawns the PreToolUse preference hook (shebang script) directly; Windows spawn cannot exec it',
+  },
 ];
 
 // Force-include overrides: files a WINDOWS_FRAGILE_PATTERNS regex excludes for
