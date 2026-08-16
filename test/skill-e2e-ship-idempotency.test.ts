@@ -11,11 +11,11 @@
  *   4. Does NOT append a duplicate CHANGELOG [0.0.2] entry
  *   5. Does NOT create a new "chore: bump version" commit
  *
- * Why real-PTY: the existing ship-idempotency test in skill-e2e.test.ts
- * uses the SDK harness with a synthetic prompt asking the agent to "run
- * ONLY the idempotency checks." This test exercises the actual /ship
- * skill end-to-end against a real git fixture so a regression that
- * silently re-bumps despite the check passing would be caught.
+ * Why real-PTY: the old SDK-harness ship-idempotency variant (removed in
+ * v1.64.1.0 as redundant with this test) used a synthetic prompt asking
+ * the agent to "run ONLY the idempotency checks." This test exercises the
+ * actual /ship skill end-to-end against a real git fixture so a regression
+ * that silently re-bumps despite the check passing would be caught.
  *
  * Plan-mode framing: we run /ship in plan mode so the agent cannot push,
  * commit, or open PRs. The Step 12 idempotency check is read-only

@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { hermeticChildEnv } from './hermetic-env';
+import { extractSkillSections } from './skill-fixture';
 
 // --- Interfaces ---
 
@@ -103,19 +104,32 @@ export function parseCodexJSONL(lines: string[]): ParsedCodexJSONL {
  * Creates ~/.codex/skills/{skillName}/SKILL.md in the temp HOME and copies
  * agents/openai.yaml when present so Codex sees the same metadata as a real install.
  *
+ * When `sections` is provided, the installed SKILL.md is an EXTRACTION
+ * (frontmatter + the named `## <section>` blocks via
+ * test/helpers/skill-fixture.ts) instead of the full 1000-1900-line file —
+ * CLAUDE.md: "E2E test fixtures: extract, don't copy". Omit `sections` only
+ * when the test's purpose is to validate the real generated artifact itself
+ * (e.g., codex-discover-skill asserts the full SKILL.md loads without
+ * "invalid" / "Skipped loading" stderr from Codex).
+ *
  * Returns the temp HOME path. Caller is responsible for cleanup.
  */
 export function installSkillToTempHome(
   skillDir: string,
   skillName: string,
   tempHome?: string,
+  sections?: string[],
 ): string {
   const home = tempHome || fs.mkdtempSync(path.join(os.tmpdir(), 'codex-e2e-'));
   const destDir = path.join(home, '.codex', 'skills', skillName);
   fs.mkdirSync(destDir, { recursive: true });
 
   const srcSkill = path.join(skillDir, 'SKILL.md');
-  if (fs.existsSync(srcSkill)) {
+  if (sections && sections.length > 0) {
+    // extractSkillSections throws loudly on a missing file or renamed
+    // section — a fixture is never silently written empty.
+    fs.writeFileSync(path.join(destDir, 'SKILL.md'), extractSkillSections(skillDir, sections));
+  } else if (fs.existsSync(srcSkill)) {
     fs.copyFileSync(srcSkill, path.join(destDir, 'SKILL.md'));
   }
 
@@ -144,6 +158,7 @@ export async function runCodexSkill(opts: {
   cwd?: string;             // Working directory
   skillName?: string;       // Skill name for installation (default: dirname)
   sandbox?: string;         // Sandbox mode (default: 'read-only')
+  sections?: string[];      // Install only these `## <section>` blocks (extract, don't copy)
 }): Promise<CodexResult> {
   const {
     skillDir,
@@ -152,6 +167,7 @@ export async function runCodexSkill(opts: {
     cwd,
     skillName,
     sandbox = 'read-only',
+    sections,
   } = opts;
 
   const startTime = Date.now();
@@ -178,7 +194,7 @@ export async function runCodexSkill(opts: {
   const realHome = os.homedir();
 
   try {
-    installSkillToTempHome(skillDir, name, tempHome);
+    installSkillToTempHome(skillDir, name, tempHome, sections);
 
     // Symlink real Codex auth config so codex can authenticate from temp HOME.
     // Codex stores auth in ~/.codex/ — we need the config but not the skills

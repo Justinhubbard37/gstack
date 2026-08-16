@@ -189,6 +189,7 @@ const PLACEHOLDER_STRUCTURAL = [
 // keys like AKIAIOSFODNN7EXAMPLE are bare tokens, so the guard still catches them.
 const PLACEHOLDER_SUBSTRING = [
   /example/i, // AKIAIOSFODNN7EXAMPLE etc — AWS docs convention
+  /^pass(word)?$/i, // literal PASSWORD/pass in URL-format doc comments
   /^changeme$/i,
   /^redacted/i,
   /^placeholder/i,
@@ -252,6 +253,34 @@ export function insideUuid(match: RegExpExecArray): boolean {
 }
 
 // ── The taxonomy ─────────────────────────────────────────────────────────────
+
+/**
+ * URL-embedded passwords that are interpolation forms, not credentials:
+ * `${identifier}` (bash or JS template, any case) or bare `$UPPER_SNAKE`
+ * (shell convention). Bare lowercase `$word` stays BLOCKED — a real password
+ * that merely starts with `$` (e.g. `$` + a dictionary word) must not slip
+ * through the HIGH gate just because it looks vaguely variable-shaped.
+ * Shared by db.url_with_password and creds.basic_auth_url so the two
+ * validators cannot drift.
+ */
+// Fully-braced `${...}` spanning the whole password segment is template code
+// regardless of content — `${dbPass}` and `${encodeURIComponent(dbPass)}`
+// alike (the identifier-only form flagged the DSN-encoding call site as a
+// pushed secret). Bare `$word` stays uppercase-only: `$hunter2` must block.
+const INTERPOLATED_PASSWORD_RE = /^(\$\{.+\}|\$[A-Z_][A-Z0-9_]*)$/;
+function urlPasswordIsPlaceholder(span: string): boolean {
+  const m = span.match(/:\/\/[^:]+:([^@]+)@/);
+  const pw = m?.[1] ?? "";
+  if (pw === "") return true;
+  if (INTERPOLATED_PASSWORD_RE.test(pw)) return true;
+  // URL-password position is STRICTER than generic placeholder detection.
+  // Doc-comment convention writes placeholders in ALL CAPS
+  // (postgres://USER:PASSWORD@host); a lowercase `password` or `pass` at
+  // this position is a real (terrible) credential and must block — the
+  // case-insensitive isPlaceholderSpan words would wave it through.
+  if (/^[A-Z][A-Z0-9_]*$/.test(pw)) return true;
+  return PLACEHOLDER_STRUCTURAL.some((re) => re.test(pw));
+}
 
 export const PATTERNS: RedactPattern[] = [
   // ===== HIGH — genuinely-secret credentials (block) =====
@@ -436,12 +465,8 @@ export const PATTERNS: RedactPattern[] = [
     category: "secret",
     description: "Database URL with embedded password",
     regex: /\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^:\s/@]+:[^@\s/]+@[^\s/]+)/,
-    // Skip when the password segment is itself a placeholder.
-    validate: (span) => {
-      const m = span.match(/:\/\/[^:]+:([^@]+)@/);
-      const pw = m?.[1] ?? "";
-      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Z_]+\}?$/.test(pw);
-    },
+    // Skip when the password segment is itself a placeholder/interpolation.
+    validate: (span) => !urlPasswordIsPlaceholder(span),
   },
   {
     id: "creds.basic_auth_url",
@@ -449,11 +474,8 @@ export const PATTERNS: RedactPattern[] = [
     category: "secret",
     description: "HTTP(S) URL with embedded basic-auth credentials",
     regex: /(https?:\/\/[^:\s/@]+:[^@\s/]+@[^\s/]+)/,
-    validate: (span) => {
-      const m = span.match(/:\/\/[^:]+:([^@]+)@/);
-      const pw = m?.[1] ?? "";
-      return !isPlaceholderSpan(pw) && pw !== "" && !/^\$\{?[A-Z_]+\}?$/.test(pw);
-    },
+    // Skip when the password segment is itself a placeholder/interpolation.
+    validate: (span) => !urlPasswordIsPlaceholder(span),
   },
 
   // ===== MEDIUM — demoted credential-shaped (high-FP / context-variable) =====

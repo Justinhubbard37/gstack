@@ -401,7 +401,9 @@ describe('host-config-export.ts CLI', () => {
     expect(exitCode).toBe(1);
   });
 
-  test('detect finds claude (since we are running in claude)', () => {
+  // Gated: the secretless free-tests CI lane deliberately installs no claude
+  // CLI, so "we are running in claude" is false there by design.
+  test.skipIf(!Bun.which('claude'))('detect finds claude (since we are running in claude)', () => {
     const { stdout, exitCode } = run('detect');
     expect(exitCode).toBe(0);
     // claude binary should be on PATH in this environment

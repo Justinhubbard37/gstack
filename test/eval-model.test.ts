@@ -13,7 +13,9 @@ describe("resolveEvalModel", () => {
     expect(resolveEvalModel("distill", null, { GSTACK_EVAL_MODEL: "g" } as never)).toBe("g");
   });
   test("defaults per kind", () => {
-    expect(resolveEvalModel("capture", null, {} as never)).toBe("claude-opus-4-7");
+    // capture defaults to Sonnet per D1a (2026-08 review): Opus is opt-in via
+    // explicit arg or GSTACK_EVAL_MODEL_CAPTURE.
+    expect(resolveEvalModel("capture", null, {} as never)).toBe("claude-sonnet-4-6");
     expect(resolveEvalModel("warmup", null, {} as never)).toBe("claude-haiku-4-5");
     expect(resolveEvalModel("distill", null, {} as never)).toBe("claude-haiku-4-5-20251001");
   });

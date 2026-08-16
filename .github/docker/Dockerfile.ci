@@ -72,7 +72,7 @@ RUN curl --retry 5 --retry-delay 5 --retry-connrefused -fsSL "https://nodejs.org
 # the 1.3.10 devs run locally).
 ENV BUN_INSTALL="/usr/local"
 RUN curl --retry 5 --retry-delay 5 --retry-connrefused -fsSL https://bun.sh/install \
-    | bash -s "bun-v1.3.10"
+    | bash -s "bun-v1.3.13"
 
 # Claude CLI
 RUN npm i -g @anthropic-ai/claude-code
@@ -124,7 +124,8 @@ RUN bun --version && node --version && claude --version && jq --version && gh --
 # if we move it out of the way and symlink back
 # Save node_modules + package.json snapshot for cache validation at runtime
 RUN mv /workspace/node_modules /opt/node_modules_cache \
-    && cp /workspace/package.json /opt/node_modules_cache/.package.json
+    && cp /workspace/package.json /opt/node_modules_cache/.package.json \
+    && cp /workspace/bun.lock /opt/node_modules_cache/.bun.lock
 
 # Claude CLI refuses --dangerously-skip-permissions as root.
 # Create a non-root user for eval runs (GH Actions overrides USER, so

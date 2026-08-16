@@ -14,10 +14,16 @@ import {
   PAID_TEST_GLOBS,
   classifyPaidTestFile,
   collectPaidTestFiles,
+  computePaidDiffSelection,
+  diffSkipDecisionForFile,
+  formatSummary,
   isPaidTestFile,
+  knownTestNamesInSource,
+  partitionShardsByDiffSelection,
   planPaidShards,
   runPaidShards,
   summarize,
+  summaryExitCode,
   type ShardOutcome,
 } from '../scripts/test-paid-shards';
 
@@ -28,6 +34,9 @@ describe('paid test enumeration', () => {
     expect(isPaidTestFile('test/codex-e2e.test.ts')).toBe(true);
     expect(isPaidTestFile('test/skill-e2e-triage-audit.test.ts')).toBe(true);
     // Outside the globs: no dash, extra suffix, or a free test.
+    // 'test/skill-e2e.test.ts' is the DELETED pre-split monolith's name,
+    // kept here as a regression pin: its glob-invisibility is exactly how
+    // two gate tests went unexecuted for ~8 releases before the rehoming.
     expect(isPaidTestFile('test/skill-e2e.test.ts')).toBe(false);
     expect(isPaidTestFile('test/codex-e2e-recommendation-substance.test.ts')).toBe(false);
     expect(isPaidTestFile('test/paid-shards.test.ts')).toBe(false);
@@ -127,5 +136,142 @@ describe('shard execution', () => {
       { shard: 2, files: ['b'], status: 'never-started', exitCode: null, elapsedMs: 0, groupPid: null },
     ]);
     expect(summary).toMatchObject({ total: 2, executed: 1, passed: 1, neverStarted: 1 });
+  });
+});
+
+describe('parent-side diff shard skipping', () => {
+  const ALL_NAMES = ['alpha-test', 'beta-test', 'gamma-registered'];
+  const TOUCHFILES: Record<string, string[]> = {
+    'alpha-test': ['a/**'],
+    'beta-test': ['b/**'],
+    'gamma-registered': ['g/**', 'test/skill-e2e-gamma.test.ts'],
+  };
+  const SOURCES: Record<string, string> = {
+    'test/skill-e2e-alpha.test.ts': "runSkillTest('alpha-test', async () => {});",
+    'test/skill-e2e-beta.test.ts': 'describeIfSelected("beta", ["beta-test"], () => {});',
+    // Constructed testName — invisible by quotes, mapped only via registration.
+    'test/skill-e2e-gamma.test.ts': 'const name = buildName(); test(name, async () => {});',
+    // No recognizable names, no registration — the fail-open class.
+    'test/skill-e2e-opaque.test.ts': "const shouldRun = process.env.EVALS_TIER === 'periodic';",
+    'test/codex-e2e.test.ts': 'codex tests keyed off CODEX_E2E_TOUCHFILES',
+  };
+  const opts = {
+    readSource: (file: string) => {
+      if (!(file in SOURCES)) throw new Error(`unreadable: ${file}`);
+      return SOURCES[file];
+    },
+    allNames: ALL_NAMES,
+    e2eTouchfiles: TOUCHFILES,
+  };
+
+  test('knownTestNamesInSource matches only exact quoted strings', () => {
+    expect(knownTestNamesInSource("x 'alpha-test' y", ['alpha-test', 'beta-test'])).toEqual(['alpha-test']);
+    expect(knownTestNamesInSource('x "beta-test" y', ['alpha-test', 'beta-test'])).toEqual(['beta-test']);
+    expect(knownTestNamesInSource('`alpha-test`', ['alpha-test'])).toEqual(['alpha-test']);
+    // Substring inside a longer quoted string is not a hit.
+    expect(knownTestNamesInSource("'alpha-test-extended'", ['alpha-test'])).toEqual([]);
+  });
+
+  test('selected name in file → shard kept', () => {
+    const d = diffSkipDecisionForFile('test/skill-e2e-alpha.test.ts', new Set(['alpha-test']), opts);
+    expect(d.kept).toBe(true);
+    expect(d.reason).toContain('alpha-test');
+  });
+
+  test('no selected names in file → skipped-by-diff', () => {
+    const d = diffSkipDecisionForFile('test/skill-e2e-beta.test.ts', new Set(['alpha-test']), opts);
+    expect(d.kept).toBe(false);
+    expect(d.reason).toContain('mapped test(s)');
+  });
+
+  test('dep-list registration maps files with constructed test names', () => {
+    const selected = diffSkipDecisionForFile('test/skill-e2e-gamma.test.ts', new Set(['gamma-registered']), opts);
+    expect(selected.kept).toBe(true);
+    const unselected = diffSkipDecisionForFile('test/skill-e2e-gamma.test.ts', new Set(['alpha-test']), opts);
+    expect(unselected.kept).toBe(false);
+  });
+
+  test('FAIL-OPEN: unmapped file kept, child self-skip authoritative', () => {
+    const d = diffSkipDecisionForFile('test/skill-e2e-opaque.test.ts', new Set(['alpha-test']), opts);
+    expect(d.kept).toBe(true);
+    expect(d.reason).toContain('fail-open');
+  });
+
+  test('FAIL-OPEN: unreadable source kept', () => {
+    const d = diffSkipDecisionForFile('test/skill-e2e-missing.test.ts', new Set(['alpha-test']), opts);
+    expect(d.kept).toBe(true);
+    expect(d.reason).toContain('fail-open');
+  });
+
+  test('FAIL-OPEN: non-skill-e2e paid files always kept', () => {
+    const d = diffSkipDecisionForFile('test/codex-e2e.test.ts', new Set(['alpha-test']), opts);
+    expect(d.kept).toBe(true);
+    expect(d.reason).toContain('non-skill-e2e');
+  });
+
+  test('run-all selection (null) bypasses skipping entirely', () => {
+    const shards = [['test/skill-e2e-alpha.test.ts'], ['test/skill-e2e-beta.test.ts']];
+    const { runnable, skipped } = partitionShardsByDiffSelection(shards, null, opts);
+    expect(runnable).toEqual(shards);
+    expect(skipped).toEqual([]);
+  });
+
+  test('EVALS_ALL=1 yields run-all selection (no git consulted)', () => {
+    const selection = computePaidDiffSelection({ EVALS_ALL: '1' } as NodeJS.ProcessEnv);
+    expect(selection.selectedNames).toBeNull();
+    expect(selection.reason).toContain('EVALS_ALL=1');
+    expect(selection.totalTests).toBeGreaterThan(0);
+  });
+
+  test('partition drops only all-skippable shards', () => {
+    const shards = [
+      ['test/skill-e2e-alpha.test.ts'],
+      ['test/skill-e2e-beta.test.ts'],
+      ['test/skill-e2e-opaque.test.ts'],
+      ['test/codex-e2e.test.ts'],
+    ];
+    const { runnable, skipped } = partitionShardsByDiffSelection(shards, new Set(['alpha-test']), opts);
+    expect(runnable).toEqual([
+      ['test/skill-e2e-alpha.test.ts'],
+      ['test/skill-e2e-opaque.test.ts'],
+      ['test/codex-e2e.test.ts'],
+    ]);
+    expect(skipped.length).toBe(1);
+    expect(skipped[0].files).toEqual(['test/skill-e2e-beta.test.ts']);
+  });
+
+  test('taxonomy: skipped-by-diff counted separately, never conflated with never-started', () => {
+    const summary = summarize([
+      { shard: 1, files: ['a'], status: 'passed', exitCode: 0, elapsedMs: 1, groupPid: 1 },
+      { shard: 2, files: ['b'], status: 'skipped-by-diff', exitCode: null, elapsedMs: 0, groupPid: null },
+      { shard: 3, files: ['c'], status: 'never-started', exitCode: null, elapsedMs: 0, groupPid: null },
+    ]);
+    expect(summary).toMatchObject({
+      total: 3, executed: 1, passed: 1, skippedByDiff: 1, neverStarted: 1,
+    });
+    const lines = formatSummary(summary);
+    expect(lines[1]).toContain('1 skipped by diff');
+    expect(lines[1]).toContain('1 never started');
+    expect(lines.some((l) => l.includes('skipped-by-diff') && l.includes('b'))).toBe(true);
+  });
+
+  test('exit code ignores skipped-by-diff shards (they are successes)', () => {
+    const allGood = summarize([
+      { shard: 1, files: ['a'], status: 'passed', exitCode: 0, elapsedMs: 1, groupPid: 1 },
+      { shard: 2, files: ['b'], status: 'skipped-by-diff', exitCode: null, elapsedMs: 0, groupPid: null },
+    ]);
+    expect(summaryExitCode(allGood)).toBe(0);
+
+    const withFailure = summarize([
+      { shard: 1, files: ['a'], status: 'failed', exitCode: 1, elapsedMs: 1, groupPid: 1 },
+      { shard: 2, files: ['b'], status: 'skipped-by-diff', exitCode: null, elapsedMs: 0, groupPid: null },
+    ]);
+    expect(summaryExitCode(withFailure)).toBe(1);
+
+    const withNeverStarted = summarize([
+      { shard: 1, files: ['a'], status: 'never-started', exitCode: null, elapsedMs: 0, groupPid: null },
+      { shard: 2, files: ['b'], status: 'skipped-by-diff', exitCode: null, elapsedMs: 0, groupPid: null },
+    ]);
+    expect(summaryExitCode(withNeverStarted)).toBe(1);
   });
 });

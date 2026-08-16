@@ -104,6 +104,36 @@ describe("HIGH credential patterns", () => {
   test("db.url_with_password flags real password, skips placeholder/env-var", () => {
     expect(ids("postgres://user:s3cretP@ss@db.example.com/app")).toContain("db.url_with_password");
     expect(ids("postgres://user:${DB_PASSWORD}@host/app")).not.toContain("db.url_with_password");
+    // Literal PASSWORD placeholder (URL-format doc comments).
+    expect(ids("postgresql://USER:PASSWORD@host/db")).not.toContain("db.url_with_password");
+    // JS template interpolations are code, not credentials — the
+    // uppercase-only placeholder form blocked a push over
+    // `postgresql://${dbUser}:${dbPass}@...` in a bash->TS port.
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(ids("postgresql://${dbUser}:${dbPass}@${dbHost}:5432/db")).not.toContain("db.url_with_password");
+    // Assembled at runtime so this file's own diff never contains a
+    // credential-shaped literal (the prepush guard scans exact pushed bytes).
+    expect(ids("postgres://admin:" + "hun" + "ter2@db.internal/app")).toContain("db.url_with_password");
+    // Bare $UPPER_SNAKE is shell convention → suppressed; bare $lowercase is
+    // NOT an interpolation form — a real password starting with `$` must
+    // still block (both-braces-optional would have let it through).
+    expect(ids("postgres://user:$DB_PASSWORD@host/app")).not.toContain("db.url_with_password");
+    expect(ids("postgres://admin:$" + "hun" + "ter2@db.internal/app")).toContain("db.url_with_password");
+    // Mismatched brace is not an interpolation either (assembled at runtime
+    // so this file's own pushed bytes carry no blockable URL shape).
+    expect(ids("postgres://admin:${" + "dbPass@db.internal/app")).toContain("db.url_with_password");
+    // A fully-braced interpolation is code whatever it contains — the DSN
+    // builder's `${encodeURIComponent(dbPass)}` call site must not scan as a
+    // pushed secret.
+    expect(ids("postgresql://user:${encodeURIComponent(dbPass)}@host:5432/db")).not.toContain("db.url_with_password");
+    // A LOWERCASE literal 'password'/'pass' at the URL-password position is a
+    // real (terrible) credential, not a doc placeholder — only the ALL-CAPS
+    // doc convention (USER:PASSWORD) is suppressed. Assembled at runtime so
+    // this file's own bytes never carry a live credential shape.
+    expect(ids("postgres://admin:" + "pass" + "word@10.0.0.5/app")).toContain("db.url_with_password");
+    expect(ids("https://root:" + "pa" + "ss@127.0.0.1/")).toContain("creds.basic_auth_url");
+    // Structural placeholders still suppress at the URL position.
+    expect(ids("postgres://user:<your-password>@host/db")).not.toContain("db.url_with_password");
   });
 
   test("all HIGH patterns block (exit 3)", () => {

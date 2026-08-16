@@ -12,7 +12,7 @@
  *   per-kind default                                         — last resort
  *
  * Kinds and their defaults:
- *   capture — AskUserQuestion SDK capture runs (quality matters): opus
+ *   capture — AskUserQuestion SDK capture runs: sonnet (D1a)
  *   warmup  — PTY warm-up ping (cheapest thing that answers): haiku
  *   distill — free-text distillation (cheap, structured): haiku (pinned)
  */
@@ -21,7 +21,11 @@
 // 'capture' | 'warmup' | 'distill' — a `Record<string, string>` annotation
 // would widen it to string and let any typo through the type gate.
 const DEFAULTS = {
-  capture: "claude-opus-4-7",
+  // D1a (2026-08 test-infra review): capture runs default to Sonnet, matching
+  // session-runner — the old Opus default was an inconsistency between
+  // runners, not a choice; tests needing Opus pass it explicitly or set
+  // GSTACK_EVAL_MODEL_CAPTURE.
+  capture: "claude-sonnet-4-6",
   warmup: "claude-haiku-4-5",
   distill: "claude-haiku-4-5-20251001",
 } as const satisfies Record<string, string>;

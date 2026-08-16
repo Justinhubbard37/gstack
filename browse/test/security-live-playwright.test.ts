@@ -42,7 +42,13 @@ const MODEL_CACHE = path.join(
   'onnx',
   'model.onnx',
 );
-const ML_AVAILABLE = fs.existsSync(MODEL_CACHE);
+// Opt-in only (SECURITY_BENCH=1), same rationale as security-bench.test.ts:
+// gating on model-cache existence alone auto-ran ONNX inference on any dev box
+// that ever warmed the classifier — and dlopen'ing onnxruntime inside a
+// `bun test --parallel` worker segfaults Bun intermittently (observed twice:
+// "panic: Segmentation fault ... a bug in Bun" followed by a crashed-worker
+// retry, sometimes wedging the run).
+const ML_AVAILABLE = process.env.SECURITY_BENCH === '1' && fs.existsSync(MODEL_CACHE);
 
 describe('defense-in-depth — live Playwright fixture', () => {
   let testServer: ReturnType<typeof startTestServer>;

@@ -27,7 +27,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  try { testServer.server.stop(); } catch {}
+  try { testServer.server.stop(true); } catch {}  // force-close keep-alives — a lingering Chromium connection otherwise blocks stop() forever
   // Close only this file's own browser — never process.exit(): bun test runs
   // all files in one process, so a delayed exit kills the whole suite
   // (see test/no-suicide-exit.test.ts). close() can hang when the browser

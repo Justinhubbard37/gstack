@@ -4,7 +4,7 @@
 
 ```bash
 bun install          # install dependencies
-bun test             # run free tests (browse + snapshot + skill validation)
+bun run test         # run free tests via the strict parallel runner (~90-100s full suite)
 bun run test:evals   # run paid evals: LLM judge + E2E (diff-based, ~$4/run max)
 bun run test:evals:all  # run ALL paid evals regardless of diff
 bun run test:gate    # run gate-tier tests only (CI default, blocks merge)
@@ -73,7 +73,10 @@ touchfiles.ts itself) trigger all tests. Use `EVALS_ALL=1` or the `:all` script
 variants to force all tests. Run `eval:select` to preview which tests would run.
 
 **Two-tier system:** Tests are classified as `gate` or `periodic` in `E2E_TIERS`
-(in `test/helpers/touchfiles.ts`). CI runs only gate tests (`EVALS_TIER=gate`);
+(in `test/helpers/touchfiles.ts` — a facade over `touchfiles-data.ts` +
+`test-selection.ts`). CI runs only gate tests (`EVALS_TIER=gate`); the free
+suite runs on every PR via `.github/workflows/free-tests.yml` (a REQUIRED
+check, secretless — fork PRs get real signal);
 periodic tests run weekly via cron or manually. Use `EVALS_TIER=gate` or
 `EVALS_TIER=periodic` to filter. When adding new E2E tests, classify them:
 1. Safety guardrail or deterministic functional test? -> `gate`
@@ -89,11 +92,17 @@ in sync.
 ## Testing
 
 ```bash
-bun test             # run before every commit — free, <2s
+bun run test         # run before every commit — free, ~90-100s for the full ~7,000-test suite
 bun run test:evals   # run before shipping — paid, diff-based (~$4/run max)
 ```
 
-`bun test` runs skill validation, gen-skill-docs quality checks, and browse
+`bun run test` routes through `scripts/test-free-shards.ts` (N concurrent
+shard processes, serial within each, plus a trailing serial tree-mutating
+shard — with strict-output classification per shard: a shard without bun's
+terminal summary line FAILS — silent truncation
+cannot report green). Never type bare `bun test` for the suite: it walks the
+whole repo, loading paid eval files and missing the strict classifier.
+It covers skill validation, gen-skill-docs quality checks, and browse
 integration tests. `bun run test:evals` runs LLM-judge quality evals and E2E
 tests via `claude -p`. Both must pass before creating a PR.
 
@@ -906,8 +915,12 @@ the run can also die to idle-sleep. `gstack-detach` fixes both: a fresh session
   (stray `claude`/`codex` grandchildren included), a per-shard
   `GSTACK_EVAL_DIR=<evalDir>/shards/<slug>/` honored by the `EvalCollector`
   constructor, and an aggregate that separates failed vs timed-out vs
-  never-started shards — the detach timeouts (25200s gate / 28800s periodic)
-  are sized against worst-case shard wall clock. `eval:list` / `eval:compare` /
+  never-started shards — the detach timeouts (25200s gate / 32400s periodic;
+  floor enforced against the live shard census by
+  test/eval-detach-timeout-floor.test.ts)
+  are sized against worst-case shard wall clock. `EVALS_JOBS` sets the shard
+  process count (default 4); `EVALS_CONCURRENCY` is bun's --max-concurrency
+  WITHIN a shard (default 4) — they are deliberately separate knobs. `eval:list` / `eval:compare` /
   `eval:summary` read the shard dirs too. Or call
   `gstack-detach [--lock NAME] [--timeout SECS] [--label LBL] --
   <cmd>` directly for any long agent job. Export `ANTHROPIC_API_KEY` first (never

@@ -14,7 +14,7 @@ concurrency:
 jobs:
   check:
     name: Check VERSION is not stale vs queue
-    runs-on: ubicloud-standard-8
+    runs-on: ubicloud-standard-2
     permissions:
       contents: read
       pull-requests: read

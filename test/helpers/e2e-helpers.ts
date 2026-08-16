@@ -1,8 +1,8 @@
 /**
  * Shared helpers for E2E test files.
  *
- * Extracted from the monolithic skill-e2e.test.ts to support splitting
- * tests across multiple files by category.
+ * Extracted from the (since-deleted) pre-split monolith to support
+ * splitting tests across multiple skill-e2e-*.test.ts files by category.
  */
 
 import '../../lib/conductor-env-shim';
@@ -15,6 +15,7 @@ import { selectTests, detectBaseBranch, getChangedFiles, E2E_TOUCHFILES, E2E_TIE
 import { WorktreeManager } from '../../lib/worktree';
 import type { HarvestResult } from '../../lib/worktree';
 import { spawnSync } from 'child_process';
+import { preflightAnthropicApi } from './anthropic-preflight';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -275,15 +276,12 @@ if (evalsEnabled) {
   }
 }
 
-// Fail fast if Anthropic API is unreachable — don't burn through tests getting ConnectionRefused
+// Fail fast if Anthropic API is unreachable — don't burn through tests getting
+// ConnectionRefused. The sharded paid runner pings once in the parent and sets
+// EVALS_PREFLIGHT_OK=1 for its children, so per-file module loads skip this
+// (was: ~30 paid pings per full sharded run, one per importing file).
 if (evalsEnabled) {
-  const check = spawnSync('sh', ['-c', 'echo "ping" | claude -p --max-turns 1 --output-format stream-json --verbose --dangerously-skip-permissions'], {
-    stdio: 'pipe', timeout: 30_000,
-  });
-  const output = check.stdout?.toString() || '';
-  if (output.includes('ConnectionRefused') || output.includes('Unable to connect')) {
-    throw new Error('Anthropic API unreachable — aborting E2E suite. Fix connectivity and retry.');
-  }
+  preflightAnthropicApi();
 }
 
 /** Skip an individual test if not selected (for multi-test describe blocks). */

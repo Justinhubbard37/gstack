@@ -33,7 +33,11 @@ const MODEL_CACHE = path.join(
   'onnx',
   'model.onnx',
 );
-const ML_AVAILABLE = fs.existsSync(MODEL_CACHE);
+// Opt-in only (SECURITY_BENCH=1): ~12s of ONNX inference plus a HuggingFace
+// dataset fetch. Gating on model-cache existence alone meant every dev box
+// that had ever warmed the classifier paid this on every `bun run test`,
+// while CI (no cache) silently skipped it — the worst of both.
+const ML_AVAILABLE = process.env.SECURITY_BENCH === '1' && fs.existsSync(MODEL_CACHE);
 
 const CACHE_DIR = path.join(os.homedir(), '.gstack', 'cache', 'browsesafe-bench-smoke');
 const CACHE_FILE = path.join(CACHE_DIR, 'test-rows.json');
