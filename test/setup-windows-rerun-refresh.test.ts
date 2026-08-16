@@ -34,16 +34,23 @@ function extractFn(name: string): string {
 const WINDOWS_BYPASS = '[ "$IS_WINDOWS" -eq 1 ] || [ -L ';
 
 describe('setup: Windows re-run refresh — static guard sites (#2444)', () => {
-  test('all five install guards carry the IS_WINDOWS bypass', () => {
-    const sites = SETUP_SRC.split(WINDOWS_BYPASS).length - 1;
-    expect(sites).toBe(5);
+  test('no install guard is missing the IS_WINDOWS bypass', () => {
+    // Every `[ -L ...] || [ ! -e ...]` refresh guard in setup must carry the
+    // bypass — a bare guard is a Windows re-run no-op waiting to happen.
+    const bareGuards = SETUP_SRC
+      .split('\n')
+      .filter((l) => /\[ -L "\$[A-Za-z_/${}.]+" \] \|\| \[ ! -e /.test(l) && !l.includes('IS_WINDOWS'));
+    expect(bareGuards).toEqual([]);
+    expect(SETUP_SRC.split(WINDOWS_BYPASS).length - 1).toBeGreaterThanOrEqual(5);
   });
 
   test.each([
     'link_codex_skill_dirs',
     'link_factory_skill_dirs',
     'link_opencode_skill_dirs',
+    'link_cursor_skill_dirs',
     'create_agents_sidecar',
+    'create_cursor_sidecar',
   ])('%s bypasses the symlink-or-missing guard on Windows', (fn) => {
     expect(extractFn(fn)).toContain(WINDOWS_BYPASS);
   });
