@@ -2418,6 +2418,22 @@ by shard parallelism; the per-file wall cost remains.
 **Where:** test/gstack-gbrain-detect-mcp-mode.test.ts.
 **Effort:** S (human ~2h, CC ~15min).
 
+### P2: plan-design-review scope-gate detector is marginal under CI contention
+
+**What:** `plan-design-review reaches a terminal outcome outside plan mode`
+(test/skill-e2e-plan-mode-no-op.test.ts) intermittently fails ONLY the
+`scopeGateQuestionObserved` check on unchanged code — PR #2593 CI: failed
+rounds 3/11 + one rerun, passed rounds 5/6, all attempts reaching a terminal
+outcome with no plan-mode leak. Hypothesis: the PTY detector anchors on a
+render shape that scrolls out or gets rephrased under 40-way in-shard
+contention. The assertion now throws WITH the last-2KB evidence tail, so the
+next CI failure carries the screen contents; fix the detector (scan full
+scrollback, or widen the anchored shape) from that data.
+
+**Where:** test/helpers/claude-pty-runner.ts (scopeGateQuestionObserved
+detector), test/skill-e2e-plan-mode-no-op.test.ts.
+**Effort:** S (human ~3h, CC ~20min + one CI round with evidence).
+
 ### P3: Diagnose the browser-manager-unit wedge on windows-latest
 
 **What:** The expanded Windows lane wedges to its wall deadline inside
