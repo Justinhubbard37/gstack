@@ -10,18 +10,12 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import {
   THRESHOLDS,
   combineVerdict,
   generateCanary,
   injectCanary,
   checkCanaryInStructure,
-  writeSessionState,
-  readSessionState,
-  getStatus,
   extractDomain,
   type LayerSignal,
 } from '../src/security';
@@ -244,57 +238,13 @@ describe('canary', () => {
 // ─── Attack log + rotation ───────────────────────────────────
 
 
-// ─── Session state (cross-process, atomic) ───────────────────
-
-describe('session state', () => {
-  test('write + read round-trip', () => {
-    const state = {
-      sessionId: 'test-session-123',
-      canary: 'CANARY-TEST',
-      warnedDomains: ['example.com'],
-      classifierStatus: { testsavant: 'ok' as const },
-      lastUpdated: '2026-04-19T12:34:56Z',
-    };
-    writeSessionState(state);
-    const got = readSessionState();
-    expect(got).not.toBeNull();
-    expect(got!.sessionId).toBe('test-session-123');
-    expect(got!.canary).toBe('CANARY-TEST');
-    expect(got!.warnedDomains).toEqual(['example.com']);
-  });
-
-  test('tolerates stale transcript field from pre-rip on-disk state', () => {
-    // SessionState is a disk format. Files written before the Haiku
-    // transcript layer was removed carry classifierStatus.transcript —
-    // getStatus must read them fine, not require transcript for
-    // 'protected', and never leak the stale key into /health.
-    const stateFile = path.join(os.homedir(), '.gstack', 'security', 'session-state.json');
-    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-    fs.writeFileSync(stateFile, JSON.stringify({
-      sessionId: 'legacy-session',
-      canary: 'CANARY-LEGACY',
-      warnedDomains: [],
-      classifierStatus: { testsavant: 'ok', transcript: 'degraded' },
-      lastUpdated: '2026-04-19T12:34:56Z',
-    }));
-    const s = getStatus();
-    expect(s.status).toBe('protected');
-    expect('transcript' in s.layers).toBe(false);
-  });
-});
-
-// ─── Status reporting for shield icon ────────────────────────
-
-describe('getStatus', () => {
-  test('returns a valid SecurityStatus shape', () => {
-    const s = getStatus();
-    expect(['protected', 'degraded', 'inactive']).toContain(s.status);
-    expect(s.layers).toBeDefined();
-    expect(['ok', 'degraded', 'off']).toContain(s.layers.testsavant);
-    expect(['ok', 'off']).toContain(s.layers.canary);
-    expect(s.lastUpdated).toBeTruthy();
-  });
-});
+// NOTE (#2557): the session-state + getStatus tests that lived here wrote
+// REAL fixture data into ~/.gstack/security/session-state.json — after which
+// /health reported a false-green 'protected' indefinitely. The surfaces they
+// covered (SessionState, read/writeSessionState, getStatus, the /health
+// security field, the sidepanel SEC shield) were dead since the PTY terminal
+// rewrite and are now removed. server-security-surface.test.ts pins the
+// removal + the live L4 wiring.
 
 // ─── URL domain extraction ───────────────────────────────────
 

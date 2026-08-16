@@ -880,10 +880,11 @@ sidebar chat pipeline that hosted them. **Canary leak always BLOCKs
 - Attack log: `~/.gstack/security/attempts.jsonl` (salted SHA-256 + domain
   only, rotates at 10MB, 5 generations).
 - Per-device salt: `~/.gstack/security/device-salt` (0600).
-- Session state: `~/.gstack/security/session-state.json` (cross-process,
-  atomic).
 
-A shield icon in the sidebar header shows the live status. See
+There is no security status indicator in the sidebar and no `security`
+field on `/health` (#2557): the session-state file that fed them lost its
+only writer when the chat-path agent was removed, so they reported stale or
+empty data. The live defenses report through their own call sites. See
 ARCHITECTURE.md § "Prompt injection defense" for the full threat model.
 
 ---

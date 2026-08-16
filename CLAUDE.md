@@ -429,9 +429,16 @@ leak always BLOCKs (deterministic).
 - Classifier model cache: `~/.gstack/models/testsavant-small/` (112MB, first run only)
 - Attack log: `~/.gstack/security/attempts.jsonl` — written by
   `tunnel-denial-log.ts` (tunnel-surface rejections; rotates at 10MB, 5 generations)
-- Session state: `~/.gstack/security/session-state.json` (cross-process, atomic;
-  NOTE: classifierStatus currently has no live writer — shield status derives
-  from what's on disk)
+
+History note (#2557): the cross-process session state
+(`~/.gstack/security/session-state.json`), `getStatus()`, the `/health`
+`security` field, and the sidepanel SEC shield were all removed — the state
+file lost its only writer when sidebar-agent.ts was ripped, so the shield
+reported a permanent 'inactive' or a stale false-green 'protected' from
+leftover disk state. The live defenses (L1-L3 filters, L4 sidecar on the
+inject-scan path) report through their own call sites, never through
+/health. `browse/test/server-security-surface.test.ts` pins both the
+removal and the live L4 wiring. Do not re-document these as live.
 
 ## Dev symlink awareness
 

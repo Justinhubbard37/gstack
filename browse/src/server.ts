@@ -24,7 +24,6 @@ import {
   runContentFilters, type ContentFilterResult,
   markHiddenElements, getCleanTextWithStripping, cleanupHiddenMarkers,
 } from './content-security';
-import { getStatus as getSecurityStatus } from './security';
 import { isSidecarAvailable, scanWithSidecar } from './security-sidecar-client';
 import { writeSecureFile, mkdirSecure, appendSecureFile } from './file-permissions';
 import { handleSnapshot, SNAPSHOT_FLAGS } from './snapshot';
@@ -1899,10 +1898,13 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           mode: browserManager.getConnectionMode(),
           uptime: Math.floor((Date.now() - startTime) / 1000),
           tabs: browserManager.getTabCount(),
-          // Security module status — drives the shield icon in the sidepanel.
-          // Returns {status: 'protected'|'degraded'|'inactive', layers: {...}}.
-          // Fed by the page-content side (testsavant sidecar, canary state).
-          security: getSecurityStatus(),
+          // No `security` field (#2557): the only writer of the status it
+          // reported (sidebar-agent.ts's session-state file) went away with
+          // the chat path, so it read from a file nothing wrote — reporting
+          // a permanent 'inactive', or a stale false-green 'protected'
+          // wherever an old state file survived on disk. The live defenses
+          // (content-security L1-L3, the L4 sidecar on /pty-inject-scan)
+          // report through their own call sites, not through /health.
           // Terminal-agent discovery. ONLY a port number — never a token.
           // Tokens flow via the /pty-session HttpOnly cookie path. See
           // `pty-session-cookie.ts` for the rationale (codex outside-voice
