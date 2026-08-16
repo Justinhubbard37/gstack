@@ -88,9 +88,13 @@ describe('slug cache hygiene', () => {
   test('an env-less run caches under GSTACK_HOME, not $HOME', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'slug-home-'));
     try {
+      // Strip any ambient override: a sibling test leaking
+      // GSTACK_PROJECT_SLUG in a shared-process shard would flip this run
+      // into override mode, which (correctly) skips the cache write.
+      const { GSTACK_PROJECT_SLUG: _drop, ...ambient } = process.env;
       const r = spawnSync(['bash', SLUG_BIN], {
         cwd: os.tmpdir(),
-        env: { ...process.env, GSTACK_HOME: home },
+        env: { ...ambient, GSTACK_HOME: home },
       });
       expect(r.exitCode).toBe(0);
       const entries = fs.readdirSync(path.join(home, 'slug-cache'));
