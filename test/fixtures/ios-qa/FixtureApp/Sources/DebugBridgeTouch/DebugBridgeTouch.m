@@ -20,7 +20,12 @@
 #import "DebugBridgeTouch.h"
 #import <TargetConditionals.h>
 
-#if TARGET_OS_IOS
+// DEBUG gate in addition to TARGET_OS_IOS: the private-API touch synthesis must
+// compile out of Release builds entirely (App Store rejection risk + no
+// automation code in shipped binaries). DEBUG is defined for this target only
+// in the debug configuration (see cSettings in Package.swift), so a Release iOS
+// build emits an empty translation unit — zero private symbols.
+#if TARGET_OS_IOS && DEBUG
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>

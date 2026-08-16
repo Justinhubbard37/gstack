@@ -43,6 +43,13 @@ let package = Package(
             dependencies: [],
             path: "Sources/DebugBridgeTouch",
             publicHeadersPath: "include",
+            cSettings: [
+                // Defines DEBUG for the ObjC translation unit in debug config
+                // only, so DebugBridgeTouch.m's `#if TARGET_OS_IOS && DEBUG`
+                // body compiles out of Release builds. Mirrors the swiftSettings
+                // DEBUG define on the Core/UI targets.
+                .define("DEBUG", .when(configuration: .debug)),
+            ],
             linkerSettings: [
                 // IOKit is loaded dynamically via dlopen at runtime (it's a
                 // private framework on iOS and can't be linked statically).
