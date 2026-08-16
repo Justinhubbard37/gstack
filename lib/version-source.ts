@@ -85,6 +85,18 @@ export function bumpWasCoerced(level: Bump, width: VersionWidth): boolean {
   return width === 3 && level === "micro";
 }
 
+/**
+ * The npm-valid form of a gstack version. npm's semver is 3-component and
+ * rejects a fourth, so the 4-digit MAJOR.MINOR.PATCH.MICRO truncates to
+ * MAJOR.MINOR.PATCH; 3-digit versions pass through unchanged. Per the
+ * version-tooling end-state spec (v1.67 fix-wave plan, decision 11): the
+ * manifest mirror always carries this form, and VERSION stays the 4-digit
+ * source of truth.
+ */
+export function npmVersion(version: string): string {
+  return version.trim().split(".").slice(0, 3).join(".");
+}
+
 /** A version-path pointing at a .json is read as JSON, not as raw text. */
 export function isJsonVersionPath(versionPath: string): boolean {
   return /\.json$/i.test(versionPath.trim());
