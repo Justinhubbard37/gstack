@@ -118,6 +118,14 @@ _CODEX_CFG=$(~/.claude/skills/gstack/bin/gstack-config get codex_reviews 2>/dev/
 source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
 if [ "$_CODEX_CFG" = "disabled" ]; then
   ${m}="disabled"
+# Running-under-Codex presence probe (#2519): a live Codex session exports
+# CODEX_THREAD_ID / CODEX_SANDBOX into every shell it spawns (verified
+# against a live \`codex exec 'env | grep -i codex'\` capture, codex 0.147.0).
+# Nested codex spawns from inside a Codex host multiply token burn
+# (observed: one /review = 15M tokens). GSTACK_FORCE_CODEX_REVIEW=1 forces
+# the nested passes anyway.
+elif [ "\${GSTACK_FORCE_CODEX_REVIEW:-0}" != "1" ] && { [ -n "\${CODEX_THREAD_ID:-}" ] || [ -n "\${CODEX_SANDBOX:-}" ]; }; then
+  ${m}="under_codex"
 elif ! command -v codex >/dev/null 2>&1; then
   ${m}="not_installed"; _gstack_codex_log_event "codex_cli_missing" 2>/dev/null || true
 elif ! _gstack_codex_auth_probe >/dev/null 2>&1; then
@@ -133,6 +141,7 @@ echo "CODEX_MODE: $${m}"
 Branch on the echoed \`CODEX_MODE\`:
 - **\`disabled\`** — the user turned Codex reviews off (\`codex_reviews=disabled\`). ${disabledLine}
 - **\`not_installed\`** — Codex CLI absent. Print: "Codex not installed — using Claude subagent. Install for cross-model coverage: \`npm install -g @openai/codex\`." Fall back to the Claude subagent path.
+- **\`under_codex\`** — this session is already running INSIDE a Codex host, so spawning codex again is the same model reviewing itself at multiplied token cost (#2519). Print exactly one line: "[running under Codex — nested codex passes skipped; set GSTACK_FORCE_CODEX_REVIEW=1 to force]" and skip the codex invocations below; run the section's free in-host pass instead if it defines one.
 - **\`not_authed\`** — installed but no credentials. Print: "Codex installed but not authenticated — using Claude subagent. Run \`codex login\` or set \`$CODEX_API_KEY\`." Fall back to the Claude subagent path.
 - **\`model_unusable\`** — authed but the account cannot use its configured model (#2477: HTTP 400 on every call, usually a stale \`model =\` pin in \`~/.codex/config.toml\`). Relay the probe's HINT lines, tell the user the one-line fix (update the pin; \`[notice.model_migrations]\` names the replacement), and fall back to the Claude subagent path. The ~10s round trip is cached for 1h; timeouts fail open to \`ready\`.
 - **\`ready\`** — run the Codex pass below.`;
