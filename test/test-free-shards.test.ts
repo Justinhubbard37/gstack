@@ -484,6 +484,29 @@ describe('test-free-shards: output contract (log capture, quiet console, failure
   });
 });
 
+describe('test-free-shards: GitHub Actions log-group attribution', () => {
+  const failLine = (name: string) => `(fail) ${name} [1.00ms]`;
+  // On GHA (GITHUB_ACTIONS=1) bun wraps each file's section in ::group::.
+  // Unstripped, the real header fails FILE_HEADER_RE, failures attribute to
+  // the PREVIOUS file, and the terminal recap's re-printed (fail) lines land
+  // under a phantom second file — the first Linux run reported 5 real
+  // failures as 10 across 2 files.
+  test('::group::-wrapped headers attribute failures to the right file, once', () => {
+    const reporter = new FreeRunReporter(['test/a.test.ts', 'test/b.test.ts']);
+    reporter.write('::group::test/a.test.ts:\n', 'stderr');
+    reporter.write('::endgroup::\n', 'stderr');
+    reporter.write('::group::test/b.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.write('::endgroup::\n', 'stderr');
+    // Terminal recap re-prints the failing file header + result line.
+    reporter.write('1 tests failed:\n', 'stderr');
+    reporter.write('::group::test/b.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.end();
+    expect(reporter.report().failures).toEqual([{ file: 'test/b.test.ts', testName: 'planted' }]);
+  });
+});
+
 describe('test-free-shards: curated-list census pins', () => {
   // A renamed test file must FAIL here, not silently drop its serialization
   // (a phantom TREE_MUTATING key means the reader races regenerating shards

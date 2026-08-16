@@ -638,7 +638,12 @@ export class FreeRunReporter {
   }
 
   private handleLine(rawLine: string, origin: StreamOrigin): void {
-    const line = stripAnsiLine(rawLine);
+    // GitHub Actions: bun wraps each file's section in ::group::<header>.
+    // Without stripping, the real header fails FILE_HEADER_RE, failures get
+    // attributed to the PREVIOUS file, and the terminal recap's re-printed
+    // (fail) lines land under a second phantom file (observed on the first
+    // Linux run: 5 real failures reported as 10 across 2 files).
+    const line = stripAnsiLine(rawLine).replace(/^::group::/, '');
     let visible = false;
 
     const header = FILE_HEADER_RE.exec(line);
