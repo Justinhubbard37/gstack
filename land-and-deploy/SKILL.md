@@ -1369,16 +1369,29 @@ and tell the user: "I found and fixed a few issues during the review. The fixes 
 
 ### 3.5b: Test results
 
-**Free tests — run them now:**
+**Free tests — cite fresh evidence or run them now:**
 
-Read CLAUDE.md to find the project's test command. If not specified, use `bun test`.
-Run the test command and capture the exit code and output.
+Check the evidence ledger first:
 
 ```bash
-bun test 2>&1 | tail -10
+~/.claude/skills/gstack/bin/gstack-evidence check --label tests --max-age 24
 ```
 
-If tests fail: **BLOCKER.** Cannot merge with failing tests.
+If it prints FRESH (exit 0), a green run is on record for THIS exact
+working-tree content (fingerprint-bound, so a rebase or an identical-content
+commit doesn't invalidate it) — cite the evidence line (exit, ts, log path)
+instead of re-running.
+
+Otherwise (STALE/MISSING, or you want a live run anyway): read CLAUDE.md to
+find the project's test command (default `bun test`) and run it wrapped, so
+the fresh result is recorded:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-evidence run --label tests -- 'bun test 2>&1'
+```
+
+If tests fail: **BLOCKER.** Cannot merge with failing tests. (A failed evidence
+CHECK is never a blocker — it just means run live; a failed RUN is.)
 
 **E2E tests — check recent results:**
 

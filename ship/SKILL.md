@@ -1280,9 +1280,24 @@ EOF
 
 **IRON LAW: NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE.**
 
+The evidence ledger is the mechanical arm of this law. Check it FIRST:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-evidence check --label tests --label vitest --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json
+```
+
+- **Every line FRESH (exit 0):** the recorded runs were green and the working-tree
+  content is identical to what was tested, modulo the allow-listed release files
+  (this mechanizes the "CHANGELOG edits don't count" rule — VERSION/CHANGELOG
+  commits between Step 5 and here don't invalidate the run). Cite the evidence
+  lines (label, exit, ts, log path) as the verification evidence and continue.
+- **Any STALE/MISSING (exit non-zero):** run live, wrapped, so the fresh run is
+  recorded: `~/.claude/skills/gstack/bin/gstack-evidence run --label <lane> -- '<command>'`.
+  The check is an advisory guardrail — a failed CHECK never blocks; a failed RUN does.
+
 Before pushing, re-verify if code changed during Steps 4-6:
 
-1. **Test verification:** If ANY code changed after Step 5's test run (fixes from review findings, CHANGELOG edits don't count), re-run the test suite. Paste fresh output. Stale output from Step 5 is NOT acceptable.
+1. **Test verification:** If ANY code changed after Step 5's test run (fixes from review findings, CHANGELOG edits don't count), re-run the test suite. The evidence check above IS this rule, mechanized — trust FRESH, re-run on STALE. Paste fresh output when you re-run. Stale output from Step 5 with changed content is NOT acceptable.
 
 2. **Build verification:** If the project has a build step, run it. Paste output.
 
