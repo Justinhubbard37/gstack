@@ -474,6 +474,32 @@ describe('gstack-brain-sync --discover-new', () => {
 });
 
 // ---------------------------------------------------------------
+// Enqueue tmp janitor: a writer killed between its tmp write and the
+// atomic rename orphans a .tmp-* file forever (it never becomes a
+// record, nothing else touches it). The drain reaps ones older than
+// 1 hour, inside its lock; fresh ones (in-flight enqueues) survive.
+// ---------------------------------------------------------------
+describe('enqueue tmp janitor', () => {
+  test('an orphaned .tmp-* older than 1h is reaped on --once; a fresh one survives', () => {
+    run(['gstack-artifacts-init', '--remote', bareRemote]);
+    run(['gstack-config', 'set', 'artifacts_sync_mode', 'full']);
+    fs.mkdirSync(spoolDir(), { recursive: true });
+
+    const oldTmp = path.join(spoolDir(), '.tmp-99999-x1');
+    fs.writeFileSync(oldTmp, '{"file":"projects/p/learnings.jsonl"}\n');
+    const past = new Date(Date.now() - 2 * 3600 * 1000);
+    fs.utimesSync(oldTmp, past, past);
+
+    const freshTmp = path.join(spoolDir(), '.tmp-99999-x2');
+    fs.writeFileSync(freshTmp, '{"file":"projects/p/learnings.jsonl"}\n');
+
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(fs.existsSync(oldTmp)).toBe(false);  // orphan reaped
+    expect(fs.existsSync(freshTmp)).toBe(true); // in-flight write untouched
+  });
+});
+
+// ---------------------------------------------------------------
 // #2549 queue integrity: classified drops, privacy retention,
 // surgical rewrite, unpushed-commit detector
 // ---------------------------------------------------------------

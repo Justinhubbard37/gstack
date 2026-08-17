@@ -219,6 +219,20 @@ describe('gstack-slug ↔ remote-slug parity', () => {
     expect(fs.readFileSync(cacheFile, 'utf8').trim()).toBe('garrytan-gstack');
   });
 
+  test('hostile origin `url = ..` cannot become a ".." slug — basename fallback holds', () => {
+    // git accepts `..` as a remote URL; the sed parse passes it through
+    // unchanged, so unguarded it becomes SLUG=".." — filing state one level
+    // ABOVE ~/.gstack/projects/ (confined to ~/.gstack, but still traversal).
+    // The dot-only guard rejects it and the basename fallback anchors identity.
+    const repo = makeRepo(path.join(fixtures, 'dotty'), '..');
+    const r = runSlug(repo, tmpHome);
+    expect(r.status).toBe(0);
+    expect(slugOf(r)).toBe('dotty');
+    // The cache must hold the healed value, never the dot slug.
+    const cacheFile = path.join(tmpHome, '.gstack', 'slug-cache', encodedCacheKey(repo));
+    expect(fs.readFileSync(cacheFile, 'utf8').trim()).toBe('dotty');
+  });
+
   test('sticky identity preserved (#2212): repo that adopted a remote after first use is NOT healed', () => {
     // Legit sticky shape: the repo itself is the marker root (REMOTE_ROOT ==
     // PROJECT_ROOT) and its cached identity is its pre-origin basename slug.

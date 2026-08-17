@@ -356,9 +356,14 @@ export async function handleSnapshot(
   // `-o` only means something to the two modes that PRODUCE an image. Passed
   // alone it used to be silently ignored: exit 0, no file, no explanation —
   // which reads as "the screenshot feature is broken" rather than "you forgot a
-  // flag", and cost a real debugging session before anyone noticed.
-  if (opts.outputPath && !opts.annotate && !opts.heatmap) {
-    output.push(`[warning] -o/--output was ignored: it names the file for an annotated screenshot, so it needs -a/--annotate (or -C/--cursor-interactive). For a plain screenshot use: browse screenshot ${opts.outputPath}`);
+  // flag", and cost a real debugging session before anyone noticed. Kept as a
+  // variable so the diff-mode returns below (which bypass `output`) can carry
+  // it too — diff mode must not regress to the silent-ignore behavior.
+  const outputIgnoredWarning = (opts.outputPath && !opts.annotate && !opts.heatmap)
+    ? `[warning] -o/--output was ignored: it names the output file for an annotated (-a/--annotate) or heatmap (-H/--heatmap) screenshot. For a plain screenshot use: browse screenshot ${opts.outputPath}`
+    : '';
+  if (outputIgnoredWarning) {
+    output.push(outputIgnoredWarning);
   }
 
   // ─── Annotated screenshot (-a) ────────────────────────────
@@ -615,7 +620,8 @@ export async function handleSnapshot(
     const lastSnapshot = session.getLastSnapshot();
     if (!lastSnapshot) {
       session.setLastSnapshot(snapshotText);
-      return snapshotText + '\n\n(no previous snapshot to diff against — this snapshot stored as baseline)';
+      return snapshotText + '\n\n(no previous snapshot to diff against — this snapshot stored as baseline)'
+        + (outputIgnoredWarning ? '\n' + outputIgnoredWarning : '');
     }
 
     const changes = Diff.diffLines(lastSnapshot, snapshotText);
@@ -630,7 +636,8 @@ export async function handleSnapshot(
     }
 
     session.setLastSnapshot(snapshotText);
-    return stripLoneSurrogates(diffOutput.join('\n'));
+    return stripLoneSurrogates(diffOutput.join('\n')
+      + (outputIgnoredWarning ? '\n' + outputIgnoredWarning : ''));
   }
 
   // Store for future diffs

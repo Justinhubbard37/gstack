@@ -224,6 +224,12 @@ if [[ -z "$SLUG" ]]; then
   if [[ -n "$REMOTE_URL" ]]; then
     RAW_SLUG=$(printf '%s' "${REMOTE_URL%.git}" | sed -E 's#.*[:/]([^/]+)/([^/]+)$#\1-\2#')
     SLUG=$(printf '%s' "$RAW_SLUG" | tr -cd 'a-zA-Z0-9._-')
+    # Dot-only / degenerate guard: a hostile origin like `url = ..` (git
+    # accepts it) passes sed unchanged and would become SLUG=".." — filing
+    # state one level ABOVE ~/.gstack/projects/. Reject empty/"."/".."/
+    # slash-bearing slugs and fall through to the basename fallback below.
+    # (tr -cd already deletes "/", so */* is belt-and-braces.)
+    case "$SLUG" in ""|.|..|*/*) SLUG="" ;; esac
   fi
 fi
 

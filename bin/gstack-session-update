@@ -73,16 +73,23 @@ fi
     [ -f "$_hb" ] || _hb="$LOCK_DIR"
     [ -n "$(find "$_hb" -maxdepth 0 -mmin +$LOCK_TTL_MINUTES 2>/dev/null)" ]
   }
+  # Reclaim is TOCTOU-safe via atomic mv-aside: `rm -rf` then `mkdir` lets TWO
+  # contenders both judge the lock stale, both remove it, and both win the
+  # mkdir (one rm can land between the other's rm and mkdir). `mv` of the lock
+  # dir is atomic — exactly one contender's mv succeeds; the loser's mv fails
+  # (ENOENT) and it backs off. The winner reaps the moved-aside dir at leisure.
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     if lock_is_expired; then
-      rm -rf "$LOCK_DIR" 2>/dev/null
+      mv "$LOCK_DIR" "$LOCK_DIR.reap.$$" 2>/dev/null || { log_entry "SKIP lock_contested"; exit 0; }
+      rm -rf "$LOCK_DIR.reap.$$" 2>/dev/null
       mkdir "$LOCK_DIR" 2>/dev/null || { log_entry "SKIP lock_contested"; exit 0; }
       log_entry "RECLAIMED lock_ttl_expired"
     elif [ -f "$LOCK_DIR/pid" ]; then
       LOCK_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo 0)
       if [ "$LOCK_PID" -gt 0 ] 2>/dev/null && ! kill -0 "$LOCK_PID" 2>/dev/null; then
-        # Stale lock — remove and re-acquire
-        rm -rf "$LOCK_DIR" 2>/dev/null
+        # Stale lock — mv aside atomically (see reclaim note above), re-acquire
+        mv "$LOCK_DIR" "$LOCK_DIR.reap.$$" 2>/dev/null || { log_entry "SKIP lock_contested"; exit 0; }
+        rm -rf "$LOCK_DIR.reap.$$" 2>/dev/null
         mkdir "$LOCK_DIR" 2>/dev/null || { log_entry "SKIP lock_contested"; exit 0; }
       else
         # Live holder — or an empty/non-numeric pidfile inside the TTL

@@ -276,6 +276,85 @@ describe("walk-up parity with bin/gstack-slug (outermost project root)", () => {
     expectBoth(inner, "acme-outer");
   });
 
+  test("LIVE BUG SHAPE: a stray empty .git ancestor no longer degrades the slug (remote-first)", () => {
+    // The exact 2026-08-17 reproduction: an ancestor dir with an empty .git
+    // (not a valid repo, no origin) above a canonical-remote repo. The
+    // pre-remote-first native path resolved PROJECT_ROOT to the stray marker
+    // ancestor, found no origin THERE, and degraded to its basename — filing
+    // every repo under it into one shared ~/.gstack/projects/<basename>/.
+    const strayHome = path.join(tmp, "strayhome");
+    fs.mkdirSync(path.join(strayHome, ".git"), { recursive: true }); // empty — invalid repo
+    const repo = path.join(strayHome, "work", "repo");
+    fs.mkdirSync(repo, { recursive: true });
+    spawnSync("git", ["init", "-q", repo]);
+    spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/garrytan/gstack"]);
+    expectBoth(repo, "garrytan-gstack");
+    expect(slugFromEnvironment(nativeHome(), repo)).not.toBe("strayhome");
+  });
+
+  test("nested repos under a stray marker: a no-remote outer cannot shadow an inner remote", () => {
+    // Outermost REMOTE-bearing repo wins — an outer repo whose origin does
+    // not resolve is skipped by the remote walk, so the inner remote-bearing
+    // repo carries identity (parity with bin/gstack-slug's _outermost_remote_repo).
+    const outer = path.join(tmp, "outer-plain");
+    const inner = path.join(outer, "vendor", "inner-lib");
+    fs.mkdirSync(inner, { recursive: true });
+    spawnSync("git", ["init", "-q", outer]); // no origin — marker-only repo
+    spawnSync("git", ["init", "-q", inner]);
+    spawnSync("git", ["-C", inner, "remote", "add", "origin", "git@github.com:vendor/inner.git"]);
+    expectBoth(inner, "vendor-inner");
+  });
+
+  test("degraded-ancestor cache self-heals: the pre-remote-first cached value is rewritten", () => {
+    // Pre-fix, the resolver cached basename(PROJECT_ROOT) for the stray
+    // marker ancestor. cached == the marker root's basename while a
+    // remote-bearing repo BELOW it exists → recompute + heal the cache.
+    const strayHome = path.join(tmp, "strayhome");
+    fs.mkdirSync(path.join(strayHome, ".git"), { recursive: true });
+    const repo = path.join(strayHome, "git", "proj");
+    fs.mkdirSync(repo, { recursive: true });
+    spawnSync("git", ["init", "-q", repo]);
+    spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/garrytan/gstack"]);
+
+    const cacheDir = path.join(nativeHome(), "slug-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, toMsysPath(repo).replace(/\//g, "_"));
+    fs.writeFileSync(cacheFile, "strayhome"); // the degraded value the old resolver cached
+
+    expect(slugFromEnvironment(nativeHome(), repo)).toBe("garrytan-gstack");
+    // The cache file itself must have been overwritten (self-healing).
+    expect(fs.readFileSync(cacheFile, "utf-8")).toBe("garrytan-gstack");
+  });
+
+  test("sticky identity preserved (#2212): a remote adopted AT the marker root is NOT healed", () => {
+    // Legit sticky shape: the repo that adopted the remote IS the marker root
+    // (remote root == project root), so the degraded-ancestor heal must not
+    // fire even though cached == basename(project root).
+    const repo = path.join(tmp, "stickyproj");
+    fs.mkdirSync(repo, { recursive: true });
+    spawnSync("git", ["init", "-q", repo]);
+    spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/x/y.git"]);
+
+    const cacheDir = path.join(nativeHome(), "slug-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, toMsysPath(repo).replace(/\//g, "_"));
+    fs.writeFileSync(cacheFile, "stickyproj"); // pre-origin basename identity
+
+    expect(slugFromEnvironment(nativeHome(), repo)).toBe("stickyproj");
+    expect(fs.readFileSync(cacheFile, "utf-8")).toBe("stickyproj");
+  });
+
+  test('hostile origin `url = ..` never becomes a dot slug — basename fallback (dot-only guard)', () => {
+    // git accepts `..` as a remote URL. Unchecked, the derived slug would be
+    // ".." — path traversal one level above ~/.gstack/projects/. Both
+    // implementations must reject it and fall through to the basename.
+    const repo = path.join(tmp, "dotty");
+    fs.mkdirSync(repo, { recursive: true });
+    spawnSync("git", ["init", "-q", repo]);
+    spawnSync("git", ["-C", repo, "remote", "add", "origin", ".."]);
+    expectBoth(repo, "dotty");
+  });
+
   test("GSTACK_PROJECT_SLUG env override beats every other resolution path, never cached", () => {
     const projectRoot = path.join(tmp, "loadout");
     const siteSubdir = path.join(projectRoot, "site");

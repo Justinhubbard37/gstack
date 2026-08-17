@@ -46,7 +46,7 @@ const STRONG_FILE_MARKERS = [".project.yaml", "package.json", "pyproject.toml", 
 const WEAK_FILE_MARKERS = ["README.md", "README", "README.rst", "LICENSE", "LICENSE.md"];
 
 /**
- * Native port of bin/gstack-slug's `_outermost_project_root` (:77-113): walk UP
+ * Native port of bin/gstack-slug's `_outermost_project_root`: walk UP
  * from `startDir` tracking the OUTERMOST ancestor holding a strong marker and
  * the outermost holding a weak marker. Outermost STRONG wins; else outermost
  * WEAK; else "". Build/deploy artifacts (.vercel, node_modules, dist, ...) are
@@ -78,21 +78,69 @@ export function outermostProjectRoot(startDir: string): string {
 }
 
 /**
+ * Native port of bin/gstack-slug's `_outermost_remote_repo` (step 1a): walk UP
+ * from `startDir` tracking the OUTERMOST ancestor that has a `.git` entry
+ * (directory for normal clones, FILE for git-worktrees/submodules — `git -C`
+ * resolves a worktree's remote through its main clone) AND whose `origin`
+ * remote resolves. This is the canonical-identity walk: a marker-only
+ * ancestor with no resolvable origin (stray empty ~/.git, stray package.json)
+ * cannot win here, so it cannot hijack remote-derived identity the way it can
+ * hijack the marker walk above. Nested-repo semantics preserved: an inner
+ * repo under an outer canonical-remote repo still resolves to the OUTER
+ * repo's remote (outermost wins). git spawns only at `.git`-bearing ancestors
+ * — typically one. Exported for the parity tests.
+ */
+export function outermostRemoteRepo(startDir: string): { root: string; url: string } {
+  let dir = startDir;
+  let root = "";
+  let url = "";
+  let depth = 0;
+  while (dir && dir !== "/" && depth < 64) {
+    if (existsSync(join(dir, ".git"))) {
+      const r = spawnSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf-8" });
+      const u = r.status === 0 ? (r.stdout || "").trim() : "";
+      if (u) {
+        root = dir;
+        url = u;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break; // dirname fixed point (C:\, ., //srv)
+    dir = parent;
+    depth += 1;
+  }
+  return { root, url };
+}
+
+/**
  * Native port of bin/gstack-slug's resolution order, used when that script cannot be
  * spawned (see resolveSlug). Same steps, same alphabet, same cache file — so this and
  * the shell path always agree. They must: the bins WRITE using this, while the
  * Context Recovery preamble READS using the script.
  *
  * Resolution order (parity with the bash script, pinned by
- * test/bin-context-windows-slug.test.ts against test/gstack-slug-cwd-walk-up.test.ts):
+ * test/bin-context-windows-slug.test.ts against test/gstack-slug-cwd-walk-up.test.ts
+ * and test/gstack-slug-parity.test.ts):
  *   0. $GSTACK_PROJECT_SLUG env override — wins over everything, never cached.
  *   1. Walk UP to the OUTERMOST project root (see outermostProjectRoot). Without
  *      the walk, a nested/vendored repo derived its slug from the INNERMOST
  *      `git remote get-url origin`, splitting the store the bash side keeps whole.
- *   2. Cached slug is sticky — EXCEPT the provable old-bug shape (#1125): cached
- *      value equals basename(cwd) while the walk-up says cwd is NOT the project
- *      root; that cache came from the pre-walk-up resolver, so recompute and heal.
- *   3. Git remote AT THE PROJECT ROOT: [:/]<owner>/<repo>[.git] → owner-repo.
+ *   2. Cached slug is sticky (#2212) — EXCEPT two provable bug shapes:
+ *      - old-bug shape (#1125): cached value equals basename(cwd) while the
+ *        walk-up says cwd is NOT the project root; that cache came from the
+ *        pre-walk-up resolver, so recompute and heal.
+ *      - degraded-ancestor shape (2026-08-17): cached equals the marker root's
+ *        basename while a remote-bearing repo BELOW the marker root exists —
+ *        the pre-remote-first resolver degraded to a stray ancestor's basename
+ *        (stray empty ~/.git → SLUG=<username>). Legit #2212 stickiness is
+ *        safe: there the repo that adopted the remote IS the marker root
+ *        (remote root == project root), so the heal never fires.
+ *   3. Canonical remote-derived slug from the OUTERMOST remote-bearing repo
+ *      (see outermostRemoteRepo — never PROJECT_ROOT, which may be a
+ *      marker-only ancestor with no remote): [:/]<owner>/<repo>[.git] →
+ *      owner-repo, byte-parity with browse/bin/remote-slug. Degenerate slugs
+ *      ("", ".", "..", anything with "/") are rejected — a hostile origin
+ *      like `url = ..` must never escape ~/.gstack/projects/<slug>.
  *   4. Project root's basename; else basename(cwd) for plain non-project folders.
  */
 export function slugFromEnvironment(gstackHome?: string, cwd: string = process.cwd()): string {
@@ -108,24 +156,56 @@ export function slugFromEnvironment(gstackHome?: string, cwd: string = process.c
   // 1. outermost project root along the cwd ancestor chain (may be "").
   const projectRoot = outermostProjectRoot(cwd);
 
+  // Lazy, memoized remote discovery (mirrors gstack-slug's _resolve_remote):
+  // needed on exactly two paths — fresh resolution and the degraded-ancestor
+  // heal check — so ordinary cache hits stay git-spawn-free.
+  let remote: { root: string; url: string } | null = null;
+  const resolveRemote = () => (remote ??= outermostRemoteRepo(cwd));
+
   let slug = "";
-  // 2. cached slug is sticky (#2212), except the old-bug shape (#1125).
+  // 2. cached slug is sticky (#2212), except the two provable bug shapes
+  //    (old-bug #1125 and degraded-ancestor 2026-08-17 — see the doc above).
   if (existsSync(cacheFile)) {
     try {
       const cached = sanitizeSlug(readFileSync(cacheFile, "utf-8").trim());
-      const pwdBase = sanitizeSlug(basename(cwd));
-      const oldBugShape = cached === pwdBase && projectRoot !== "" && projectRoot !== cwd;
-      if (cached && !oldBugShape) slug = cached;
+      if (cached) {
+        const pwdBase = sanitizeSlug(basename(cwd));
+        const rootBase = projectRoot ? sanitizeSlug(basename(projectRoot)) : "";
+        const oldBugShape = cached === pwdBase && projectRoot !== "" && projectRoot !== cwd;
+        const degradedAncestorShape =
+          !oldBugShape &&
+          projectRoot !== "" &&
+          cached === rootBase &&
+          (() => {
+            const r = resolveRemote();
+            return r.url !== "" && r.root !== projectRoot;
+          })();
+        if (!oldBugShape && !degradedAncestorShape) slug = cached;
+      }
     } catch {
       slug = "";
     }
   }
-  // 3. derive from the project root's git remote (a subdir without its own
-  //    remote inherits the parent's — same as `git -C "$PROJECT_ROOT"`).
-  if (!slug && projectRoot) {
-    const r = spawnSync("git", ["-C", projectRoot, "remote", "get-url", "origin"], { encoding: "utf-8" });
-    const m = (r.stdout || "").trim().match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
-    if (m) slug = sanitizeSlug(m[1].replace(/\//g, "-"));
+  // 3. canonical remote-derived slug from the outermost remote-bearing repo.
+  //    Parse mirrors bin/gstack-slug step 2 exactly (byte-parity with
+  //    browse/bin/remote-slug): `${REMOTE_URL%.git}` strips ONE trailing
+  //    ".git" (case-sensitive), then sed extracts the LAST two path segments
+  //    — and sed's no-match passthrough means the stripped URL itself is the
+  //    raw slug when no [:/]owner/repo tail exists.
+  if (!slug) {
+    const { url } = resolveRemote();
+    if (url) {
+      const stripped = url.endsWith(".git") ? url.slice(0, -4) : url;
+      const m = stripped.match(/[:/]([^/]+)\/([^/]+)$/);
+      const candidate = sanitizeSlug(m ? `${m[1]}-${m[2]}` : stripped);
+      // Dot-only / degenerate guard (mirrors bin/gstack-slug): a hostile
+      // origin like `url = ..` yields "." or ".." here, which would file
+      // state OUTSIDE ~/.gstack/projects/. Reject and let the basename
+      // fallback below anchor identity instead.
+      if (candidate && candidate !== "." && candidate !== ".." && !candidate.includes("/")) {
+        slug = candidate;
+      }
+    }
   }
   // 4. project root's basename, else pwd basename for plain folders.
   if (!slug && projectRoot) slug = sanitizeSlug(basename(projectRoot));

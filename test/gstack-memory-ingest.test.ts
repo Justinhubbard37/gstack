@@ -938,6 +938,82 @@ describe("#2394: probe applies the same attribution gate as prepare", () => {
     expect(reachedImport).toBe(probeNew);
     rmSync(home, { recursive: true, force: true });
   });
+
+  it("a multi-MB transcript is still classified correctly (bounded probe read)", () => {
+    // The probe reads a BOUNDED 256KB prefix, never the whole file (plan C7).
+    // The cwd sits on the first line; >1MB of filler follows. Classification
+    // must come out attributable — and stay cheap on real multi-MB corpora.
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const attributableCwd = join(home, "work", "attributable-repo");
+    mkdirSync(attributableCwd, { recursive: true });
+    spawnSync("git", ["-C", attributableCwd, "init", "-q"], { encoding: "utf-8" });
+    spawnSync("git", ["-C", attributableCwd, "remote", "add", "origin", "https://github.com/foo/bar.git"], { encoding: "utf-8" });
+
+    const ts = new Date().toISOString();
+    const cwdLine = `{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"${ts}","cwd":"${attributableCwd.replace(/\\/g, "\\\\")}"}\n`;
+    const filler = `{"type":"assistant","message":{"role":"assistant","content":"${"x".repeat(1000)}"}}\n`;
+    const body = cwdLine + filler.repeat(1100); // > 1MB after the cwd line
+    expect(body.length).toBeGreaterThan(1024 * 1024);
+    writeClaudeCodeSession(home, "work-attributable", "big1", body);
+
+    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("Total files in window: 1");
+    expect(r.stdout).not.toContain("Skipped (unattributed)");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("Codex format: session_meta cwd attributes the transcript in the probe", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const attributableCwd = makeAttributableCwd(home);
+    const today = new Date();
+    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const session = `{"type":"session_meta","payload":{"id":"sess-meta-cwd","cwd":"${attributableCwd.replace(/\\/g, "\\\\")}"},"timestamp":"${today.toISOString()}"}\n`;
+    writeCodexSession(home, ymd, session);
+
+    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("Total files in window: 1");
+    expect(r.stdout).not.toContain("Skipped (unattributed)");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("parity: a Codex cwd appearing only on a LATER record is unattributed in probe AND prepare", () => {
+    // parseTranscriptJsonl reads Codex cwd from the session_meta FIRST record
+    // ONLY. The probe mirrors those exact rules — the pre-fix probe scanned
+    // every line for any cwd and DIVERGED on this shape (probe said
+    // attributable, prepare said not).
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const attributableCwd = makeAttributableCwd(home);
+    const today = new Date();
+    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const session =
+      `{"type":"session_meta","payload":{"id":"sess-late-cwd"},"timestamp":"${today.toISOString()}"}\n` +
+      `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"hi"}]},"cwd":"${attributableCwd.replace(/\\/g, "\\\\")}"}\n`;
+    writeCodexSession(home, ymd, session);
+
+    const probe = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(probe.exitCode).toBe(0);
+    expect(probe.stdout).toContain("Total files in window: 0");
+    expect(probe.stdout).toContain("Skipped (unattributed): 1");
+
+    // Prepare agrees: nothing reaches the import stage (written + failed = 0)
+    // and the skip is attributed to the same gate.
+    const inc = runScript(["--incremental"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(inc.exitCode).toBe(0);
+    const written = Number((inc.stdout.match(/written:\s+(\d+)/) || [])[1]);
+    const failed = Number((inc.stdout.match(/failed:\s+(\d+)/) || [])[1]);
+    const unattrib = Number((inc.stdout.match(/skipped \(unattrib\):\s+(\d+)/) || [])[1]);
+    expect(written + failed).toBe(0);
+    expect(unattrib).toBe(1);
+    rmSync(home, { recursive: true, force: true });
+  });
 });
 
 // ── #2392: transcript ingest honors the per-remote trust policy ─────────────

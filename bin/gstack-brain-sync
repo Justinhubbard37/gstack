@@ -196,6 +196,11 @@ migrate_legacy_queue() {
       rm -f "$migrating" 2>/dev/null || true
     fi
   fi
+  # If the leftover STILL holds records, the conversion failed (e.g. python3
+  # unavailable). The mv below would overwrite it and destroy those records —
+  # exactly the never-destroy invariant above. Defer this run's migration;
+  # the next run retries both files.
+  [ -s "$migrating" ] && return 0
   if [ -s "$QUEUE" ]; then
     mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
     mv -f "$QUEUE" "$migrating" 2>/dev/null || return 0
@@ -482,6 +487,13 @@ subcmd_once() {
   # drain reads the spool (transition window for pre-spool writers).
   migrate_legacy_queue
 
+  # Janitor: reap orphaned enqueue temp files. A writer killed between its
+  # tmp write and the atomic rename leaves `.tmp-*` behind forever — it never
+  # becomes a record and nothing else touches it. One hour is far beyond any
+  # live writer's write→rename window, so a fresh tmp (an in-flight enqueue)
+  # is never touched. Runs inside the run lock, so it can't race the drain.
+  find "$QUEUE_DIR" -maxdepth 1 -type f -name '.tmp-*' -mmin +60 -delete 2>/dev/null || true
+
   local mode
   mode=$("$CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || echo off)
 
@@ -691,11 +703,13 @@ subcmd_status() {
     echo '{"status":"unknown","message":"no status file yet"}'
   fi
   # Supplemental info (not in status file). Depth = spool record files plus
-  # any not-yet-migrated legacy queue lines (transition window).
+  # any not-yet-migrated legacy queue lines (transition window), including a
+  # crash-leftover .migrating file — its records are still pending too.
   local queue_depth spool_depth legacy_depth
   spool_depth=$(ls "$QUEUE_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
   legacy_depth=0
   [ -f "$QUEUE" ] && legacy_depth=$(wc -l < "$QUEUE" | tr -d ' ')
+  [ -f "$QUEUE.migrating" ] && legacy_depth=$(( legacy_depth + $(wc -l < "$QUEUE.migrating" | tr -d ' ') ))
   queue_depth=$(( spool_depth + legacy_depth ))
   local last_push="never"
   [ -f "$LAST_PUSH_FILE" ] && last_push=$(cat "$LAST_PUSH_FILE" 2>/dev/null || echo never)
@@ -727,7 +741,10 @@ subcmd_drop_queue() {
     echo "Refusing: --drop-queue discards pending syncs. Pass --yes to confirm." >&2
     exit 1
   fi
-  # Remove spool record files, then truncate any legacy queue remnant.
+  # Remove spool record files, then truncate any legacy queue remnant —
+  # including a crash-leftover .migrating file, whose records would otherwise
+  # resurrect on the next drain via migrate_legacy_queue after the user
+  # explicitly discarded the queue.
   local n=0 f
   for f in "$QUEUE_DIR"/*.json; do
     [ -e "$f" ] || continue
@@ -738,6 +755,12 @@ subcmd_drop_queue() {
     legacy_n=$(wc -l < "$QUEUE" | tr -d ' ')
     n=$(( n + legacy_n ))
     : > "$QUEUE"
+  fi
+  if [ -f "$QUEUE.migrating" ]; then
+    local mig_n
+    mig_n=$(wc -l < "$QUEUE.migrating" | tr -d ' ')
+    n=$(( n + mig_n ))
+    rm -f "$QUEUE.migrating" 2>/dev/null || true
   fi
   if [ "$n" -eq 0 ]; then
     echo "queue already empty"

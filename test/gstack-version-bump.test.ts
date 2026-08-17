@@ -579,10 +579,21 @@ describe('path containment: pins and flags cannot escape the repo', () => {
 });
 
 describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-'));
-  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } });
+  // Per-test dirs: the tests assert both "VERSION absent" and "VERSION
+  // present" states, so a shared dir made them order-dependent (test 1's
+  // absence assertion only held because test 2 hadn't run yet).
+  const dirs: string[] = [];
+  const makeDir = (): string => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-'));
+    dirs.push(d);
+    return d;
+  };
+  afterAll(() => {
+    for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* noop */ } }
+  });
 
   test('repair fails with exit 2 when VERSION file does not exist', () => {
+    const dir = makeDir();
     // Set up: package.json exists with version 0.1.0.0, but no VERSION file
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.1.0.0' }, null, 2) + '\n');
     // VERSION file deliberately absent
@@ -605,6 +616,7 @@ describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missin
   });
 
   test('repair works normally when VERSION file exists', () => {
+    const dir = makeDir();
     // Set up: both VERSION and package.json exist, with drift
     fs.writeFileSync(path.join(dir, 'VERSION'), '2.0.0.0\n');
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.9.0' }, null, 2) + '\n');
@@ -618,6 +630,7 @@ describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missin
   });
 
   test('repair refuses to propagate a fabricated version when VERSION file is empty (#2600)', () => {
+    const dir = makeDir();
     // VERSION exists but is empty — readVersionFile folds this into DEFAULT ("0.0.0.0").
     // Without the `current === DEFAULT` guard, this would write 0.0.0 into package.json.
     fs.writeFileSync(path.join(dir, 'VERSION'), '');
@@ -641,8 +654,7 @@ describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missin
   test('repair reproduces the exact issue scenario: VERSION in root, package.json in app/ (#2600)', () => {
     // The exact layout from the issue: VERSION at repo root, package.json in app/
     // Running repair from app/ cwd with no VERSION there used to write 0.0.0.0 into app/package.json.
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-exact-'));
-    afterAll(() => { try { fs.rmSync(rootDir, { recursive: true, force: true }); } catch { /* noop */ } });
+    const rootDir = makeDir();
 
     fs.mkdirSync(path.join(rootDir, 'app'), { recursive: true });
     fs.writeFileSync(path.join(rootDir, 'VERSION'), '0.2.0.0\n');
@@ -666,21 +678,31 @@ describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missin
 });
 
 describe('#2600: classify must surface versionFileExists=false when VERSION is missing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-classify-'));
-  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } });
+  // Per-test dirs: one test asserts VERSION absent, the other creates it — a
+  // shared dir made them order-dependent. Each test builds its own repo.
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* noop */ } }
+  });
 
-  // Set up a minimal git repo so classify can resolve base
-  const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' });
-  git('init', '-q', '-b', 'main');
-  git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
-  // Commit with no VERSION file
-  fs.writeFileSync(path.join(dir, 'README.md'), 'test\n');
-  git('add', '-A'); git('commit', '-q', '-m', 'base');
-  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
-  fs.mkdirSync(path.join(dir, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.git', 'refs', 'remotes', 'origin', 'main'), head + '\n');
+  /** Minimal git repo (no VERSION committed) so classify can resolve base. */
+  function makeRepoDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-classify-'));
+    dirs.push(dir);
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    // Commit with no VERSION file
+    fs.writeFileSync(path.join(dir, 'README.md'), 'test\n');
+    git('add', '-A'); git('commit', '-q', '-m', 'base');
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+    fs.mkdirSync(path.join(dir, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git', 'refs', 'remotes', 'origin', 'main'), head + '\n');
+    return dir;
+  }
 
   test('classify reports versionFileExists=false when VERSION is absent', () => {
+    const dir = makeRepoDir();
     // No package.json: pkgExists=false, pkgAgrees=true, current===base → FRESH.
     // (A package.json with a non-zero version would cause DRIFT_UNEXPECTED.)
 
@@ -693,7 +715,8 @@ describe('#2600: classify must surface versionFileExists=false when VERSION is m
   });
 
   test('classify reports versionFileExists=true when VERSION is present', () => {
-    // Now create VERSION AND sync package.json so pkgAgrees=true → ALREADY_BUMPED.
+    const dir = makeRepoDir();
+    // Create VERSION AND sync package.json so pkgAgrees=true → ALREADY_BUMPED.
     fs.writeFileSync(path.join(dir, 'VERSION'), '0.2.0.0\n');
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.2.0.0' }, null, 2) + '\n');
 

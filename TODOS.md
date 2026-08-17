@@ -96,6 +96,24 @@ invisible to Context Recovery until migrated.
 **Effort:** M → S with CC. **Priority:** P2. **Depends on:** the v1.68 wave
 (shipped the fix + parity tests).
 
+### P3: gstack-slug degraded-heal probe cost on cache hits (v1.68 review-army finding)
+
+**What:** The v1.68 cache self-heal probes `_resolve_remote` (1-3 git forks) on
+EVERY cache hit whenever the cached slug equals the marker-root basename — the
+permanent steady state for remoteless and legit-sticky projects, on the
+per-preamble hot path. Add a single-shot sentinel per cache entry so the heal
+probe runs once, not forever.
+
+**Why:** "Cache hits stay git-spawn-free" only holds for owner-repo slugs
+today. Cost is bounded (1-3 forks) but paid at every skill start on affected
+projects. Also next-touch notes from the same review: extract a makeResult
+helper for BulkResult's 11 hand-copied literals in bin/gstack-memory-ingest.ts;
+dedup the brain-worktree default-path literal between bin/gstack-brain-sync and
+bin/gstack-gbrain-source-wireup.
+
+**Effort:** S. **Priority:** P3. **Depends on:** cache-format compatibility
+(sentinel must not break older readers).
+
 ### P2: v1.67 coverage-audit test-gap backlog (5-agent sweep, ranked)
 
 The wave's Step-7 coverage audit (5 subsystem agents, ~700 changed paths,

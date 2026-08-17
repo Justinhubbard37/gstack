@@ -19,6 +19,7 @@ import * as os from "os";
 import { spawnSync } from "child_process";
 
 import { repoPolicyTierBatch } from "../lib/gbrain-repo-policy-client";
+import { canonicalizeRemote } from "../lib/gstack-memory-helpers";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const BIN = path.join(ROOT, "bin", "gstack-gbrain-repo-policy");
@@ -148,5 +149,62 @@ describe("repoPolicyTierBatch (TypeScript client)", () => {
     } finally {
       fs.chmodSync(policyFile(), 0o600);
     }
+  });
+});
+
+// ── Normalize parity: bash normalize() ↔ lib canonicalizeRemote ─────────────
+//
+// bin/gstack-memory-ingest.ts produces page.git_remote via canonicalizeRemote
+// (lib/gstack-memory-helpers) and then looks the policy up through
+// repoPolicyTierBatch — whose bash side re-normalizes with normalize(). If
+// the two functions disagree on ANY URL shape, a policy the user set via the
+// script silently fails to apply to ingest (a deny that doesn't deny). The
+// contract pinned here: for every shape X, `set X <tier>` followed by a batch
+// lookup of canonicalizeRemote(X) returns <tier>. Bash owns normalization —
+// any divergence is fixed in the SCRIPT's normalize(), never by re-normalizing
+// in TypeScript.
+
+describe("normalize parity: bash normalize() ↔ canonicalizeRemote (edge URL shapes)", () => {
+  // One distinct repo per shape so tiers don't overwrite each other.
+  const CORPUS: Array<{ shape: string; tier: "read-write" | "read-only" | "deny" }> = [
+    { shape: "https://github.com/acme/plain", tier: "deny" },
+    { shape: "https://github.com/acme/dotgit.git", tier: "read-only" },
+    { shape: "https://github.com/acme/slash/", tier: "read-write" },
+    // .git + trailing slash: bash must strip the slash BEFORE the .git suffix
+    // (slash-first order), as canonicalizeRemote does.
+    { shape: "https://github.com/acme/dotgitslash.git/", tier: "deny" },
+    // Uppercase .GIT: canonicalizeRemote strips case-insensitively; bash must
+    // lowercase before the suffix strip or the key keeps a ".git" tail.
+    { shape: "https://github.com/ACME/UpperGit.GIT", tier: "read-only" },
+    { shape: "git@github.com:acme/scp.git", tier: "deny" },
+    { shape: "ssh://git@github.com/acme/sshurl.git", tier: "read-write" },
+  ];
+
+  test("normalize <url> prints exactly canonicalizeRemote(url) for every corpus shape", () => {
+    for (const { shape } of CORPUS) {
+      const r = run(["normalize", shape]);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe(canonicalizeRemote(shape));
+    }
+  });
+
+  test("a policy set via the script with shape X is found via canonicalizeRemote(X)", () => {
+    for (const { shape, tier } of CORPUS) {
+      expect(run(["set", shape, tier]).status).toBe(0);
+    }
+    const canon = CORPUS.map((c) => canonicalizeRemote(c.shape));
+    const verdicts = repoPolicyTierBatch(canon, env());
+    for (let i = 0; i < CORPUS.length; i++) {
+      expect(verdicts.get(canon[i])).toEqual({ tier: CORPUS[i].tier });
+    }
+  });
+
+  test("cross-shape: set through one shape, looked up through another shape of the same repo", () => {
+    // The store keys on the normalized form, so every spelling of the same
+    // repo shares one entry — set through scp form, read through https form.
+    expect(run(["set", "git@github.com:acme/xshape.git", "deny"]).status).toBe(0);
+    const canon = canonicalizeRemote("https://github.com/ACME/XShape.GIT/");
+    const verdicts = repoPolicyTierBatch([canon], env());
+    expect(verdicts.get(canon)).toEqual({ tier: "deny" });
   });
 });

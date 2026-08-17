@@ -343,6 +343,71 @@ describe('timeline-stop-hook wiring', () => {
     }
   });
 
+  test('corrupt settings.json: ensure-event refuses (exit 1) and never rewrites the file', () => {
+    // The old catch{} folded an unparseable EXISTING settings.json into {}
+    // and the atomic write replaced the user's permissions/env/other hooks
+    // with just ours. Now: loud stderr error, exit 1, file byte-identical.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ensure-corrupt-'));
+    try {
+      const settingsFile = path.join(dir, 'settings.json');
+      const corrupt = '{ "permissions": { "allow": ["Bash(npm:*)"] }, INVALID';
+      fs.writeFileSync(settingsFile, corrupt);
+
+      const r = spawnSync('bash', [
+        SETTINGS_HOOK, 'ensure-event',
+        '--event', 'Stop',
+        '--command', HOOK,
+        '--source', 'gstack-timeline-stop',
+        '--timeout', '5',
+      ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
+
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('not valid JSON');
+      // Never rewritten — the corrupt bytes (and whatever the user can still
+      // salvage from them) survive verbatim.
+      expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(corrupt);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a matcher change updates the tagged entry in place — still exactly one registration', () => {
+    // Identity key is (event, source): an existing gstack entry with a STALE
+    // matcher must be updated, never joined by a second entry (the old key
+    // included the matcher, so any future matcher change would duplicate).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ensure-matcher-'));
+    try {
+      const settingsFile = path.join(dir, 'settings.json');
+      fs.writeFileSync(settingsFile, JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            _gstack_source: 'gstack-plan-tune',
+            matcher: 'OldMatcher',
+            hooks: [{ type: 'command', command: '/old/path/hook', timeout: 5 }],
+          }],
+        },
+      }, null, 2) + '\n');
+
+      const r = spawnSync('bash', [
+        SETTINGS_HOOK, 'ensure-event',
+        '--event', 'PreToolUse',
+        '--command', '/new/path/hook',
+        '--source', 'gstack-plan-tune',
+        '--matcher', 'NewMatcher',
+        '--timeout', '5',
+      ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
+
+      expect(r.status).toBe(0);
+      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+      expect(s.hooks.PreToolUse).toHaveLength(1); // updated in place — never two
+      expect(s.hooks.PreToolUse[0].matcher).toBe('NewMatcher');
+      expect(s.hooks.PreToolUse[0].hooks[0].command).toBe('/new/path/hook');
+      expect(s.hooks.PreToolUse[0]._gstack_source).toBe('gstack-plan-tune');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a failed update leaves exactly one registration — never zero, never two', () => {
     // Root can write through 0o555 directories, so the failure injection
     // (read-only dir) does not bind there; the invariant is still covered by

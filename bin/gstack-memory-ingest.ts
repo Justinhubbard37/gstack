@@ -1078,17 +1078,6 @@ export function readNewFailures(
 // ── Main ingest passes ─────────────────────────────────────────────────────
 
 /**
- * Lightweight attribution check: does a transcript have a resolvable git
- * remote for its cwd? Extracts the cwd from the first JSONL line that has
- * one (mirroring the logic in parseTranscriptJsonl) and calls
- * resolveGitRemote. Avoids the full parse (body rendering, message counting)
- * because probe only needs the yes/no answer.
- *
- * Non-transcript types (artifacts) always pass — the attribution filter in
- * preparePages only applies to transcripts (#2394).
- */
-
-/**
  * The ONE attribution gate (#2394): a transcript is attributable iff its cwd
  * resolves to a git remote. Both probeMode (via transcriptIsAttributable) and
  * preparePages route through THIS function, so the two stages' post-attribution
@@ -1099,32 +1088,75 @@ function sessionIsAttributable(cwd: string | undefined | null): boolean {
   return resolveGitRemote(cwd) !== "";
 }
 
+/**
+ * Bounded prefix for the probe's cheap-parse (plan C7): transcripts run to
+ * tens of MB, and the probe only needs the cwd, which both agent formats put
+ * on the FIRST records. 256KB is orders of magnitude past any real header.
+ */
+const TRANSCRIPT_PROBE_MAX_BYTES = 256 * 1024;
+
+/**
+ * Lightweight attribution check: does a transcript have a resolvable git
+ * remote for its cwd? Reads a BOUNDED prefix (first 256KB, never the whole
+ * file — plan C7: the probe must stay a cheap parse on multi-MB transcripts),
+ * extracts the cwd with EXACTLY parseTranscriptJsonl's rules, and calls
+ * resolveGitRemote. Avoids the full parse (body rendering, message counting)
+ * because probe only needs the yes/no answer.
+ *
+ * Extraction MIRRORS parseTranscriptJsonl (the single source of truth for
+ * cwd semantics — keep the two in lockstep):
+ *   - the first PARSEABLE line decides the format (Codex: type=session_meta
+ *     or payload.id; else Claude Code);
+ *   - Codex cwd comes from that FIRST record ONLY (payload.cwd || cwd) —
+ *     a cwd appearing only on a later record is NOT used, exactly as
+ *     parseTranscriptJsonl ignores it, so probe and prepare can never
+ *     diverge on the same file;
+ *   - Claude Code cwd comes from the first record that carries one;
+ *   - unparseable lines are skipped (the truncated-tail case included).
+ *
+ * Non-transcript types (artifacts) always pass — the attribution filter in
+ * preparePages only applies to transcripts (#2394).
+ */
 function transcriptIsAttributable(path: string): boolean {
   let raw: string;
   try {
-    raw = readFileSync(path, "utf-8");
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(TRANSCRIPT_PROBE_MAX_BYTES);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      raw = buf.toString("utf-8", 0, n);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return false;
   }
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
   if (lines.length === 0) return false;
 
-  // Detect format: Codex first line has type=session_meta, Claude Code
-  // has cwd on a user/assistant record.
   let cwd = "";
+  let sawFirstParseable = false;
   for (const line of lines) {
+    let rec: any;
     try {
-      const rec = JSON.parse(line);
-      if (rec?.type === "session_meta") {
+      rec = JSON.parse(line);
+    } catch {
+      continue; // mirrors parseTranscriptJsonl: unparseable lines are skipped
+    }
+    if (!sawFirstParseable) {
+      sawFirstParseable = true;
+      // Format detection mirrors parseTranscriptJsonl's `first` record check.
+      const isCodex = rec?.type === "session_meta" || rec?.payload?.id != null;
+      if (isCodex) {
+        // Codex: cwd comes from the session_meta FIRST record only.
         cwd = rec.payload?.cwd || rec.cwd || "";
         break;
       }
-      if (rec?.cwd) {
-        cwd = rec.cwd;
-        break;
-      }
-    } catch {
-      continue;
+    }
+    // Claude Code: first record with a cwd wins (the first record included).
+    if (rec?.cwd) {
+      cwd = rec.cwd;
+      break;
     }
   }
   if (!cwd) return false;

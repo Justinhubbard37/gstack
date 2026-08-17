@@ -92,14 +92,23 @@ normalize() {
   case "$head" in
     *:*) url=$(printf '%s' "$url" | sed 's|:|/|') ;;
   esac
+  # Lowercase BEFORE the suffix strips so a `.GIT` suffix still strips —
+  # parity with lib/gstack-memory-helpers' canonicalizeRemote, which strips
+  # `.git` case-insensitively. GitHub and most hosts are case-insensitive on
+  # paths anyway; collapsing avoids duplicate entries for "Foo/Bar" vs
+  # "foo/bar". (Parity is pinned by test/gbrain-repo-policy-client.test.ts:
+  # a key set through THIS normalize must be found via the canonicalized form
+  # memory-ingest passes to `get --batch`.)
+  url=$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')
+  # Strip trailing slash(es) FIRST, so ".git/" still loses its suffix (same
+  # order as canonicalizeRemote — slash-first, then .git, then re-strip).
+  while [ "${url%/}" != "$url" ]; do url="${url%/}"; done
   # Strip trailing .git
   url="${url%.git}"
-  # Strip trailing /
-  url="${url%/}"
-  # Lowercase the whole thing. GitHub and most hosts are case-insensitive on
-  # paths anyway; collapsing avoids duplicate entries for "Foo/Bar" vs
-  # "foo/bar".
-  printf '%s\n' "$url" | tr '[:upper:]' '[:lower:]'
+  # Re-strip trailing slash(es): a path remote ending in a `.git` directory
+  # component ("/repo/.git") exposes a new trailing slash once .git is gone.
+  while [ "${url%/}" != "$url" ]; do url="${url%/}"; done
+  printf '%s\n' "$url"
 }
 
 # ensure_file — create the policy file if missing, migrate if legacy.

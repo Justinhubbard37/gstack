@@ -23,6 +23,7 @@
 #   .brain-queue.jsonl         — legacy pending queue (pre-spool)
 #   .brain-discover-cursor     — discover-new cursor
 #   .brain-last-push           — timestamp marker
+#   .brain-worktree-last-advance — daily worktree-advance stamp (#2516)
 #   .brain-skip.txt            — user-maintained skip list
 #   .brain-sync.lock.d/        — lock dir (if present)
 #   .brain-sync-status.json    — health status
@@ -125,6 +126,7 @@ rm -f "$GSTACK_HOME/.brain-queue.jsonl.migrating" 2>/dev/null || true
 rm -f "$GSTACK_HOME/.brain-discover-cursor" 2>/dev/null || true
 rm -f "$GSTACK_HOME/.brain-last-push" 2>/dev/null || true
 rm -f "$GSTACK_HOME/.brain-last-pull" 2>/dev/null || true
+rm -f "$GSTACK_HOME/.brain-worktree-last-advance" 2>/dev/null || true
 rm -f "$GSTACK_HOME/.brain-skip.txt" 2>/dev/null || true
 rm -f "$GSTACK_HOME/.brain-sync-status.json" 2>/dev/null || true
 rm -rf "$GSTACK_HOME/.brain-sync.lock.d" 2>/dev/null || true

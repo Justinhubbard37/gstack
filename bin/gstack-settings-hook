@@ -83,7 +83,17 @@ case "$ACTION" in
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const hookCmd = process.env.GSTACK_HOOK_CMD;
       let settings = {};
-      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+      // An EXISTING file that does not parse must never be rewritten: the
+      // old catch{} folded it to {} and the atomic write below replaced the
+      // user permissions/env/other hooks with just ours. Refuse loudly.
+      if (fs.existsSync(settingsPath)) {
+        try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); }
+        catch (e) {
+          console.error("error: " + settingsPath + " exists but is not valid JSON (" +
+            (e && e.message ? e.message : e) + "); refusing to rewrite it. Fix or move the file, then re-run.");
+          process.exit(1);
+        }
+      }
       if (!settings.hooks) settings.hooks = {};
       if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
       const exists = settings.hooks.SessionStart.some(entry =>
@@ -97,7 +107,7 @@ case "$ACTION" in
       const tmp = settingsPath + ".tmp";
       fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
       fs.renameSync(tmp, settingsPath);
-    ' 2>/dev/null
+    '
     ;;
 
   remove)
@@ -178,18 +188,34 @@ case "$ACTION" in
       const ensure = process.env.GSTACK_ENSURE === "1";
 
       let settings = {};
-      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+      // An EXISTING file that does not parse must never be rewritten: the
+      // old catch{} folded it to {} and the atomic write below replaced the
+      // user permissions/env/other hooks with just ours. Refuse loudly.
+      if (fs.existsSync(settingsPath)) {
+        try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); }
+        catch (e) {
+          console.error("error: " + settingsPath + " exists but is not valid JSON (" +
+            (e && e.message ? e.message : e) + "); refusing to rewrite it. Fix or move the file, then re-run.");
+          process.exit(1);
+        }
+      }
 
       const before = JSON.stringify(settings, null, 2);
 
       if (!settings.hooks) settings.hooks = {};
       if (!settings.hooks[event]) settings.hooks[event] = [];
 
+      // Identity key is (event, source): any existing entry carrying OUR
+      // source tag for this event IS the entry to compare/update — a matcher
+      // change must update it in place, never push a SECOND gstack entry
+      // (the old key included the matcher, so a future matcher change would
+      // have duplicated the registration). Untagged legacy entries are still
+      // adopted when both matcher and command line up.
       const matchesEntry = (entry) => {
+        if (entry._gstack_source === source) return true;
         const sameMatcher = (entry.matcher || "") === matcher;
         const sameCommand = entry.hooks && entry.hooks[0] && entry.hooks[0].command === cmd;
-        const sameSource = entry._gstack_source === source;
-        return sameMatcher && (sameSource || sameCommand);
+        return sameMatcher && sameCommand;
       };
 
       let existing = settings.hooks[event].find(matchesEntry);
@@ -202,6 +228,10 @@ case "$ACTION" in
       if (existing) {
         existing.hooks = [hookEntry];
         existing._gstack_source = source;
+        // Keep the matcher current too — under the (event, source) key the
+        // matched entry may carry a stale matcher.
+        if (matcher) existing.matcher = matcher;
+        else delete existing.matcher;
       } else {
         const newEntry = { _gstack_source: source, hooks: [hookEntry] };
         if (matcher) newEntry.matcher = matcher;

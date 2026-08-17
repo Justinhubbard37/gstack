@@ -234,6 +234,23 @@ describe('gstack-session-update lock identity + TTL (#2613)', () => {
     }
   }, 30000);
 
+  test('reclaim is TOCTOU-safe: both reclaim branches mv the lock aside atomically (static pin)', () => {
+    // `rm -rf "$LOCK_DIR"` then `mkdir` lets TWO contenders both judge the
+    // lock stale and both win (one rm can land between the other's rm and
+    // mkdir). The atomic mv-aside makes exactly one contender own the reap:
+    // the loser's mv fails and it backs off with SKIP lock_contested. Pin
+    // that BOTH reclaim branches (TTL-expired and dead-PID) use it, and that
+    // no bare in-place `rm -rf "$LOCK_DIR"` survives outside the holder's
+    // own EXIT trap.
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    const mvAside = src.match(/mv "\$LOCK_DIR" "\$LOCK_DIR\.reap\.\$\$" 2>\/dev\/null \|\| \{ log_entry "SKIP lock_contested"; exit 0; \}/g) || [];
+    expect(mvAside.length).toBe(2); // TTL branch + dead-PID branch
+    // The only rm -rf of the live lock dir is the holder's EXIT trap.
+    const bareRms = src.match(/rm -rf "\$LOCK_DIR"(?!\.)/g) || [];
+    expect(bareRms.length).toBe(1);
+    expect(src).toContain(`trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT`);
+  });
+
   test('an expired-TTL lock is reclaimed even when its pid is alive (PID reuse)', async () => {
     const { base, install, state } = makeFixture();
     const holder = require('child_process').spawn('sleep', ['30'], { stdio: 'ignore' });
