@@ -256,6 +256,7 @@ async function runToFiles(cmd: string[], opts: RunToFilesOptions): Promise<RunTo
     // here and closing them after exit instead put us in Bun's fd bookkeeping,
     // which surfaced as a stray EBADF from epoll_ctl on a later spawn.
     const proc = Bun.spawn(cmd, {
+      windowsHide: true,
       cwd: opts.cwd,
       env: opts.env as any,
       stdout: Bun.file(outPath) as any,

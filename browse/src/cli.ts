@@ -212,6 +212,7 @@ function cleanupLegacyState(): void {
         if (data.pid && isProcessAlive(data.pid)) {
           // Verify this is actually a browse server before killing
           const check = Bun.spawnSync(['ps', '-p', String(data.pid), '-o', 'command='], {
+      windowsHide: true,
             stdout: 'pipe', stderr: 'pipe', timeout: 2000,
           });
           const cmd = check.stdout.toString().trim();
@@ -1645,6 +1646,7 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       // (the user asked to SEE the shared browser), and connect's #2219 guard
       // would otherwise refuse to replace the healthy headless daemon.
       const connectProc = Bun.spawn([browseBin, 'connect', '--force-restart'], {
+        windowsHide: true,
         cwd: process.cwd(),
         stdio: ['ignore', 'inherit', 'inherit'],
         // Disable parent-PID monitoring: pair-agent needs the server to outlive
