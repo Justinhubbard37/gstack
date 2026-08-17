@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.66.2.0] - 2026-08-16
+## [1.67.1.0] - 2026-08-16
 
 **We read every line of external-contributor code from the last two months.**
 **Six findings hardened, two refuted, zero backdoors.**
