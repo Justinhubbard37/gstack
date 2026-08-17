@@ -122,3 +122,138 @@ describe('gstack-session-update pull wedge (#2566)', () => {
     }
   }, 30000);
 });
+
+// ── #2613: the lock pidfile must record the LIVE holder, not the exited parent ──
+//
+// `echo $$` inside the backgrounded subshell recorded the parent hook's PID.
+// The parent exits immediately, so every subsequent session judged the lock
+// stale and rm -rf'd a LIVE holder's lock — concurrent updaters, the exact
+// state the lock exists to prevent. Plus: a hard TTL (heartbeat-refreshed)
+// bounds PID-reuse wedges and the empty/missing-pidfile races.
+
+describe('gstack-session-update lock identity + TTL (#2613)', () => {
+  function makeSlowGitShim(base: string, sleepSecs: number): string {
+    const shimDir = path.join(base, 'shim');
+    fs.mkdirSync(shimDir, { recursive: true });
+    const realGit = execFileSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(
+      path.join(shimDir, 'git'),
+      `#!/usr/bin/env bash\ncase "$*" in *pull*) sleep ${sleepSecs};; esac\nexec "${realGit}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    return shimDir;
+  }
+
+  function runScriptWithPath(install: string, state: string, shimDir: string) {
+    return spawnSync('bash', [SCRIPT], {
+      encoding: 'utf8',
+      env: { ...process.env, GSTACK_DIR: install, GSTACK_STATE_DIR: state, PATH: `${shimDir}:${process.env.PATH}` },
+      timeout: 20000,
+    });
+  }
+
+  function isAlive(pid: number): boolean {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }
+
+  test('recorded pid is the live holder subshell, not the exited parent', async () => {
+    const { base, install, state } = makeFixture();
+    const shimDir = makeSlowGitShim(base, 3);
+    try {
+      const r = runScriptWithPath(install, state, shimDir);
+      expect(r.status).toBe(0); // parent hook has EXITED by now (spawnSync waited)
+      // Poll for the pidfile the detached subshell writes.
+      const pidPath = path.join(state, '.setup-lock', 'pid');
+      const deadline = Date.now() + 5000;
+      let pid = 0;
+      while (Date.now() < deadline) {
+        if (fs.existsSync(pidPath)) {
+          pid = Number(fs.readFileSync(pidPath, 'utf8').trim());
+          if (pid > 0) break;
+        }
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(pid).toBeGreaterThan(0);
+      // The lock is held (slow pull) — its recorded PID must be ALIVE.
+      // Pre-fix this held the dead parent's PID and the assertion fails.
+      expect(fs.existsSync(path.join(state, '.setup-lock'))).toBe(true);
+      expect(isAlive(pid)).toBe(true);
+      await waitForLog(state, /UP_TO_DATE|UPDATING|PULL_FAILED/);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test('a live lock with a live pid is respected and survives', async () => {
+    const { base, install, state } = makeFixture();
+    const holder = require('child_process').spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const lockDir = path.join(state, '.setup-lock');
+      fs.mkdirSync(lockDir, { recursive: true });
+      fs.writeFileSync(path.join(lockDir, 'pid'), String(holder.pid));
+      const r = runScript(install, state);
+      expect(r.status).toBe(0);
+      const log = await waitForLog(state, /SKIP locked_by=/);
+      expect(log).toContain(`SKIP locked_by=${holder.pid}`);
+      expect(fs.existsSync(lockDir)).toBe(true); // NOT rm -rf'd (#2613)
+    } finally {
+      holder.kill();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test('a dead pid is reclaimed and the run proceeds', async () => {
+    const { base, install, state } = makeFixture();
+    try {
+      const dead = spawnSync('true', { encoding: 'utf8' }); // reaped by the time spawnSync returns
+      const lockDir = path.join(state, '.setup-lock');
+      fs.mkdirSync(lockDir, { recursive: true });
+      fs.writeFileSync(path.join(lockDir, 'pid'), String(dead.pid));
+      const r = runScript(install, state);
+      expect(r.status).toBe(0);
+      const log = await waitForLog(state, /UP_TO_DATE|UPDATING/);
+      expect(log).toMatch(/UP_TO_DATE|UPDATING/);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test('an empty pidfile inside the TTL window is NOT instantly reaped', async () => {
+    const { base, install, state } = makeFixture();
+    try {
+      const lockDir = path.join(state, '.setup-lock');
+      fs.mkdirSync(lockDir, { recursive: true });
+      fs.writeFileSync(path.join(lockDir, 'pid'), ''); // mkdir→echo race window
+      const r = runScript(install, state);
+      expect(r.status).toBe(0);
+      const log = await waitForLog(state, /SKIP locked_by=/);
+      expect(log).toContain('SKIP locked_by=');
+      expect(fs.existsSync(lockDir)).toBe(true);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test('an expired-TTL lock is reclaimed even when its pid is alive (PID reuse)', async () => {
+    const { base, install, state } = makeFixture();
+    const holder = require('child_process').spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const lockDir = path.join(state, '.setup-lock');
+      fs.mkdirSync(lockDir, { recursive: true });
+      const pidPath = path.join(lockDir, 'pid');
+      fs.writeFileSync(pidPath, String(holder.pid));
+      // Age the heartbeat past the 30-min TTL: a recycled PID looks alive
+      // forever, so liveness alone can never clear this wedge.
+      const past = new Date(Date.now() - 40 * 60 * 1000);
+      fs.utimesSync(pidPath, past, past);
+      const r = runScript(install, state);
+      expect(r.status).toBe(0);
+      const log = await waitForLog(state, /RECLAIMED lock_ttl_expired/);
+      expect(log).toContain('RECLAIMED lock_ttl_expired');
+      await waitForLog(state, /UP_TO_DATE|UPDATING/);
+    } finally {
+      holder.kill();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30000);
+});
