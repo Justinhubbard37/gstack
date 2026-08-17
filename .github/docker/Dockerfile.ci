@@ -104,7 +104,12 @@ RUN for i in 1 2 3; do \
 # resolution. Without bun.lock here, bun install resolved transitive deps
 # differently in CI vs local (observed on v1.28.0.0: socks landed but
 # smart-buffer + ip-address didn't make it into the cached node_modules).
+# patches/ rides along: bun.lock's patchedDependencies (playwright-core
+# windowsHide, v1.67) makes install fail without the patch files present —
+# and the workflows' image-tag hash includes patches/** so editing a patch
+# rebuilds this layer.
 COPY package.json bun.lock /workspace/
+COPY patches /workspace/patches
 WORKDIR /workspace
 RUN bun install --frozen-lockfile && rm -rf /tmp/*
 

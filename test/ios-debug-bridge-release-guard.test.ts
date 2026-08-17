@@ -3,17 +3,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // Static tripwire (free tier, runs on every PR): the private-API ObjC touch
-// bridge MUST compile out of Release builds. That safety property has two
-// load-bearing halves, and this test pins both against regression:
+// bridge MUST compile out of Release builds. v1.67.0.0 landed the enforcement
+// (measured on a real app: `nm -j` on a Release binary previously returned 15
+// DebugBridge symbols incl. IOHIDEventCreateDigitizer — a Guideline 2.5.1
+// private-API exposure); this tripwire pins its two load-bearing halves
+// against regression:
 //
-//   1. DebugBridgeTouch.m's body is gated `#if TARGET_OS_IOS && DEBUG` — NOT a
-//      bare `#if TARGET_OS_IOS` (which shipped the private symbols in Release
-//      iOS builds; PR #2264 claimed they were compiled out but the guard was
-//      platform-only).
+//   1. DebugBridgeTouch.m short-circuits Release FIRST: `#if !defined(DEBUG)`
+//      emits an empty translation unit, and the implementation lives behind
+//      `#elif TARGET_OS_IOS`. A revert to a bare platform-only `#if
+//      TARGET_OS_IOS` gate (the original regression) ships the private
+//      symbols in Release again.
 //   2. The DebugBridgeTouch target in Package.swift carries a cSettings
-//      DEBUG define scoped to the debug configuration — without it, `#if DEBUG`
-//      is false even in Debug and the bridge silently breaks in the case it
-//      exists to serve.
+//      DEBUG define scoped to the debug configuration — SwiftPM's implicit
+//      DEBUG for C-family targets is not guaranteed, and without the define
+//      `#if DEBUG` is false even in Debug, silently breaking the bridge in
+//      the one case it exists to serve.
 //
 // The full proof — an iOS-SDK Release build asserting `nm`/`strings` of the
 // built binary contain none of _touchesEvent / IOHIDEventCreateDigitizer* /
@@ -35,11 +40,15 @@ const PACKAGE_MANIFESTS = [
 
 describe('DebugBridgeTouch Release compile-out guard', () => {
   for (const rel of TOUCH_SOURCES) {
-    test(`${rel} gates the body on TARGET_OS_IOS && DEBUG`, () => {
+    test(`${rel} short-circuits Release before any platform gate`, () => {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-      // The primary body guard must be the DEBUG-qualified form.
-      expect(src).toContain('#if TARGET_OS_IOS && DEBUG');
-      // And must NOT carry a bare platform-only guard as the body gate — that
+      // Release short-circuit first, implementation behind the elif.
+      expect(src).toContain('#if !defined(DEBUG)');
+      expect(src).toContain('#elif TARGET_OS_IOS');
+      // The Release branch must come BEFORE the platform branch — order is the
+      // property (a platform-first gate compiled private API into Release).
+      expect(src.indexOf('#if !defined(DEBUG)')).toBeLessThan(src.indexOf('#elif TARGET_OS_IOS'));
+      // And no bare platform-only guard may reappear as the body gate — that
       // was the exact regression (private API shipped in Release).
       expect(src).not.toMatch(/^#if TARGET_OS_IOS$/m);
     });

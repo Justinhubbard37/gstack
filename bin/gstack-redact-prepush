@@ -70,6 +70,33 @@ function objectExists(sha: string): boolean {
   return r.status === 0;
 }
 
+/**
+ * The remote-tracking exclusion used when narrowing to "commits new to the
+ * remote" (#2592 catch-up merges, #2573 rebased force-pushes).
+ *
+ * Narrowed to the PUSH TARGET's namespace (S1): a bare `--remotes` excludes
+ * commits reachable from ANY remote-tracking ref, so a secret that had only
+ * ever been fetched from (or pushed to) a private/local-path remote was never
+ * scanned when later pushed to a PUBLIC remote — "already left this machine"
+ * is not "already reached THIS remote". Git hands pre-push the push remote's
+ * name as $1 (and its URL as $2); the installed hook wrapper forwards "$@".
+ * Fallbacks keep the historical all-remotes behavior when the name is
+ * unavailable (stdin/CLI invocation) or is not a configured remote (URL
+ * pushes have no remote-tracking namespace) — falling back scans LESS than
+ * the narrowed form would, but never less than the hook historically did.
+ */
+let _remotesExclusion: string | undefined;
+function remotesExclusion(): string {
+  if (_remotesExclusion === undefined) {
+    const name = process.argv[2];
+    const configured = name
+      ? git(["remote"]).split("\n").map((s) => s.trim()).filter(Boolean).includes(name)
+      : false;
+    _remotesExclusion = configured ? `--remotes=${name}/*` : "--remotes";
+  }
+  return _remotesExclusion;
+}
+
 function defaultRemoteBranch(): string {
   // origin/HEAD → origin/main, fall back to main/master.
   const sym = git(["symbolic-ref", "refs/remotes/origin/HEAD"]).trim();
@@ -104,12 +131,12 @@ function unknownRemoteTipBase(localSha: string): string | null {
   //    engine's byte cap, so `engine.input_too_large` blocks having scanned
   //    NOTHING — "scans more, never less" inverted into "scans nothing".
   //
-  //    `--remotes` covers every remote, not just the push target: content
-  //    already published anywhere has already left this machine, so treating it
-  //    as pre-existing is deliberate. Git hands the remote name to pre-push in
-  //    argv, which this hook does not read; narrowing to it would only matter
-  //    for a repo that pushes secrets to one remote but not another.
-  const newCommits = git(["rev-list", "--reverse", localSha, "--not", "--remotes"]).trim();
+  //    The exclusion is scoped to the PUSH TARGET's tracking refs (see
+  //    remotesExclusion): content on some OTHER remote has left this machine,
+  //    but it has not reached the remote being pushed to — a secret that only
+  //    ever hit a private remote must still be scanned on its way to a public
+  //    one (S1).
+  const newCommits = git(["rev-list", "--reverse", localSha, "--not", remotesExclusion()]).trim();
   if (newCommits) {
     const oldest = newCommits.split("\n")[0];
     const parent = git(["rev-parse", "--verify", `${oldest}^`]).trim();
@@ -122,8 +149,90 @@ function unknownRemoteTipBase(localSha: string): string | null {
   return null;
 }
 
+/**
+ * The commits this push actually adds — reachable from localSha and from NO
+ * remote-tracking ref.
+ *
+ * ⚠ WHY THIS EXISTS RATHER THAN A TWO-DOT RANGE.
+ *
+ * `remoteSha..localSha` is "everything new on this branch", which is NOT the
+ * same as "everything new to the remote". Merge origin/main into a feature
+ * branch and every commit main gained since the branch's last push becomes an
+ * added line — content that is already published, already scanned, and not
+ * this push's doing.
+ *
+ * Two things follow, and both were observed:
+ *
+ *   · FALSE HIGH FINDINGS. A placeholder connection string in a test fixture,
+ *     already merged to main by someone else, blocked an unrelated push as
+ *     `db.url_with_password` — telling the operator to rotate a credential
+ *     over a fixture they had never touched. A
+ *     guard that cries wolf on catch-up merges is a guard people learn to
+ *     bypass reflexively — which is exactly how a real secret gets through.
+ *   · OVERSIZED SCANS. The comment on SCAN_CHUNK_BYTES below records a
+ *     1,146,782-byte diff from "a feature branch catching up to a busy main"
+ *     blowing the engine's 1 MiB cap. Same root cause, treated there as a size
+ *     problem and solved by slicing. Narrowing the range fixes the size too.
+ *
+ * A two-dot range cannot express this: after merging main, neither the remote
+ * tip nor the merge-base with main is an ancestor of the other, so no single
+ * base excludes both. `rev-list --not --remotes=<push-remote>/*` is the
+ * operation that does, and this file already reasons that way in
+ * `unknownRemoteTipBase` step 2. The exclusion is scoped to the push target's
+ * tracking namespace (see remotesExclusion): the upstream commits a catch-up
+ * merge brings in came from the SAME remote being pushed to, so scoping keeps
+ * the #2592 fix intact while a secret known only to some OTHER (private)
+ * remote is still scanned on its way to this one (S1).
+ *
+ * Each commit is diffed alone. `--cc` on a merge shows only the conflict
+ * RESOLUTION — content that exists in no parent — so a secret introduced while
+ * resolving a merge is still caught, while an ordinary merge contributes
+ * nothing. Returns null when the notion does not apply, so callers fall back.
+ */
+function addedLinesFromNewCommits(localSha: string, remoteSha: string): string | null {
+  // remoteSha is what git TELLS us the remote has, and it is authoritative in a
+  // way `--remotes` is not: remote-tracking refs can be absent (a fresh clone
+  // that never fetched, a push to a remote with no tracking ref) or stale. Drop
+  // it and a repo with no tracking refs excludes NOTHING — every commit ever
+  // made reads as "new", which re-introduces the false positives from the other
+  // direction. So it stays the base; `--remotes` only ADDS exclusions on top.
+  if (ZERO.test(remoteSha) || !objectExists(remoteSha)) return null;
+
+  const narrowed = git(["rev-list", localSha, "--not", remoteSha, remotesExclusion()]).trim();
+  if (!narrowed) return null;
+
+  // If excluding remote-tracking refs changes nothing, this push has no
+  // catch-up commits and the plain range already describes it exactly. Defer to
+  // it. That is not just an optimization: it keeps every push that ISN'T a
+  // catch-up merge on the original gitStrict diff path, so the fail-closed
+  // guarantee (#1946) and its regression test keep exercising the code they
+  // were written for. A narrowing that silently retired that test would be a
+  // worse trade than the false positives it set out to fix.
+  const plain = git(["rev-list", `${remoteSha}..${localSha}`]).trim();
+  const asSet = (s: string) => s.split("\n").filter(Boolean).sort().join("\n");
+  if (asSet(narrowed) === asSet(plain)) return null;
+
+  const shas = narrowed.split("\n").filter(Boolean);
+  // A rewrite of long history should fall back rather than shell out per commit.
+  if (shas.length > 500) return null;
+  const out: string[] = [];
+  for (const sha of shas) {
+    // gitStrict: a failed diff must never read as "nothing added" (#1946).
+    out.push(gitStrict([
+      "show", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv",
+      "--cc", "--format=", sha,
+    ]));
+  }
+  return out.join("\n");
+}
+
 /** Return the added-line text for a ref update being pushed. */
 function addedLinesFor(localSha: string, remoteSha: string): string {
+  // Preferred ONLY when this push carries catch-up commits: scanning them again
+  // is the bug. Every other shape falls through to the range logic below.
+  const fromNew = addedLinesFromNewCommits(localSha, remoteSha);
+  if (fromNew !== null) return collectAddedLines(fromNew);
+
   let range: string;
   if (ZERO.test(remoteSha) || !objectExists(remoteSha)) {
     // Either a new branch (zero remote sha), or the remote tip object is absent
@@ -151,6 +260,14 @@ function addedLinesFor(localSha: string, remoteSha: string): string {
     "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv",
     range,
   ]);
+  return collectAddedLines(diff);
+}
+
+/**
+ * Added-line text from a unified diff. Shared by both range strategies so the
+ * hunk-aware header handling below cannot drift between them.
+ */
+function collectAddedLines(diff: string): string {
   const added: string[] = [];
   // Hunk-aware header skip (#2498): `+++ ` is only a FILE HEADER outside a
   // hunk. Inside a hunk, an added content line whose text begins with "++"
@@ -158,7 +275,11 @@ function addedLinesFor(localSha: string, remoteSha: string): string {
   // silently dropped exactly those lines from the scan.
   let inHunk = false;
   for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git")) { inHunk = false; continue; }
+    // `diff --` rather than `diff --git`: a merge scanned with --cc emits
+    // `diff --cc <path>`, so a --git-only reset left inHunk true across file
+    // boundaries and read the next file's `+++ b/...` header as content. Only
+    // noise (it over-scans, never under-scans), but the boundary is real.
+    if (line.startsWith("diff --")) { inHunk = false; continue; }
     if (line.startsWith("@@")) { inHunk = true; continue; }
     if (!inHunk && (line.startsWith("+++") || line.startsWith("---"))) continue;
     if (line.startsWith("+")) added.push(line.slice(1));

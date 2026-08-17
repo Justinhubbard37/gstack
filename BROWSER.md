@@ -168,8 +168,18 @@ for the full design + decision trail.
 1. **First call.** CLI checks `<project>/.gstack/browse.json` for a running
    server. None found — it spawns `bun run browse/src/server.ts` in the
    background. Daemon launches headless Chromium via Playwright, picks a
-   random port (10000–60000), generates a bearer token, writes the state
-   file (chmod 600), starts accepting requests. ~3 seconds.
+   random port (10000–49151, deliberately below the macOS ephemeral pool
+   49152-65535 so the OS never hands a colliding port to another process),
+   generates a bearer token, writes the state file (chmod 600), starts
+   accepting requests. ~3 seconds. One launch-time exception to fail-fast:
+   when a macOS XProtect definition update SIGKILLs the pinned Chromium at
+   spawn, the daemon classifies the kill signature, clears the quarantine
+   flag on the Playwright cache, reinstalls the pinned revision from the
+   gstack install root (bounded ~120s), and retries once — at most once per
+   daemon process. If the heal can't complete, the original launch error
+   plus manual `bunx playwright install chromium` guidance lands on daemon
+   stderr (see `browse-daemon.log`). Wired at all three launch sites in
+   `browser-manager.ts` via `browse/src/xprotect-heal.ts`.
 2. **Subsequent calls.** CLI reads the state file, sends an HTTP POST with
    the bearer token, prints the response. ~100-200ms round trip.
 3. **Idle shutdown.** After 30 minutes of no commands, daemon shuts down and
@@ -177,6 +187,13 @@ for the full design + decision trail.
 4. **Crash recovery.** If Chromium crashes, the daemon exits immediately —
    no self-healing, don't hide failure. CLI detects the dead daemon on the
    next call and starts a fresh one.
+5. **Busy vs dead.** A daemon that stops answering HTTP while its process is
+   alive is busy, not dead. The CLI gives `/health` a bounded ~8s to recover,
+   then reports busy with a nonzero exit — it never kills an alive pid.
+   Only an explicit `--force-restart` replaces a live-but-unresponsive
+   daemon (tabs, cookies, and logins are lost). `browse stop` against a
+   daemon that already died is success: the desired end state holds, so it
+   cleans the stale state file instead of booting a daemon just to stop it.
 
 ### Multi-workspace isolation
 
@@ -186,8 +203,8 @@ collisions. State at `<project>/.gstack/browse.json`.
 
 | Workspace | State file | Port |
 |-----------|-----------|------|
-| `/code/project-a` | `/code/project-a/.gstack/browse.json` | random (10000–60000) |
-| `/code/project-b` | `/code/project-b/.gstack/browse.json` | random (10000–60000) |
+| `/code/project-a` | `/code/project-a/.gstack/browse.json` | random (10000–49151) |
+| `/code/project-b` | `/code/project-b/.gstack/browse.json` | random (10000–49151) |
 
 ---
 
@@ -311,13 +328,19 @@ from `snapshot`, or `@c` refs from `snapshot -C`. Full table:
 | Command | Description |
 |---------|-------------|
 | `status` | Daemon health + mode (headless / headed / cdp) |
-| `stop` | Shut down daemon |
+| `stop` | Shut down daemon (succeeds even if the daemon already died — never boots one just to stop it) |
 | `restart` | Restart daemon |
 | `connect` | Launch headed GStack Browser with Side Panel extension |
 | `disconnect` | Close headed Chrome, return to headless |
 | `focus [@ref]` | Bring headed Chrome to foreground (macOS); `@ref` also scrolls into view |
 | `state save\|load <name>` | Save or load browser state (cookies + URLs) |
 | `memory [--json]` | Snapshot Bun heap + per-tab JS heap + Chromium process tree + bounded buffer sizes. Use `--json` for programmatic consumers; text mode renders sorted top-10 tabs with "and N more" tail. |
+
+The daemon's own stdout/stderr persists to `<project>/.gstack/browse-daemon.log`
+(append mode, rotated to `.log.1` at the size cap, single generation), with
+tokens and unsanitized page content kept out — check it when a daemon dies
+without an obvious cause. A live-but-unresponsive daemon is never auto-killed;
+pass `--force-restart` to replace it explicitly (see "Daemon lifecycle" above).
 
 ### Handoff
 
@@ -880,10 +903,11 @@ sidebar chat pipeline that hosted them. **Canary leak always BLOCKs
 - Attack log: `~/.gstack/security/attempts.jsonl` (salted SHA-256 + domain
   only, rotates at 10MB, 5 generations).
 - Per-device salt: `~/.gstack/security/device-salt` (0600).
-- Session state: `~/.gstack/security/session-state.json` (cross-process,
-  atomic).
 
-A shield icon in the sidebar header shows the live status. See
+There is no security status indicator in the sidebar and no `security`
+field on `/health` (#2557): the session-state file that fed them lost its
+only writer when the chat-path agent was removed, so they reported stale or
+empty data. The live defenses report through their own call sites. See
 ARCHITECTURE.md § "Prompt injection defense" for the full threat model.
 
 ---
@@ -1209,8 +1233,8 @@ collisions.
 
 | Workspace | State file | Port |
 |-----------|-----------|------|
-| `/code/project-a` | `/code/project-a/.gstack/browse.json` | random (10000–60000) |
-| `/code/project-b` | `/code/project-b/.gstack/browse.json` | random (10000–60000) |
+| `/code/project-a` | `/code/project-a/.gstack/browse.json` | random (10000–49151) |
+| `/code/project-b` | `/code/project-b/.gstack/browse.json` | random (10000–49151) |
 
 Browser-skills three-tier lookup walks project → global → bundled, so a
 project-tier skill at `/code/project-a/.gstack/browser-skills/foo/` shadows
@@ -1222,7 +1246,7 @@ the global `~/.gstack/browser-skills/foo/` only inside project-a.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BROWSE_PORT` | 0 (random 10000–60000) | Fixed port for the HTTP server (debug override) |
+| `BROWSE_PORT` | 0 (random 10000–49151) | Fixed port for the HTTP server (debug override) |
 | `BROWSE_IDLE_TIMEOUT` | 1800000 (30 min) | Idle shutdown timeout in ms |
 | `BROWSE_STATE_FILE` | `.gstack/browse.json` | Path to state file |
 | `BROWSE_SERVER_SCRIPT` | auto-detected | Path to `server.ts` |
@@ -1249,6 +1273,8 @@ browse/
 │   ├── cli.ts                   # Thin client — reads state, sends HTTP, prints
 │   ├── server.ts                # Bun HTTP daemon — routes commands, dual-listener
 │   ├── browser-manager.ts       # Chromium lifecycle, tabs, ref map, crash detection
+│   ├── port-allocator.ts        # Fixed 10000-49151 scan range for every long-lived listener (never port:0)
+│   ├── xprotect-heal.ts         # macOS XProtect launch-kill classify + quarantine-clear + bounded reinstall
 │   ├── socks-bridge.ts          # Local 127.0.0.1 SOCKS5 bridge that handles auth handshakes Chromium can't speak
 │   ├── proxy-config.ts          # --proxy URL parsing + cred resolution (URL vs env, fail-fast on both)
 │   ├── proxy-redact.ts          # Cred-redaction helper for any proxy URL surfaced to logs/errors
@@ -1281,6 +1307,8 @@ browse/
 │   ├── content-security.ts      # L1-L3: datamarking, hidden strip, ARIA, URL blocklist, envelopes
 │   ├── security.ts              # L5 canary + L6 verdict combiner + thresholds
 │   ├── security-classifier.ts   # L4 ML classifier (TestSavantAI, runs in the security sidecar)
+│   ├── security-sidecar-entry.ts # Sidecar subprocess entrypoint hosting the ONNX classifier
+│   ├── security-sidecar-client.ts # server.ts-side client that drives the sidecar
 │   ├── terminal-agent.ts        # Side Panel Claude PTY manager (auth + lifecycle)
 │   ├── sidebar-utils.ts         # Sidebar URL sanitization + helpers
 │   ├── cookie-import-browser.ts # Decrypt + import cookies from real Chromium browsers

@@ -448,3 +448,235 @@ describe('gstack-brain-sync --discover-new', () => {
     expect(queue.trim()).toBe('');
   });
 });
+
+// ---------------------------------------------------------------
+// #2549 queue integrity: classified drops, privacy retention,
+// surgical rewrite, unpushed-commit detector
+// ---------------------------------------------------------------
+describe('#2549 queue integrity', () => {
+  function initWithMode(mode: string) {
+    run(['gstack-artifacts-init', '--remote', bareRemote]);
+    run(['gstack-config', 'set', 'artifacts_sync_mode', mode]);
+  }
+  const queueText = () => fs.readFileSync(path.join(tmpHome, '.brain-queue.jsonl'), 'utf-8');
+  const statusJson = () => JSON.parse(fs.readFileSync(path.join(tmpHome, '.brain-sync-status.json'), 'utf-8'));
+
+  test('privacy-held entries are RETAINED and classified, not wiped as "no allowlisted changes"', () => {
+    // timeline.jsonl is class=behavioral; artifacts-only mode holds it.
+    initWithMode('artifacts-only');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/timeline.jsonl'), '{"skill":"x","event":"started"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/timeline.jsonl']);
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    // The exact #2549 repro: the old code truncated the queue here and said
+    // "no allowlisted changes in queue". The entry must survive, and the
+    // status must attribute the hold honestly.
+    expect(queueText()).toContain('projects/p/timeline.jsonl');
+    const s = statusJson();
+    expect(s.status).toBe('idle');
+    expect(s.message).toContain('privacy-held retained');
+    expect(s.message).not.toContain('no allowlisted changes');
+  });
+
+  test('unmatched and missing entries drop WITH counts and a 0600 drops sidecar', () => {
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    // Unmatched: no allowlist glob covers .txt scratch files.
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/scratch.txt'), 'x\n');
+    fs.appendFileSync(path.join(tmpHome, '.brain-queue.jsonl'), '{"file":"projects/p/scratch.txt"}\n');
+    // Missing: allowlisted name that does not exist on disk.
+    fs.appendFileSync(path.join(tmpHome, '.brain-queue.jsonl'), '{"file":"projects/p/learnings.jsonl"}\n');
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    expect(queueText()).not.toContain('scratch.txt');
+    expect(queueText()).not.toContain('learnings.jsonl');
+    const s = statusJson();
+    expect(s.message).toContain('1 unmatched dropped');
+    expect(s.message).toContain('1 missing dropped');
+    const drops = path.join(tmpHome, '.brain-sync-drops.json');
+    expect(fs.existsSync(drops)).toBe(true);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(drops).mode & 0o777).toBe(0o600);
+    }
+    const detail = JSON.parse(fs.readFileSync(drops, 'utf-8'));
+    expect(detail.dropped.unmatched).toContain('projects/p/scratch.txt');
+    expect(detail.dropped.missing).toContain('projects/p/learnings.jsonl');
+  });
+
+  test('an unparseable queue line is preserved, never destroyed', () => {
+    initWithMode('full');
+    fs.appendFileSync(path.join(tmpHome, '.brain-queue.jsonl'), 'not json at all\n');
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    expect(queueText()).toContain('not json at all');
+  });
+
+  test('surgical rewrite: a synced entry leaves the queue while a held sibling survives the same drain', () => {
+    // Proves the rewrite is a live filtered rewrite, not a truncation: two
+    // entries drain in one --once, one stages+pushes, one is mode-held.
+    initWithMode('artifacts-only');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"x","insight":"y","ts":"2026-01-01T00:00:00Z"}\n');
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/timeline.jsonl'), '{"skill":"x","event":"started"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    run(['gstack-brain-enqueue', 'projects/p/timeline.jsonl']);
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    expect(queueText()).not.toContain('learnings.jsonl');   // synced, removed
+    expect(queueText()).toContain('timeline.jsonl');        // held, retained
+    const log = spawnSync('git', ['--git-dir=' + bareRemote, 'log', '--oneline'], { encoding: 'utf-8' });
+    expect(log.stdout).toMatch(/sync: 1 file/);
+  });
+
+  test('push failure retains the commit locally and the run-start detector re-pushes it', () => {
+    initWithMode('full');
+    // Establish origin/main so the detector has a remote ref to compare.
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"a","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+
+    // Reject the next push at the remote (pre-receive hook exits 1 with an
+    // auth-shaped message so the auth branch is exercised too).
+    const hook = path.join(bareRemote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\necho "403 forbidden" >&2\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"b","ts":"2026-01-02T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    const fail = run(['gstack-brain-sync', '--once']);
+    expect(fail.status).toBe(0);
+    const s = statusJson();
+    expect(s.status).toBe('push_failed');
+    expect(s.message).toContain('commit retained locally');
+    // Drained path left the queue — it lives in the local commit now.
+    expect(queueText()).not.toContain('learnings.jsonl');
+    // The commit exists locally, ahead of origin.
+    const ahead = git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim();
+    expect(Number(ahead)).toBeGreaterThan(0);
+
+    // Remote healthy again: an EMPTY-queue run must still deliver the
+    // stranded commit (the detector, not the drain, pushes it).
+    fs.rmSync(hook);
+    const retry = run(['gstack-brain-sync', '--once']);
+    expect(retry.status).toBe(0);
+    const log = spawnSync('git', ['--git-dir=' + bareRemote, 'log', '--oneline'], { encoding: 'utf-8' });
+    expect(log.stdout).toMatch(/sync: 1 file/);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+  });
+
+  test('receipt refusal at the detector skips the retry without wedging the drain', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod advisory there
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"a","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+
+    // Strand a commit: reject pushes, drain once.
+    const hook = path.join(bareRemote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"b","ts":"2026-01-02T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+
+    // Break receipts. The detector's retry must be SKIPPED (no wedge), and
+    // the run must still exit 0 with nothing else to do.
+    fs.mkdirSync(path.join(tmpHome, 'security'), { recursive: true });
+    fs.chmodSync(path.join(tmpHome, 'security'), 0o500);
+    try {
+      const r = run(['gstack-brain-sync', '--once']);
+      expect(r.status).toBe(0);
+      // Commit still stranded (retry skipped, not attempted unreceipted).
+      expect(Number(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim())).toBeGreaterThan(0);
+    } finally {
+      fs.chmodSync(path.join(tmpHome, 'security'), 0o700);
+    }
+
+    // Receipts healthy: detector delivers. The refused attempt above stamped
+    // the 10-minute throttle (deliberately — refusals must not busy-loop the
+    // network at every skill boundary), so model the interval passing.
+    fs.writeFileSync(path.join(tmpHome, '.brain-last-push-attempt'), '0');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+  });
+
+  test('detector attempts are throttled to one per interval', () => {
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"a","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+
+    // Strand a commit behind a rejecting remote.
+    const hook = path.join(bareRemote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"b","ts":"2026-01-02T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+
+    // First empty-queue run: detector attempts (stamps the throttle), pushes.
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    const stamp1 = fs.readFileSync(path.join(tmpHome, '.brain-last-push-attempt'), 'utf-8');
+    expect(Number(stamp1)).toBeGreaterThan(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+
+    // Strand another; an immediate second run must NOT attempt (stamp fresh).
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"c","ts":"2026-01-03T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+    const stampBefore = fs.readFileSync(path.join(tmpHome, '.brain-last-push-attempt'), 'utf-8');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    // Throttled: stamp unchanged, commit still stranded.
+    expect(fs.readFileSync(path.join(tmpHome, '.brain-last-push-attempt'), 'utf-8')).toBe(stampBefore);
+    expect(Number(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim())).toBeGreaterThan(0);
+
+    // Interval passed: delivers.
+    fs.writeFileSync(path.join(tmpHome, '.brain-last-push-attempt'), '0');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+  });
+
+  test('an interleaved user commit disables the detector push (exclusive author gate)', () => {
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"a","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+
+    // Strand a bot commit behind a rejecting remote.
+    const hook = path.join(bareRemote, 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(hook, 0o755);
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"b","ts":"2026-01-02T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    fs.rmSync(hook);
+
+    // A user manually commits in ~/.gstack on top of the stranded bot commit.
+    expect(git(['-c', 'user.name=Garry', '-c', 'user.email=garry@example.com',
+                '-c', 'commit.gpgsign=false',
+                'commit', '--allow-empty', '-m', 'manual note']).status).toBe(0);
+
+    // Interval passed, remote healthy, queue empty: the detector must STILL
+    // refuse — `push origin HEAD` would publish the user's commit uninvited.
+    fs.writeFileSync(path.join(tmpHome, '.brain-last-push-attempt'), '0');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(Number(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim())).toBe(2);
+
+    // A REAL drain still rides the user commit along, as before — the gate
+    // scopes only the detector's autonomous retry, not user-initiated syncs.
+    fs.appendFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"c","ts":"2026-01-03T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(git(['rev-list', '--count', 'origin/main..HEAD']).stdout.trim()).toBe('0');
+  });
+});

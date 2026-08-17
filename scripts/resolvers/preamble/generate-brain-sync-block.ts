@@ -30,6 +30,27 @@
 import type { TemplateContext } from '../types';
 import { quoteSafePath } from '../types';
 
+/**
+ * Shared jq sub-expression resolving the gbrain MCP registration entry
+ * (#2499). Claude Code registers MCP servers at TWO scopes in
+ * ~/.claude.json: user scope (.mcpServers.gbrain) and project scope
+ * (.projects["/abs/path"].mcpServers.gbrain — what `claude mcp add`
+ * WITHOUT --scope user writes). Reading only user scope makes a correctly
+ * configured project-scoped brain invisible: brain-aware blocks suppress,
+ * remote-mode sync is never recognised, nothing errors.
+ *
+ * Resolution order: user scope first, then the nearest-ancestor project
+ * entry for $PWD that actually carries a gbrain server (longest matching
+ * key with a path-boundary check, so nested repos pick their own
+ * registration, /a/repo never matches /a/repo2, and a nested project
+ * WITHOUT gbrain doesn't shadow its parent's registration). The emitted
+ * bash resolves the entry ONCE into _GBRAIN_MCP_ENTRY (compact JSON) and
+ * extracts fields from that variable — one jq parse of claude.json per
+ * skill start, and the long expression appears once per rendered SKILL.md.
+ */
+const GBRAIN_MCP_ENTRY_JQ =
+  '.mcpServers.gbrain // ((.projects // {}) | to_entries | map(select((.key as $k | $cwd == $k or ($cwd | startswith($k + "/"))) and ((try .value.mcpServers.gbrain catch null) != null))) | sort_by(.key | length) | last | .value.mcpServers.gbrain) // empty';
+
 export function generateBrainSyncBlock(ctx: TemplateContext): string {
   const isBrainHost = ctx.host === 'gbrain' || ctx.host === 'hermes';
   return `## Artifacts Sync (skill start)
@@ -79,10 +100,13 @@ _BRAIN_SYNC_MODE=$("$_BRAIN_CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || e
 # Detect remote-MCP mode (Path 4 of /setup-gbrain). Local artifacts sync is
 # a no-op in remote mode; the brain server pulls from GitHub/GitLab on its
 # own cadence. Read claude.json directly to keep this preamble fast (no
-# subprocess to claude CLI on every skill start).
+# subprocess to claude CLI on every skill start). Both registration scopes
+# are read (#2499): user scope, then the nearest-ancestor project scope.
 _GBRAIN_MCP_MODE="none"
+_GBRAIN_MCP_ENTRY=""
 if command -v jq >/dev/null 2>&1 && [ -f "$HOME/.claude.json" ]; then
-  _GBRAIN_MCP_TYPE=$(jq -r '.mcpServers.gbrain.type // .mcpServers.gbrain.transport // empty' "$HOME/.claude.json" 2>/dev/null)
+  _GBRAIN_MCP_ENTRY=$(jq -c --arg cwd "$PWD" '${GBRAIN_MCP_ENTRY_JQ}' "$HOME/.claude.json" 2>/dev/null)
+  _GBRAIN_MCP_TYPE=$(printf '%s' "$_GBRAIN_MCP_ENTRY" | jq -r '.type // .transport // empty' 2>/dev/null)
   case "$_GBRAIN_MCP_TYPE" in
     url|http|sse) _GBRAIN_MCP_MODE="remote-http" ;;
     stdio) _GBRAIN_MCP_MODE="local-stdio" ;;
@@ -103,6 +127,7 @@ if [ -d "$_GSTACK_HOME/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
   _BRAIN_DO_PULL=1
   if [ -f "$_BRAIN_LAST_PULL_FILE" ]; then
     _BRAIN_LAST=$(cat "$_BRAIN_LAST_PULL_FILE" 2>/dev/null || echo 0)
+    case "$_BRAIN_LAST" in ''|*[!0-9]*) _BRAIN_LAST=0 ;; esac
     _BRAIN_AGE=$(( _BRAIN_NOW - _BRAIN_LAST ))
     [ "$_BRAIN_AGE" -lt 86400 ] && _BRAIN_DO_PULL=0
   fi
@@ -116,7 +141,7 @@ fi
 if [ "$_GBRAIN_MCP_MODE" = "remote-http" ]; then
   # Remote-MCP mode: local artifacts sync is a no-op (brain admin's server
   # pulls from GitHub/GitLab). Show the user this is by design, not broken.
-  _GBRAIN_HOST=$(jq -r '.mcpServers.gbrain.url // empty' "$HOME/.claude.json" 2>/dev/null | sed -E 's|^https?://([^/:]+).*|\\1|')
+  _GBRAIN_HOST=$(printf '%s' "\${_GBRAIN_MCP_ENTRY:-}" | jq -r '.url // empty' 2>/dev/null | sed -E 's|^https?://([^/:]+).*|\\1|' | head -1 | tr -cd 'A-Za-z0-9._-')
   echo "ARTIFACTS_SYNC: remote-mode (managed by brain server \${_GBRAIN_HOST:-remote})"
 elif [ -d "$_GSTACK_HOME/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
   _BRAIN_QUEUE_DEPTH=0

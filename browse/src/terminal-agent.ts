@@ -27,6 +27,7 @@ import { writeSecureFile, restrictFilePermissions, mkdirSecure } from './file-pe
 import { atomicWriteSync, atomicWriteQuiet } from '../../lib/fs-atomic';
 import { safeUnlink } from './error-handling';
 import { writeAgentRecord, clearAgentRecord } from './terminal-agent-control';
+import { findAvailablePort } from './port-allocator';
 import { extractPtyCookie } from './pty-session-cookie';
 
 const STATE_FILE = process.env.BROWSE_STATE_FILE || path.join(process.env.HOME || '/tmp', '.gstack', 'browse.json');
@@ -490,10 +491,15 @@ function maybeSpawnPty(ws: any, session: PtySession): boolean {
   return true;
 }
 
-function buildServer() {
+function buildServer(port: number) {
   return Bun.serve({
     hostname: '127.0.0.1',
-    port: 0,
+    // #2314: allocated from the SAME fixed 10000-60000 scan range the main
+    // server uses (port-allocator.ts, decision 8) — never `port: 0`. Binding
+    // 0 drew from the OS EPHEMERAL range (49152-65535 on macOS), where this
+    // weeks-lived agent squatted ports that short-lived `app.listen(0)` test
+    // servers expected to receive, absorbing their traffic as phantom 404s.
+    port,
     idleTimeout: 0, // PTY connections are long-lived; default idleTimeout would kill them
 
     fetch(req, server) {
@@ -944,9 +950,27 @@ function readBrowseToken(): string {
 }
 
 // Boot.
-function main() {
+async function main() {
   writeClaudeAvailable();
-  const server = buildServer();
+  // #2314: allocate from the shared fixed scan range, then bind. Probe-then-
+  // bind has a TOCTOU window — a concurrent process can take the port between
+  // the probe and Bun.serve, which throws and would kill the boot with no
+  // retry (main().catch → exit 1). Re-allocate and retry a few times; each
+  // iteration probes fresh, so only a genuine race lands here.
+  let server: ReturnType<typeof buildServer> | undefined;
+  let lastBindErr: unknown;
+  for (let attempt = 0; attempt < 5 && !server; attempt++) {
+    const allocatedPort = await findAvailablePort();
+    try {
+      server = buildServer(allocatedPort);
+    } catch (err) {
+      lastBindErr = err;
+    }
+  }
+  if (!server) {
+    console.error(`[terminal-agent] failed to bind after 5 attempts: ${lastBindErr}`);
+    process.exit(1);
+  }
   const port = (server as any).port || (server as any).address?.port;
   if (!port) {
     console.error('[terminal-agent] failed to bind: no port');
@@ -1015,4 +1039,7 @@ try {
   writeSecureFile(INTERNAL_TOKEN_FILE, INTERNAL_TOKEN);
 } catch {}
 
-main();
+main().catch((err) => {
+  console.error(`[terminal-agent] boot failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});

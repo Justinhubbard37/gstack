@@ -65,6 +65,18 @@ $B screenshot /tmp/bug.png                # plain screenshot
 $B console                                # error log
 ```
 
+Two behaviors that silently invalidate screenshots (#2445 — designed, but
+surprising):
+- **`hover` scrolls its target into view.** Hovering anything below the fold
+  scrolls the page first, so a "rest state" shot taken afterwards captures
+  the wrong section with exit 0. Before a rest-state screenshot, hover only
+  something already visible, and assert position when it matters:
+  `$B js "window.scrollY"` should be `0` (or your intended offset).
+- **The tab persists across sessions.** The daemon keeps its tab between your
+  sessions, so `reload` or `screenshot` without a preceding `goto` can act on
+  whatever page earlier work left open. Start verification passes with an
+  explicit `$B goto <url>`, never a bare `reload`.
+
 ### 5. Find all clickable elements (including non-ARIA)
 ```bash
 $B snapshot -C                   # finds divs with cursor:pointer, onclick, tabindex

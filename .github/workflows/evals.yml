@@ -28,7 +28,7 @@ jobs:
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: meta
         # Key on Dockerfile + lockfile only. package.json is deliberately NOT
@@ -36,9 +36,9 @@ jobs:
         # which rebuilt the image each time for a dependency set that only
         # bun.lock determines. A stale baked package.json is harmless — checkout
         # overwrites /workspace and node_modules comes from the lockfile.
-        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock') }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ env.IMAGE }}:${{ hashFiles('.github/docker/Dockerfile.ci', 'bun.lock', 'patches/**') }}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -54,7 +54,7 @@ jobs:
           fi
 
       - if: steps.check.outputs.exists == 'false'
-        run: cp package.json bun.lock .github/docker/
+        run: cp package.json bun.lock .github/docker/ && cp -R patches .github/docker/patches
 
       # A fork PR's GITHUB_TOKEN only has `packages: read`, so pushing fails.
       # Still BUILD (validates Dockerfile.ci changes), just don't publish. This
@@ -63,10 +63,10 @@ jobs:
       # Registry cache export needs a docker-container builder — the default
       # `docker` driver hard-errors on cache-to (first live run of the trio).
       - if: steps.check.outputs.exists == 'false'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - if: steps.check.outputs.exists == 'false'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .github/docker
           file: .github/docker/Dockerfile.ci
@@ -158,7 +158,7 @@ jobs:
             # row keeps --retry 1.
             retries: 2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -341,7 +341,7 @@ jobs:
 
       - name: Upload eval results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-${{ matrix.suite.name }}
           path: ~/.gstack-dev/evals/*.json
@@ -362,12 +362,12 @@ jobs:
       # early and never hit it, which is why this stayed hidden). See #1802 CI fix.
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Download all eval artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: eval-*
           path: /tmp/eval-results

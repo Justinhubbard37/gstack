@@ -17,6 +17,21 @@ set -euo pipefail
 STATE_DIR="${GSTACK_STATE_ROOT:-${GSTACK_HOME:-${GSTACK_STATE_DIR:-$HOME/.gstack}}}"
 CONFIG_FILE="$STATE_DIR/config.yaml"
 
+# Swap a freshly-rendered tmp dir into the live render location (#2569
+# hardening). Installed skills SYMLINK into the live dir, so it is only ever
+# replaced AFTER a successful render — a failed render leaves the previous
+# render (and every link into it) fully intact. Keep in sync with setup's
+# _swap_in_render (same contract, both pinned by
+# test/user-render-out-dir-install.test.ts).
+_swap_in_render() {
+  local render_dir="$1" render_tmp="$2"
+  local render_old="$render_dir.old.$$"
+  rm -rf "$render_old"
+  if [ -e "$render_dir" ] || [ -L "$render_dir" ]; then mv "$render_dir" "$render_old"; fi
+  mv "$render_tmp" "$render_dir"
+  rm -rf "$render_old"
+}
+
 # Annotated header for new config files. Written once on first `set`.
 # Default semantics: DEFAULTS table below is the canonical source. Header text
 # is documentation that must stay in sync with DEFAULTS.
@@ -434,33 +449,55 @@ case "${1:-}" in
     fi
 
     case "$STATUS" in
-      ok|timeout|thin-client)
+      ok|timeout|thin-client|engine-locked)
         # "timeout" = slow-but-healthy engine (#1964); "thin-client" =
-        # remote-HTTP MCP brain, no local engine by design (#2051) — same
-        # treatment as "ok", matching gstack-gbrain-detect --is-ok and
-        # gen-skill-docs.
+        # remote-HTTP MCP brain, no local engine by design (#2051);
+        # "engine-locked" = same class (#2456): PGLite is single-writer, so a
+        # live `gbrain serve` (typically an MCP server) holds the embedded DB.
+        # gbrain is installed and healthy; a transient lock must not strip
+        # brain blocks out of every SKILL.md. All get the same treatment as
+        # "ok", matching gstack-gbrain-detect --is-ok and gen-skill-docs.
         echo "Detected gbrain v$VERSION (local-status: $STATUS)."
-        # Render brain-aware blocks INTO the global install so EVERY project's
-        # Claude sessions get them (other projects read SKILL.md + sections from
-        # ~/.claude/skills/gstack via absolute paths baked at gen time). Guards
-        # (never mutate an arbitrary directory): the target must exist, not be a
-        # symlink (a symlinked install points at a dev worktree — rendering there
-        # would dirty tracked source), and look like a real gstack clone.
+        # Render brain-aware blocks into an UNTRACKED out-dir (#2569) and
+        # repoint the installed skills at it — the old in-place render wrote
+        # into TRACKED files of the global install checkout, so the checkout
+        # stayed permanently dirty and every upgrade grew a redundant stash.
+        # Guards (never mutate an arbitrary directory): the install must
+        # exist, not be a symlink (a symlinked install points at a dev
+        # worktree — bin/dev-setup owns that flow), and look like a real
+        # gstack clone.
         INSTALL_DIR="$HOME/.claude/skills/gstack"
+        RENDER_DIR="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claude}"
         if [ ! -d "$INSTALL_DIR" ]; then
           echo "No global install at $INSTALL_DIR — nothing to render. (Dev workspaces get blocks via bin/dev-setup.)"
         elif [ -L "$INSTALL_DIR" ]; then
-          echo "Skip: $INSTALL_DIR is a symlink (likely a dev worktree). Rendering there would dirty tracked source — run bin/dev-setup in that worktree instead."
+          echo "Skip: $INSTALL_DIR is a symlink (likely a dev worktree). Run bin/dev-setup in that worktree instead."
         elif [ ! -f "$INSTALL_DIR/VERSION" ] || [ ! -f "$INSTALL_DIR/package.json" ]; then
           echo "Skip: $INSTALL_DIR doesn't look like a gstack clone (missing VERSION/package.json) — refusing to modify it."
         elif ! command -v bun >/dev/null 2>&1; then
           echo "Skip: bun not on PATH — can't render. Install bun, then re-run 'gstack-config gbrain-refresh'."
-        elif ( cd "$INSTALL_DIR" && bun run gen:skill-docs:user --host claude >/dev/null 2>&1 ); then
-          echo "Rendered brain-aware blocks into $INSTALL_DIR — now live across all your projects' Claude sessions."
-          echo "Note: this dirties the install's git tree (generated blocks differ from main, by design)."
-          echo "      A 'git reset --hard origin/main' there reverts them; re-run 'gstack-config gbrain-refresh' to restore."
         else
-          echo "Warning: render failed. Run 'cd $INSTALL_DIR && bun run gen:skill-docs:user --host claude' manually to see the error."
+          # Render into a tmp dir and swap it in only on SUCCESS. Installed
+          # skills SYMLINK into $RENDER_DIR (gstack-relink prefers it), so
+          # wiping it before the render meant one transient failure (bun
+          # error, disk full, broken template) left every brain-aware
+          # SKILL.md link dangling — the whole skill set vanished from
+          # Claude Code until a successful re-render. A failed render now
+          # leaves the previous render fully intact.
+          RENDER_TMP="$RENDER_DIR.tmp.$$"
+          rm -rf "$RENDER_TMP"
+          if ( cd "$INSTALL_DIR" && bun run gen:skill-docs:user --host claude --out-dir "$RENDER_TMP" >/dev/null 2>&1 ); then
+            _swap_in_render "$RENDER_DIR" "$RENDER_TMP"
+            # Repoint installed skills at the render — gstack-relink prefers
+            # the render dir when present.
+            "$INSTALL_DIR/bin/gstack-relink" >/dev/null 2>&1 || true
+            echo "Rendered brain-aware blocks into $RENDER_DIR — now live across all your projects' Claude sessions."
+            echo "The install checkout stays clean: upgrades no longer stash generated render dirt (#2569)."
+          else
+            rm -rf "$RENDER_TMP"
+            echo "Warning: render failed — previous render (if any) left in place, links stay valid."
+            echo "Run 'cd $INSTALL_DIR && bun run gen:skill-docs:user --host claude --out-dir $RENDER_DIR' manually to see the error."
+          fi
         fi
         ;;
       *)

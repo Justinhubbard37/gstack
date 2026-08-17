@@ -315,5 +315,11 @@ describe('applyStealth — persistent context (headed + handoff parity)', () => 
       await ctx.close();
       fs.rmSync(userDataDir, { recursive: true, force: true });
     }
-  });
+  }, 45000);
+  // ^ 45s: this is the one HEADED persistent-context launch in the free
+  // suite. A cold headed launch on macOS runs 8-25s — worse on the first
+  // launch of a freshly downloaded Chromium (XProtect scans the new bundle,
+  // the #2554 class) and under shard concurrency. bun's 5s default made this
+  // the suite's most reliable false-negative: it timed out on the pre-wave
+  // baseline run of main too, and passes at 15/15 with an honest budget.
 });

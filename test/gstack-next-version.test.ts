@@ -13,9 +13,12 @@ import {
   fmtVersion,
   bumpVersion,
   cmpVersion,
+  versionWidth,
+  extractVersion,
   pickNextSlot,
   markActiveSiblings,
   resolveVersionPath,
+  fetchGitClaimed,
 } from "../bin/gstack-next-version";
 
 describe("parseVersion", () => {
@@ -29,13 +32,68 @@ describe("parseVersion", () => {
     expect(parseVersion("  1.2.3.4  \n")).toEqual([1, 2, 3, 4]);
   });
 
+  test("accepts 3-digit semver, padding the micro slot (#2501)", () => {
+    // 3-digit repos (a package.json holding plain semver) used to fail parsing
+    // outright, which exited this CLI 2 on EVERY run — and since this CLI is
+    // the queue-collision check, /ship then fell back to naive local
+    // arithmetic and duplicate version slots shipped silently. The pad keeps
+    // comparison uniform; versionWidth narrows output back.
+    expect(parseVersion("0.99.2")).toEqual([0, 99, 2, 0]);
+    expect(parseVersion("1.2.3")).toEqual([1, 2, 3, 0]);
+    expect(versionWidth("0.99.2")).toBe(3);
+    expect(versionWidth("1.6.3.0")).toBe(4);
+  });
+
   test("rejects malformed", () => {
-    expect(parseVersion("1.2.3")).toBeNull();
+    expect(parseVersion("1.2")).toBeNull();
     expect(parseVersion("1.2.3.4.5")).toBeNull();
     expect(parseVersion("v1.2.3.4")).toBeNull();
     expect(parseVersion("")).toBeNull();
     expect(parseVersion("not-a-version")).toBeNull();
     expect(parseVersion("1.2.3.x")).toBeNull();
+  });
+});
+
+describe("3-digit repos keep their width (#2501)", () => {
+  test("formatting narrows to the repo's own width", () => {
+    expect(fmtVersion([0, 99, 3, 0], 3)).toBe("0.99.3");
+    expect(fmtVersion([0, 99, 3, 0], 4)).toBe("0.99.3.0");
+    expect(fmtVersion([0, 99, 3, 0])).toBe("0.99.3.0"); // default stays 4-digit
+  });
+
+  test("micro is carried out as patch when there is no micro component", () => {
+    // /ship auto-picks MICRO by default. Erroring would make it unusable in
+    // every 3-digit repo; a no-op would be worse — it would write back the
+    // version it started with and claim a slot already taken.
+    expect(bumpVersion([0, 99, 2, 0], "micro", 3)).toEqual([0, 99, 3, 0]);
+    expect(bumpVersion([0, 99, 2, 0], "patch", 3)).toEqual([0, 99, 3, 0]);
+    expect(bumpVersion([0, 99, 2, 3], "micro", 4)).toEqual([0, 99, 2, 4]); // 4-digit unchanged
+  });
+
+  test("slot picking stays inside the repo's width", () => {
+    const { version } = pickNextSlot([0, 99, 2, 0], [[0, 99, 5, 0]], "patch", 3);
+    expect(fmtVersion(version, 3)).toBe("0.99.6");
+  });
+});
+
+describe("extractVersion (#2501)", () => {
+  test("reads .version when the version-path is a package.json", () => {
+    const pkg = JSON.stringify({ name: "frontend", version: "0.99.2", private: true });
+    expect(extractVersion(pkg, "frontend/package.json")).toBe("0.99.2");
+    expect(extractVersion(pkg, "deep/nested/package.json")).toBe("0.99.2");
+  });
+
+  test("reads raw text for a plain VERSION file", () => {
+    expect(extractVersion("1.6.3.0\n", "VERSION")).toBe("1.6.3.0");
+    expect(extractVersion("  1.6.3.0  ", "version/CURRENT")).toBe("1.6.3.0");
+  });
+
+  test("a JSON path that isn't valid JSON yields empty, not garbage", () => {
+    // The old readers ran a package.json through a whitespace strip and handed
+    // the caller '{"name":"frontend",...' as if it were a version. Empty lets
+    // callers fall back loudly.
+    expect(extractVersion("{ not json", "package.json")).toBe("");
+    expect(extractVersion(JSON.stringify({ name: "x" }), "package.json")).toBe("");
   });
 });
 
@@ -322,6 +380,168 @@ describe("default-base detection (no --base)", () => {
 
 // Integration smoke — only runs if gh is available and authenticated. Confirms
 // the CLI executes end-to-end against real APIs without crashing.
+describe("offline output contract (what /ship branches on, #2545)", () => {
+  // /ship's Step 12 reads `.fallback` to decide whether the pick is
+  // trustworthy when the PR queue is unreachable. That field is therefore
+  // load-bearing prose-to-code coupling: if it silently stopped being emitted,
+  // /ship would read undefined, treat the run as fully online, and lose the
+  // "verify no sibling holds it" prompt. Asserted end-to-end with a stub `gh`
+  // that always fails, which is what an expired token or an offline laptop
+  // looks like from here.
+  test("emits fallback:'git' and still returns a version when gh fails", async () => {
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-"));
+    writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const proc = Bun.spawnSync(
+      ["bun", "run", "./bin/gstack-next-version", "--base", "main",
+       "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
+      { env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+    );
+    rmSync(stubDir, { recursive: true, force: true });
+    const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+    expect(out.offline).toBe(true);
+    expect(out.fallback).toBe("git");
+    // The whole point: degraded queue view, NOT a degraded allocation.
+    expect(out.version).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    expect(out.warnings.join(" ")).toContain("allocated from git");
+  }, 30000);
+
+  test("online runs leave fallback null", async () => {
+    const proc = Bun.spawnSync(
+      ["bun", "run", "./bin/gstack-next-version", "--base", "main",
+       "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
+    );
+    const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+    if (out.offline) return; // no network / no gh auth on this machine: nothing to assert
+    expect(out.fallback).toBe(null);
+  }, 30000);
+});
+
+describe("fetchGitClaimed (offline allocation — the anti-duplicate fallback, #2545)", () => {
+  // Why this exists: when `gh pr list` failed, the util returned
+  // `offline:true` with an EMPTY claim set and /ship's instruction was
+  // "fall back to local BUMP_LEVEL arithmetic". Local arithmetic cannot see a
+  // sibling's claim, so it re-allocated a version an open PR already held.
+  // That produced two commits reading v0.1.57.0 on a downstream repo's main
+  // (plus three earlier pairs found in the same audit). Git knows what the API
+  // was asked for, so offline now degrades the QUEUE VIEW, not the ALLOCATION.
+  function git(cwd: string, ...args: string[]) {
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+  }
+
+  function fixture(): string {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-git-"));
+    git(dir, "init", "-q", "-b", "main");
+    writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+    // A sibling PR branch that already claimed 0.1.67.0, present as a fetched
+    // remote-tracking ref — which is the shape a real `git fetch` leaves.
+    git(dir, "checkout", "-q", "-b", "sibling");
+    writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+    const sha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+    git(dir, "checkout", "-q", "main");
+    git(dir, "update-ref", "refs/remotes/origin/sibling", sha);
+    git(dir, "update-ref", "refs/remotes/origin/main", "main");
+    return dir;
+  }
+
+  test("finds a sibling branch's claim from remote-tracking refs", () => {
+    const dir = fixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0");
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the sibling's claim is enough to push the pick past it", () => {
+    // The end-to-end consequence: with the claim visible, pickNextSlot lands
+    // on 0.1.68.0 instead of re-issuing the sibling's 0.1.67.0.
+    const dir = fixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const claims = fetchGitClaimed("main", "VERSION", []);
+      const base = parseVersion("0.1.66.0")!;
+      const claimed = claims
+        .map((c) => parseVersion(c.version))
+        .filter((v): v is [number, number, number, number] => v !== null)
+        .filter((v) => cmpVersion(v, base) > 0);
+      const { version } = pickNextSlot(base, claimed, "patch");
+      expect(fmtVersion(version)).toBe("0.1.68.0");
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("also reports versions already shipped on the base", () => {
+    // Catches a number that merged and was then re-picked — the VERSION file
+    // alone cannot see that, because it only holds the newest value.
+    const dir = fixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const claims = fetchGitClaimed("main", "VERSION", []);
+      const shipped = claims.filter((c) => c.branch.startsWith("(shipped on"));
+      expect(shipped.map((c) => c.version)).toContain("0.1.66.0");
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reads a JSON version-path on remote refs and keeps the branch's own width", () => {
+    // A sibling repo pinned to frontend/package.json (#2501): its claim is the
+    // JSON .version, not the whitespace-stripped file bytes.
+    const dir = mkdtempSync(join(tmpdir(), "nextver-gitjson-"));
+    const cwd = process.cwd();
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      mkdirSync(join(dir, "frontend"), { recursive: true });
+      writeFileSync(join(dir, "frontend", "package.json"), JSON.stringify({ name: "f", version: "0.99.2" }, null, 2) + "\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "frontend", "package.json"), JSON.stringify({ name: "f", version: "0.99.3" }, null, 2) + "\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "sibling claim");
+      const sha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sha);
+      process.chdir(dir);
+      const claims = fetchGitClaimed("main", "frontend/package.json", []);
+      expect(claims.map((c) => c.version)).toContain("0.99.3");
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("degrades to a warning, never a throw, outside a git repo", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-nogit-"));
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims).toEqual([]);
+      expect(warnings.length).toBeGreaterThan(0);
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("integration (smoke)", () => {
   // Bumps timeout to 30s — the test spawns a real `bun run` subprocess that
   // does a `gh pr list` against the live GitHub API to inspect claimed slots.

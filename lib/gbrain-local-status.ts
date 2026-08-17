@@ -24,12 +24,14 @@
  * Timeout → probe exceeded GSTACK_GBRAIN_PROBE_TIMEOUT_MS (default 15s) with no
  *           recognized error — engine is likely healthy but slow (e.g. a cold
  *           pooler connection, #1964). Consumers treat this as usable.
- * Thin-client → config carries gbrain's remote_mcp marker (#2051): NO local
- *           engine by design; queries go to a remote-HTTP MCP brain. Usable
- *           for brain-aware prose gates; sync stages that need a LOCAL engine
- *           (code/memory/dream) skip. Remote reachability is verified at USE
- *           time (gbrain calls degrade gracefully), never by a classifier
- *           network probe — that's the #1964 pathology.
+ * Thin-client → config carries gbrain's remote_mcp marker (#2051), OR the
+ *           agent host's MCP registration is remote-HTTP-only (#2520 — bearer
+ *           installs via `gbrain connect --token` never get the marker): NO
+ *           local engine by design; queries go to a remote-HTTP MCP brain.
+ *           Usable for brain-aware prose gates; sync stages that need a LOCAL
+ *           engine (code/memory/dream) skip. Remote reachability is verified
+ *           at USE time (gbrain calls degrade gracefully), never by a
+ *           classifier network probe — that's the #1964 pathology.
  * Ok → DB reachable, sources list returned valid JSON.
  */
 
@@ -46,7 +48,7 @@ import {
 import { atomicWriteSync } from "./fs-atomic";
 import { homedir } from "os";
 import { dirname, join } from "path";
-import { buildGbrainEnv, NEEDS_SHELL_ON_WINDOWS } from "./gbrain-exec";
+import { buildGbrainEnv, gbrainConfigDir, NEEDS_SHELL_ON_WINDOWS } from "./gbrain-exec";
 
 export type LocalEngineStatus =
   | "ok"
@@ -120,11 +122,84 @@ export function cacheFilePath(): string {
   );
 }
 
-/** Honors GBRAIN_HOME (codex D11) — same resolution as buildGbrainEnv. */
+/**
+ * Honors GBRAIN_HOME (codex D11) with gbrain's own configDir() semantics
+ * (#2521): GBRAIN_HOME is a parent dir, `.gbrain` is appended. Same
+ * resolution as buildGbrainEnv — both route through gbrainConfigDir.
+ */
 function gbrainConfigPath(env?: NodeJS.ProcessEnv): string {
   const e = env ?? process.env;
-  const gbrainHome = e.GBRAIN_HOME || join(userHome(e), ".gbrain");
-  return join(gbrainHome, "config.json");
+  return join(gbrainConfigDir(e), "config.json");
+}
+
+/**
+ * Bearer-token thin-client evidence (#2520). `gbrain connect <url> --token`
+ * registers a remote-HTTP MCP server with the agent host but never writes
+ * gbrain's remote_mcp marker into config.json — that marker is OAuth-only,
+ * written by `gbrain init --mcp-only`. So the config-file marker check misses
+ * bearer installs entirely: they fall through to the local probe, which fails
+ * against the dead-or-absent local engine and lands on missing-config /
+ * broken-db / broken-config / engine-locked, silently suppressing brain
+ * blocks for a fully-working remote brain.
+ *
+ * Evidence read: ~/.claude.json MCP registrations — user scope AND project
+ * scope (project-scoped registrations are otherwise invisible, #2499).
+ * File-read only: no subprocess, no network (a classifier network probe is
+ * the #1964 pathology). Returns true only when a gbrain registration is
+ * remote-HTTP AND no gbrain registration is local-stdio — a local-stdio
+ * entry means the user runs a local engine (possibly alongside a remote one,
+ * e.g. federation), and local-engine statuses like engine-locked must keep
+ * their precise meaning there.
+ */
+export function hasRemoteOnlyGbrainMcp(env?: NodeJS.ProcessEnv): boolean {
+  interface McpEntry {
+    type?: string;
+    transport?: string;
+    command?: string;
+    url?: string;
+  }
+  let cj: unknown;
+  try {
+    cj = JSON.parse(readFileSync(join(userHome(env), ".claude.json"), "utf-8"));
+  } catch {
+    return false;
+  }
+  // Same classification rules as gstack-gbrain-detect's detectMcpMode tier 3,
+  // including the #2051 name generalization (gbrain, gbrain-remote, gbrain_work).
+  const classify = (entry: McpEntry): "remote" | "local" | null => {
+    const mtype = entry.type || entry.transport || "";
+    if (mtype === "url" || mtype === "http" || mtype === "sse") return "remote";
+    if (mtype === "stdio") return "local";
+    if (entry.url) return "remote";
+    if (entry.command) return "local";
+    return null;
+  };
+  let sawRemote = false;
+  let sawLocal = false;
+  const scan = (servers: unknown): void => {
+    if (!servers || typeof servers !== "object") return;
+    for (const [name, entry] of Object.entries(servers as Record<string, McpEntry>)) {
+      if (!entry || typeof entry !== "object") continue;
+      const isGbrainName = /^gbrain([-_][\w-]*)?$/.test(name);
+      const cmdMentionsGbrain =
+        typeof entry.command === "string" && /\bgbrain\b/.test(entry.command);
+      if (!isGbrainName && !cmdMentionsGbrain) continue;
+      const c = classify(entry);
+      if (c === "remote") sawRemote = true;
+      if (c === "local") sawLocal = true;
+    }
+  };
+  const root = cj as {
+    mcpServers?: unknown;
+    projects?: Record<string, { mcpServers?: unknown }>;
+  } | null;
+  scan(root?.mcpServers);
+  if (root?.projects && typeof root.projects === "object") {
+    for (const proj of Object.values(root.projects)) {
+      if (proj && typeof proj === "object") scan(proj.mcpServers);
+    }
+  }
+  return sawRemote && !sawLocal;
 }
 
 function configuredEngine(env?: NodeJS.ProcessEnv): "pglite" | "postgres" | null {
@@ -146,6 +221,10 @@ function hashPath(p: string): string {
  * call share one fork-exec (~200ms saved per skill preamble).
  */
 const _gbrainBinCache = new Map<string, string | null>();
+// On Windows the shim is `gbrain.cmd` → `bun run cli.ts`; a cold spawn can
+// exceed 2s, and a false negative here poisons the 60s status cache with
+// "no-cli". Give the shim headroom; POSIX keeps the tight timeout.
+const VERSION_PROBE_TIMEOUT_MS = NEEDS_SHELL_ON_WINDOWS ? 10_000 : 2_000;
 export function resolveGbrainBin(env?: NodeJS.ProcessEnv): string | null {
   const e = env ?? process.env;
   const key = e.PATH || "";
@@ -154,7 +233,7 @@ export function resolveGbrainBin(env?: NodeJS.ProcessEnv): string | null {
   try {
     execFileSync("gbrain", ["--version"], {
       encoding: "utf-8",
-      timeout: 2_000,
+      timeout: VERSION_PROBE_TIMEOUT_MS,
       stdio: ["ignore", "ignore", "ignore"],
       env: e,
       shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
@@ -177,7 +256,7 @@ export function readGbrainVersion(env?: NodeJS.ProcessEnv): string {
   try {
     const out = execFileSync("gbrain", ["--version"], {
       encoding: "utf-8",
-      timeout: 2_000,
+      timeout: VERSION_PROBE_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
       env: e,
       shell: NEEDS_SHELL_ON_WINDOWS, // #1731: gbrain is a .cmd shim on Windows
@@ -271,8 +350,12 @@ function freshClassify(env?: NodeJS.ProcessEnv): LocalEngineStatus {
   const gbrainBin = resolveGbrainBin(env);
   if (!gbrainBin) return "no-cli";
 
-  // 2. Config file present?
-  if (!existsSync(gbrainConfigPath(env))) return "missing-config";
+  // 2. Config file present? A bearer thin client (#2520) may never have run
+  // a local init, so config.json can be absent while the remote-HTTP MCP
+  // registration IS the user's brain.
+  if (!existsSync(gbrainConfigPath(env))) {
+    return hasRemoteOnlyGbrainMcp(env) ? "thin-client" : "missing-config";
+  }
 
   // 2.5 Thin client? gbrain's own marker (mirrors gbrain isThinClient():
   // truthy remote_mcp in config). A thin client has NO local engine — gbrain
@@ -329,28 +412,45 @@ function freshClassify(env?: NodeJS.ProcessEnv): LocalEngineStatus {
     // couldn't read — gbrain's dispatch guard says e.g. "`gbrain sources` is
     // not routable ... (thin-client of <url>)"), then the more specific
     // DB-unreachable signal.
-    if (/thin[- ]client/i.test(stderr)) return "thin-client";
-    if (stderr.includes("Cannot connect to database")) return "broken-db";
-    if (stderr.includes("config.json")) return "broken-config";
+    const raw = ((): LocalEngineStatus => {
+      if (/thin[- ]client/i.test(stderr)) return "thin-client";
+      if (stderr.includes("Cannot connect to database")) return "broken-db";
+      if (stderr.includes("config.json")) return "broken-config";
 
-    // PGLite is single-process. A long-lived `gbrain serve` can own the
-    // embedded database, causing the CLI to finish with its own exit 124 and
-    // "connect timed out" message. This is neither our watchdog timeout nor
-    // evidence that the valid config is malformed (#2194).
-    if (stderr.includes("connect timed out") || e.status === 124) {
-      return configuredEngine(env) === "pglite" ? "engine-locked" : "broken-db";
+      // PGLite is single-process. A long-lived `gbrain serve` can own the
+      // embedded database, causing the CLI to finish with its own exit 124 and
+      // "connect timed out" message. This is neither our watchdog timeout nor
+      // evidence that the valid config is malformed (#2194).
+      if (stderr.includes("connect timed out") || e.status === 124) {
+        return configuredEngine(env) === "pglite" ? "engine-locked" : "broken-db";
+      }
+
+      // Probe killed by the timeout with no recognized error: the engine is
+      // most likely healthy but slow (cold pooler connections measured at
+      // 6.9-10.7s in #1964). Don't tell the user their config is malformed.
+      if (e.killed === true || e.signal === "SIGTERM" || e.code === "ETIMEDOUT") {
+        return "timeout";
+      }
+
+      // Defensive default per codex #8: unrecognized failures classify as
+      // broken-config so the user sees the raw stderr surfaced upstream.
+      return "broken-config";
+    })();
+
+    // #2520 bearer-token fallback: the local probe failed, but the user's
+    // only gbrain MCP registration is remote-HTTP — the dead-or-locked local
+    // engine is not their brain (typical shape: a leftover local config plus
+    // `gbrain connect --token`). Reclassify as thin-client so brain blocks
+    // stay rendered and sync's local stages skip with the accurate "nothing
+    // to do locally" message. "timeout" is deliberately excluded: it already
+    // counts as usable and may be a genuinely healthy slow LOCAL engine.
+    if (
+      (raw === "broken-db" || raw === "broken-config" || raw === "engine-locked") &&
+      hasRemoteOnlyGbrainMcp(env)
+    ) {
+      return "thin-client";
     }
-
-    // Probe killed by the timeout with no recognized error: the engine is
-    // most likely healthy but slow (cold pooler connections measured at
-    // 6.9-10.7s in #1964). Don't tell the user their config is malformed.
-    if (e.killed === true || e.signal === "SIGTERM" || e.code === "ETIMEDOUT") {
-      return "timeout";
-    }
-
-    // Defensive default per codex #8: unrecognized failures classify as
-    // broken-config so the user sees the raw stderr surfaced upstream.
-    return "broken-config";
+    return raw;
   }
 }
 

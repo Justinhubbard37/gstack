@@ -122,12 +122,23 @@ sys.exit(0)
 
 # Compute matched allowlisted, privacy-filtered path set from queue.
 # Output: newline-delimited relative paths that should be staged.
+#
+# #2549: every non-staged queue entry is CLASSIFIED, never silently discarded.
+# When $2 is given, a JSON classification lands there:
+#   {"retained": [privacy/mode-held paths that stay queued],
+#    "dropped": {"skipped": [...], "invalid": [...], "unmatched": [...], "missing": [...]}}
+# retained entries would sync if the user raises artifacts_sync_mode, so they
+# stay in the queue; dropped classes can never sync (explicit skip, escape
+# attempt, no allowlist glob, not on disk) and are removed WITH a counted
+# status — the old behavior truncated the whole queue and reported every one
+# of these, including privacy holds, as "no allowlisted changes".
 compute_paths_to_stage() {
   local mode="$1"
-  python3 - "$GSTACK_HOME" "$QUEUE" "$ALLOWLIST" "$PRIVACY_MAP" "$SKIP_FILE" "$mode" <<'PYEOF'
+  local class_file="${2:-}"
+  python3 - "$GSTACK_HOME" "$QUEUE" "$ALLOWLIST" "$PRIVACY_MAP" "$SKIP_FILE" "$mode" "$class_file" <<'PYEOF'
 import sys, json, os, fnmatch, glob
 
-gstack_home, queue, allowlist_path, privacy_path, skip_path, mode = sys.argv[1:7]
+gstack_home, queue, allowlist_path, privacy_path, skip_path, mode, class_file = sys.argv[1:8]
 
 def load_lines(path):
     try:
@@ -195,26 +206,132 @@ def mode_allows(cls, mode):
     return True  # full
 
 final = []
+classified = {"retained": [], "dropped": {"skipped": [], "invalid": [], "unmatched": [], "missing": []}}
 for p in sorted(queue_paths):
     if p in skip_lines:
+        classified["dropped"]["skipped"].append(p)
         continue
     # Must be under GSTACK_HOME root. Reject absolute + reject ../ escape.
     if p.startswith("/") or ".." in p.split("/"):
+        classified["dropped"]["invalid"].append(p)
         continue
     # Must match at least one allowlist glob.
     if not path_matches_any(p, allowlist_globs):
+        classified["dropped"]["unmatched"].append(p)
         continue
-    # Must survive privacy mode filter.
+    # Must survive privacy mode filter — held entries STAY QUEUED (retained):
+    # they would sync under a higher artifacts_sync_mode, and reporting them
+    # as "no allowlisted changes" was #2549's misattribution.
     cls = privacy_class(p, privacy_map)
     if not mode_allows(cls, mode):
+        classified["retained"].append(p)
         continue
     # Must exist on disk — can't stage what isn't there.
     if not os.path.exists(os.path.join(gstack_home, p)):
+        classified["dropped"]["missing"].append(p)
         continue
     final.append(p)
 
+if class_file:
+    with open(class_file, "w") as f:
+        json.dump(classified, f)
+
 for p in final:
     print(p)
+PYEOF
+}
+
+# #2549: surgical queue rewrite — replaces every whole-queue truncation
+# (`: > "$QUEUE"`). Re-reads the LIVE queue at rewrite time (a writer may have
+# enqueued while we were staging/pushing — those entries must survive; the old
+# truncation destroyed them) and keeps every line whose file is either
+# retained (privacy/mode-held) or not part of this drain at all. Atomic
+# tmp+mv in the same directory. Dropped-path detail goes to a 0600 sidecar so
+# the status line can stay content-free (counts only).
+rewrite_queue() {
+  local paths_file="$1"   # staged (drained) paths, one per line
+  local class_file="$2"   # classification JSON from compute_paths_to_stage
+  # Fail-open by design (a failed rewrite self-corrects next run: re-stage →
+  # nothing-to-commit), but say so — a silent failure here would let the
+  # subsequent "ok/idle" status claim a drain that did not happen.
+  python3 - "$QUEUE" "$paths_file" "$class_file" "$GSTACK_HOME/.brain-sync-drops.json" <<'PYEOF' || echo "BRAIN_SYNC: warning: queue rewrite failed — entries retained; next run re-drains" >&2
+import json, os, sys, time
+queue, paths_file, class_file, drops_file = sys.argv[1:5]
+
+def lines(path):
+    try:
+        with open(path) as f:
+            return [l.rstrip("\r\n") for l in f if l.strip()]
+    except FileNotFoundError:
+        return []
+
+staged = set(lines(paths_file))
+try:
+    with open(class_file) as f:
+        classified = json.load(f)
+except Exception:
+    classified = {"retained": [], "dropped": {}}
+retained = set(classified.get("retained", []))
+dropped = set()
+for group in (classified.get("dropped", {}) or {}).values():
+    dropped.update(group)
+processed = staged | dropped
+
+kept = []
+seen_lines = set()
+unparseable = 0
+# LIVE re-read narrows (not fully closes) the concurrent-append window: the
+# lockless enqueue can still land on the old inode between this read and the
+# os.replace below. Vastly better than the old whole-queue truncation.
+for line in lines(queue):
+    if line in seen_lines:
+        continue            # identical duplicate lines collapse on rewrite
+    try:
+        p = json.loads(line).get("file")
+    except Exception:
+        unparseable += 1
+        kept.append(line)   # unparseable line: keep, never destroy
+        seen_lines.add(line)
+        continue
+    if not isinstance(p, str) or p in retained or p not in processed:
+        kept.append(line)
+        seen_lines.add(line)
+if unparseable:
+    import sys as _sys
+    print(f"BRAIN_SYNC: {unparseable} unparseable queue line(s) held (inspect {queue})", file=_sys.stderr)
+
+tmp = queue + ".tmp." + str(os.getpid())
+with open(tmp, "w") as f:
+    for l in kept:
+        f.write(l + "\n")
+os.replace(tmp, queue)
+
+if dropped:
+    fd = os.open(drops_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   "dropped": classified.get("dropped", {})}, f)
+PYEOF
+}
+
+# Human-readable classification counts for status messages.
+queue_summary() {
+  local class_file="$1"
+  python3 - "$class_file" <<'PYEOF' 2>/dev/null || echo ""
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        c = json.load(f)
+except Exception:
+    print(""); sys.exit(0)
+d = c.get("dropped", {}) or {}
+parts = []
+r = len(c.get("retained", []))
+if r: parts.append(f"{r} privacy-held retained")
+for k in ("skipped", "unmatched", "missing", "invalid"):
+    n = len(d.get(k, []))
+    if n: parts.append(f"{n} {k} dropped")
+print("; ".join(parts))
 PYEOF
 }
 
@@ -249,20 +366,90 @@ subcmd_once() {
     fi
   fi
   echo "$$" > "$lock_dir/pid" 2>/dev/null || true
+  # Release the lock on EVERY exit from here on — including the empty-queue
+  # fast path and an INT during the detector's network push. Leaking it would
+  # rely on next-run stale-pid detection, which PID reuse can defeat (kill -0
+  # matching an unrelated live process wedges sync at every boundary). The
+  # mktemp block below re-traps with tempfile cleanup added; both traps keep
+  # the lock removal.
+  trap 'rm -rf "$lock_dir" 2>/dev/null || true' EXIT INT TERM
 
   local mode
   mode=$("$CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || echo off)
 
-  local paths_file
-  paths_file=$(mktemp /tmp/brain-sync-paths.XXXXXX) || { rm -rf "$lock_dir" 2>/dev/null; write_status "error" "mktemp failed"; exit 1; }
-  # Single trap covers both: lock cleanup AND tempfile cleanup.
-  trap 'rm -f "$paths_file" 2>/dev/null; rm -rf "$lock_dir" 2>/dev/null || true' EXIT INT TERM
+  # #2549 unpushed-commit detector: a prior drain may have COMMITTED but
+  # failed to push (auth blip, offline). The data was never lost — it sits in
+  # a local commit — but nothing re-pushed it until NEW changes arrived.
+  # Retry the push up front, inside the lock. Receipted fail-closed like
+  # every other push; a receipt REFUSAL skips the retry without blocking the
+  # rest of the drain (local staging must not wedge on receipt problems).
+  # Guards: origin/<branch> may not exist yet (first sync, deleted remote).
+  #
+  # Throttled: the preamble runs --once at EVERY skill boundary, so an
+  # unthrottled retry would pay a full network push attempt per boundary in
+  # exactly the steady states this targets (offline, broken auth) — and a
+  # captive-portal push can block 30-75s against the header's "<1s when
+  # idle" promise. Attempts are recorded (success or fail) and retried at
+  # most every 10 minutes; the push itself never prompts for credentials and
+  # bounds stalled transfers via git's own low-speed limits (portable — stock
+  # macOS ships no `timeout` binary).
+  #
+  # Author-scoped — EXCLUSIVELY: `git push origin HEAD` publishes every
+  # unpushed commit, so the retry fires only when ALL unpushed commits are
+  # gstack-brain-sync's own. One interleaved user commit disables the
+  # auto-retry entirely (adversarial review: an existential check would
+  # silently auto-publish a user's manual ~/.gstack commit the moment a bot
+  # commit sat in front of it). User commits ride along when a REAL drain
+  # pushes, as before — the detector never publishes work it didn't create.
+  local det_branch det_unpushed det_total det_now det_last
+  det_branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  # Detached HEAD reads as the literal "HEAD" — origin/HEAD usually resolves,
+  # so without this exclusion the detector would retry a doomed push forever.
+  [ "$det_branch" = "HEAD" ] && det_branch=""
+  if [ -n "$det_branch" ] && git -C "$GSTACK_HOME" rev-parse --verify --quiet "origin/$det_branch" >/dev/null 2>&1; then
+    det_unpushed=$(git -C "$GSTACK_HOME" rev-list --count --author="gstack-brain-sync" "origin/$det_branch..HEAD" 2>/dev/null || echo 0)
+    det_total=$(git -C "$GSTACK_HOME" rev-list --count "origin/$det_branch..HEAD" 2>/dev/null || echo 0)
+    case "$det_unpushed" in ''|*[!0-9]*) det_unpushed=0 ;; esac
+    case "$det_total" in ''|*[!0-9]*) det_total=0 ;; esac
+    det_now=$(date +%s)
+    det_last=$(cat "$GSTACK_HOME/.brain-last-push-attempt" 2>/dev/null || echo 0)
+    case "$det_last" in ''|*[!0-9]*) det_last=0 ;; esac
+    if [ "$det_unpushed" -gt 0 ] && [ "$det_unpushed" -eq "$det_total" ] && [ $(( det_now - det_last )) -ge 600 ]; then
+      echo "$det_now" > "$GSTACK_HOME/.brain-last-push-attempt" 2>/dev/null || true
+      local det_host
+      det_host=$(remote_host)
+      if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$det_host" curated-memory-git-push "artifacts_sync_mode!=off" \
+          bash -c 'GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
+        date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
+      fi
+    fi
+  fi
 
-  compute_paths_to_stage "$mode" > "$paths_file"
+  # Empty-queue fast path: this is the steady state at every skill boundary.
+  # Skipping compute/rewrite here is safe — with zero queue lines there is
+  # nothing to classify, retain, or drop, and a concurrent append after this
+  # check simply waits for the next boundary. (The detector above already ran:
+  # its whole point is re-pushing stranded commits when the queue is empty.)
+  # The lock-release trap installed at acquisition covers this exit.
+  if [ ! -s "$QUEUE" ]; then
+    write_status "idle" "queue empty"
+    exit 0
+  fi
+
+  local paths_file class_file
+  paths_file=$(mktemp /tmp/brain-sync-paths.XXXXXX) || { rm -rf "$lock_dir" 2>/dev/null; write_status "error" "mktemp failed"; exit 1; }
+  class_file=$(mktemp /tmp/brain-sync-class.XXXXXX) || { rm -f "$paths_file"; rm -rf "$lock_dir" 2>/dev/null; write_status "error" "mktemp failed"; exit 1; }
+  # Single trap covers all: lock cleanup AND tempfile cleanup.
+  trap 'rm -f "$paths_file" "$class_file" 2>/dev/null; rm -rf "$lock_dir" 2>/dev/null || true' EXIT INT TERM
+
+  compute_paths_to_stage "$mode" "$class_file" > "$paths_file"
   if [ ! -s "$paths_file" ]; then
-    # Nothing to stage. Clear any stale queue entries and exit.
-    : > "$QUEUE"
-    write_status "idle" "no allowlisted changes in queue"
+    # Nothing stageable. Rewrite the queue (retained entries + concurrent
+    # appends survive; classified drops removed) instead of truncating it.
+    rewrite_queue "$paths_file" "$class_file"
+    local summary
+    summary=$(queue_summary "$class_file")
+    write_status "idle" "no stageable changes${summary:+ ($summary)}"
     exit 0
   fi
 
@@ -309,8 +496,9 @@ subcmd_once() {
   local msg="sync: $n file(s) | $ts"
   git -C "$GSTACK_HOME" -c user.email="gstack@localhost" -c user.name="gstack-brain-sync" \
     commit -q -m "$msg" 2>/dev/null || {
-      # Nothing to commit (e.g. all files already committed).
-      : > "$QUEUE"
+      # Nothing to commit (e.g. all files already committed). The drained
+      # paths leave the queue; retained + concurrent entries survive (#2549).
+      rewrite_queue "$paths_file" "$class_file"
       write_status "idle" "queue drained but no new changes to commit"
       exit 0
     }
@@ -322,10 +510,12 @@ subcmd_once() {
     if echo "$push_err" | grep -qiE "auth|permission|403|401|forbidden"; then
       local hint
       hint=$(remote_auth_hint)
-      write_status "push_failed" "push failed: auth error. fix: $hint"
+      write_status "push_failed" "push failed: auth error; commit retained locally, will retry next run. fix: $hint"
       echo "BRAIN_SYNC: push failed: auth. fix: $hint" >&2
-      # Queue cleared because the commit exists locally; next push will send it.
-      : > "$QUEUE"
+      # Drained paths leave the queue — they live in the local commit, which
+      # the run-start detector re-pushes next time (#2549). Retained +
+      # concurrent entries survive the rewrite.
+      rewrite_queue "$paths_file" "$class_file"
       exit 0
     fi
 
@@ -339,20 +529,21 @@ subcmd_once() {
       if git -C "$GSTACK_HOME" merge --no-edit "origin/$branch" >/dev/null 2>&1; then
         if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-push "artifacts_sync_mode!=off" \
             bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
-          : > "$QUEUE"
+          rewrite_queue "$paths_file" "$class_file"
           date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
           write_status "ok" "pushed $n file(s) after rebase"
           exit 0
         fi
       fi
     fi
-    write_status "push_failed" "push failed: $(printf '%s' "$push_err" | head -1)"
-    : > "$QUEUE"
+    # Commit exists locally; the run-start detector re-pushes it next time.
+    write_status "push_failed" "push failed: $(printf '%s' "$push_err" | head -1); commit retained locally, will retry next run"
+    rewrite_queue "$paths_file" "$class_file"
     exit 0
   }
 
-  # Success: clear queue, update last-push.
-  : > "$QUEUE"
+  # Success: drained paths leave the queue (retained + concurrent survive).
+  rewrite_queue "$paths_file" "$class_file"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
   write_status "ok" "pushed $n file(s)"
   exit 0

@@ -28,7 +28,7 @@ import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const ROOT = path.resolve(new URL(import.meta.url).pathname, '..', '..');
+const ROOT = path.resolve(import.meta.path, '..', '..');
 
 function read(rel: string): string {
   return fs.readFileSync(path.join(ROOT, rel), 'utf-8');

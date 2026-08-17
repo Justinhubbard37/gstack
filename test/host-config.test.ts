@@ -3,7 +3,7 @@
  * host-config-export.ts, and golden-file regression checks.
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { validateHostConfig, validateAllConfigs, type HostConfig } from '../scripts/host-config';
@@ -420,6 +420,33 @@ describe('host-config-export.ts CLI', () => {
 
 describe('golden-file regression', () => {
   const GOLDEN_DIR = path.join(ROOT, 'test', 'fixtures', 'golden');
+
+  // #2532: the codex/factory goldens read gitignored .agents/ and .factory/
+  // artifacts that only gen-skill-docs.test.ts (a serial tree-mutating file)
+  // produces. On a clean clone — or when this file runs in isolation — those
+  // dirs don't exist and the goldens fail with ENOENT, an order dependency,
+  // not a regression. Self-provision: generate a host's artifacts iff its
+  // ship SKILL.md is missing. Existing artifacts are never overwritten here,
+  // so a genuinely stale artifact still fails the golden (that is the test's
+  // job; freshness enforcement lives in gen-skill-docs.test.ts).
+  beforeAll(() => {
+    const hostArtifacts: Array<[string, string]> = [
+      ['codex', path.join(ROOT, '.agents', 'skills', 'gstack-ship', 'SKILL.md')],
+      ['factory', path.join(ROOT, '.factory', 'skills', 'gstack-ship', 'SKILL.md')],
+    ];
+    for (const [host, artifact] of hostArtifacts) {
+      if (fs.existsSync(artifact)) continue;
+      const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', host], {
+        cwd: ROOT,
+      });
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `golden-file beforeAll: gen-skill-docs --host ${host} failed (exit ${result.exitCode}):\n`
+          + result.stderr.toString(),
+        );
+      }
+    }
+  });
 
   test('Claude ship skill matches golden baseline', () => {
     const golden = fs.readFileSync(path.join(GOLDEN_DIR, 'claude-ship-SKILL.md'), 'utf-8');

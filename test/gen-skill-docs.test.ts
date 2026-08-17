@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll } from 'bun:test';
+import { assertSinglePreamble } from '../scripts/gen-skill-docs';
 import { COMMAND_DESCRIPTIONS } from '../browse/src/commands';
 import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
 import * as fs from 'fs';
@@ -257,10 +258,16 @@ describe('gen-skill-docs', () => {
     expect(violations).toEqual([]);
   });
 
-  test('package.json version matches VERSION file', () => {
+  test('package.json version matches VERSION file (npm-valid translation)', () => {
+    // Decision 11 (v1.67 wave): VERSION stays the 4-digit source of truth;
+    // package.json carries the npm-valid 3-digit translation (npm rejects a
+    // fourth component). The pre-v1.67 1:1 four-digit mirror is also accepted
+    // (grandfathered until the next write), matching gstack-version-bump's
+    // own drift contract.
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
     const version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf-8').trim();
-    expect(pkg.version).toBe(version);
+    const npmTranslation = version.split('.').slice(0, 3).join('.');
+    expect([npmTranslation, version]).toContain(pkg.version);
   });
 
   test('generated files are fresh (match --dry-run)', () => {
@@ -1507,6 +1514,25 @@ describe('CHANGELOG_WORKFLOW resolver', () => {
   });
 });
 
+// --- Duplicate {{PREAMBLE}} guard (#2508/#2362) ---
+
+describe('assertSinglePreamble', () => {
+  test('one {{PREAMBLE}} passes', () => {
+    expect(() => assertSinglePreamble('a\n{{PREAMBLE}}\nb', 'x/SKILL.md.tmpl')).not.toThrow();
+  });
+
+  test('zero {{PREAMBLE}} passes (sections have none)', () => {
+    expect(() => assertSinglePreamble('no macro here', 'x/sections/y.md.tmpl')).not.toThrow();
+  });
+
+  test('a second occurrence throws with the template path — even in prose', () => {
+    // The original #2508 bug WAS a prose mention: "emitted by {{PREAMBLE}}'s
+    // preamble bash". Resolution is context-blind, so the guard must be too.
+    const tmpl = '{{PREAMBLE}}\n\n...later: emitted by {{PREAMBLE}}\'s preamble bash';
+    expect(() => assertSinglePreamble(tmpl, 'spec/SKILL.md.tmpl')).toThrow(/spec\/SKILL\.md\.tmpl.*2 times/);
+  });
+});
+
 // --- Parameterized resolver infrastructure tests ---
 
 describe('parameterized resolver support', () => {
@@ -1537,8 +1563,11 @@ describe('parameterized resolver support', () => {
 describe('preamble routing injection', () => {
   const shipContent = readShipUnion();
 
-  test('preamble bash checks for routing section in CLAUDE.md', () => {
-    expect(shipContent).toContain('grep -q "## Skill routing" CLAUDE.md');
+  test('preamble bash checks for routing section in CLAUDE.md and AGENTS.md', () => {
+    // #2500: the probe iterates CLAUDE.md AND AGENTS.md — non-Claude hosts
+    // route skills via AGENTS.md, the cross-harness convention file.
+    expect(shipContent).toContain('for _RF in CLAUDE.md AGENTS.md');
+    expect(shipContent).toContain('grep -q "## Skill routing" "$_RF"');
     expect(shipContent).toContain('HAS_ROUTING');
   });
 
@@ -2003,8 +2032,15 @@ describe('Codex generation (--host codex)', () => {
     // timeout-wrapper guidance documents the Codex CLI's own rollout-log
     // location (a user-facing CLI path, same class as ~/.codex/logs/ in the
     // codex skill), not the gstack Codex host install path.
+    // `~/.codex/config.toml` is the same user-facing class: the shared
+    // codexPreflight's model_unusable branch (#2477) points at the CLI's own
+    // config file, where the rejected `model =` pin lives.
     expect(content).not.toContain('.agents/skills');
-    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
+    expect(
+      content
+        .replaceAll('~/.codex/sessions/', '')
+        .replaceAll('~/.codex/config.toml', ''),
+    ).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: ship skill still uses .claude/skills/ paths', () => {
@@ -2012,8 +2048,14 @@ describe('Codex generation (--host codex)', () => {
     expect(content).toContain('~/.claude/skills/gstack');
     expect(content).not.toContain('.agents/skills');
     // ~/.codex/sessions/ is the Codex CLI's rollout-log path (user-facing),
-    // documented by the adversarial-pass timeout guidance — see review test above.
-    expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
+    // documented by the adversarial-pass timeout guidance; ~/.codex/config.toml
+    // is the CLI's own config file (model_unusable guidance, #2477) — see the
+    // review test above.
+    expect(
+      content
+        .replaceAll('~/.codex/sessions/', '')
+        .replaceAll('~/.codex/config.toml', ''),
+    ).not.toContain('~/.codex/');
   });
 
   test('Claude output unchanged: all Claude skills have zero Codex paths', () => {
@@ -2023,10 +2065,16 @@ describe('Codex generation (--host codex)', () => {
       // codex + autoplan document the Codex CLI auth file (~/.codex/auth.json)
       // and log path (~/.codex/logs/) — those are user-facing Codex CLI paths,
       // not the gstack Codex host install path. ~/.codex/sessions/ (rollout
-      // logs, referenced by the review/ship timeout guidance) is the same
-      // user-facing class, so it is scrubbed before the ban.
+      // logs, referenced by the review/ship timeout guidance) and
+      // ~/.codex/config.toml (the model_unusable guidance in the shared
+      // codexPreflight, #2477) are the same user-facing class, so they are
+      // scrubbed before the ban.
       if (skill.dir !== 'pair-agent' && skill.dir !== 'codex' && skill.dir !== 'autoplan') {
-        expect(content.replaceAll('~/.codex/sessions/', '')).not.toContain('~/.codex/');
+        expect(
+          content
+            .replaceAll('~/.codex/sessions/', '')
+            .replaceAll('~/.codex/config.toml', ''),
+        ).not.toContain('~/.codex/');
       }
       // gstack-upgrade legitimately references .agents/skills for cross-platform detection
       if (skill.dir !== 'gstack-upgrade') {
@@ -2330,10 +2378,13 @@ describe('setup script validation', () => {
 
   test('Codex install uses link_codex_skill_dirs', () => {
     // The Codex install section (section 5) should use the Codex function
+    // End marker: the next numbered section header (a marker that doesn't
+    // exist slices to EOF and the assertion reads unrelated sections).
     const codexSection = setupContent.slice(
       setupContent.indexOf('# 5. Install for Codex'),
-      setupContent.indexOf('# 6. Create')
+      setupContent.indexOf('# 6. Install for Kiro')
     );
+    expect(setupContent.indexOf('# 6. Install for Kiro')).toBeGreaterThan(-1);
     expect(codexSection).toContain('create_codex_runtime_root');
     expect(codexSection).toContain('link_codex_skill_dirs');
     expect(codexSection).not.toContain('link_claude_skill_dirs');
@@ -2378,7 +2429,10 @@ describe('setup script validation', () => {
     const fnBody = setupContent.slice(fnStart, fnEnd);
     expect(fnBody).toContain('mkdir -p "$target"');
     // v1.36.0.0: routes through _link_or_copy helper for Windows fallback (cp on MSYS2/Git Bash).
-    expect(fnBody).toContain('_link_or_copy "$gstack_dir/$dir_name/SKILL.md" "$target/SKILL.md"');
+    // v1.67 (#2569): the source is render-aware — canonical SKILL.md, or the
+    // rendered :user variant from ${GSTACK_HOME}/render/claude when present.
+    expect(fnBody).toContain('_skill_md_src="$gstack_dir/$dir_name/SKILL.md"');
+    expect(fnBody).toContain('_link_or_copy "$_skill_md_src" "$target/SKILL.md"');
   });
 
   // REGRESSION: cleanup functions must handle both old symlinks AND new real-directory pattern
@@ -2415,7 +2469,10 @@ describe('setup script validation', () => {
     const fnEnd = setupContent.indexOf('# ─── Helper: remove old unprefixed Claude skill entries', fnStart);
     const fnBody = setupContent.slice(fnStart, fnEnd);
     expect(fnBody).toContain('_gstack-command');
-    expect(fnBody).toContain('_link_or_copy "$gstack_dir/SKILL.md" "$target/SKILL.md"');
+    // #2511: the alias must be a rewritten COPY (unique frontmatter name),
+    // never a verbatim symlink of the canonical SKILL.md.
+    expect(fnBody).toContain('_install_alias_skill_md "$gstack_dir/SKILL.md" "$target" "_gstack-command"');
+    expect(fnBody).not.toContain('_link_or_copy "$gstack_dir/SKILL.md"');
 
     const claudeSection = setupContent.slice(
       setupContent.indexOf('# 4. Install for Claude'),
@@ -2465,6 +2522,86 @@ describe('setup script validation', () => {
     expect(setupContent).toContain('INSTALL_OPENCODE=');
     expect(setupContent).toContain('OPENCODE_SKILLS="$HOME/.config/opencode/skills"');
     expect(setupContent).toContain('OPENCODE_GSTACK="$OPENCODE_SKILLS/gstack"');
+  });
+
+  // --host cursor full install slice (#1358, PR #2547 by @szsunyuan re-derived)
+  test('auto mode detects Cursor via binary or ~/.cursor directory', () => {
+    expect(setupContent).toContain('command -v cursor');
+    expect(setupContent).toContain('[ -d "$HOME/.cursor" ] && INSTALL_CURSOR=1');
+  });
+
+  test('setup supports --host cursor with install section and Cursor skill path vars', () => {
+    expect(setupContent).toContain('INSTALL_CURSOR=');
+    expect(setupContent).toContain('CURSOR_SKILLS="$HOME/.cursor/skills"');
+    expect(setupContent).toContain('CURSOR_GSTACK="$CURSOR_SKILLS/gstack"');
+    expect(setupContent).toContain('create_cursor_runtime_root');
+    expect(setupContent).toContain('create_cursor_sidecar');
+    expect(setupContent).toContain('link_cursor_skill_dirs');
+    expect(setupContent).toContain('gstack ready (cursor).');
+  });
+
+  test('create_cursor_runtime_root exposes only Cursor runtime assets', () => {
+    const fnStart = setupContent.indexOf('create_cursor_runtime_root()');
+    const fnEnd = setupContent.indexOf('create_cursor_sidecar()', fnStart);
+    const fnBody = setupContent.slice(fnStart, fnEnd);
+    expect(fnBody).toContain('gstack/SKILL.md');
+    expect(fnBody).toContain('browse/dist');
+    expect(fnBody).toContain('browse/bin');
+    expect(fnBody).toContain('gstack-upgrade/SKILL.md');
+    expect(fnBody).toContain('checklist.md');
+    expect(fnBody).toContain('TODOS-format.md');
+    // bin scripts import ../lib — the two must travel together.
+    expect(fnBody).toContain('$cursor_gstack/lib');
+    expect(fnBody).not.toContain('design-checklist.md');
+    expect(fnBody).not.toContain('greptile-triage.md');
+    expect(fnBody).not.toContain('review/specialists');
+    expect(fnBody).not.toContain('qa/templates');
+    expect(fnBody).not.toContain('_link_or_copy "$gstack_dir" "$cursor_gstack"');
+  });
+
+  test('create_cursor_sidecar plants runtime assets without wiping generated SKILL.md', () => {
+    const fnStart = setupContent.indexOf('create_cursor_sidecar()');
+    const fnEnd = setupContent.indexOf('link_cursor_skill_dirs()', fnStart);
+    const fnBody = setupContent.slice(fnStart, fnEnd);
+    expect(fnBody).toContain('.cursor/skills/gstack');
+    expect(fnBody).toContain('bin');
+    expect(fnBody).toContain('browse/dist');
+    expect(fnBody).toContain('browse/bin');
+    expect(fnBody).toContain('ETHOS.md');
+    expect(fnBody).not.toContain('rm -rf');
+  });
+
+  test('link_cursor_skill_dirs skips the gstack runtime root directory', () => {
+    const fnStart = setupContent.indexOf('link_cursor_skill_dirs()');
+    const fnEnd = setupContent.indexOf('}', setupContent.indexOf('linked[@]', fnStart));
+    const fnBody = setupContent.slice(fnStart, fnEnd);
+    expect(fnBody).toContain('[ "$skill_name" = "gstack" ] && continue');
+    // #2444-aware guard: Windows bypass, else only replace symlink-or-missing.
+    expect(fnBody).toContain('[ "$IS_WINDOWS" -eq 1 ] || [ -L "$target" ] || [ ! -e "$target" ]');
+  });
+
+  // #2142 deleted existing ~/.cursor/skills/<name> dirs with `rm -rf "$target"`
+  // before relinking. That can wipe unowned Cursor skills. Only replace a
+  // symlink or a missing path; never the whole skills directory.
+  test('link_cursor_skill_dirs does not delete unowned Cursor skill directories', () => {
+    const fnStart = setupContent.indexOf('link_cursor_skill_dirs()');
+    const fnEnd = setupContent.indexOf('}', setupContent.indexOf('linked[@]', fnStart));
+    const fnBody = setupContent.slice(fnStart, fnEnd);
+    expect(fnBody).not.toContain('rm -rf "$target"');
+    expect(fnBody).not.toContain('rm -rf "$skills_dir"');
+    expect(setupContent).not.toContain('rm -rf "$CURSOR_SKILLS"');
+  });
+
+  test('Cursor install links generated skills before planting the sidecar', () => {
+    const cursorInstall = setupContent.slice(
+      setupContent.indexOf('# 6d. Install for Cursor'),
+      setupContent.indexOf('# 7. Create .agents/ sidecar'),
+    );
+    const linkCall = cursorInstall.indexOf('link_cursor_skill_dirs "$SOURCE_GSTACK_DIR"');
+    const sidecarCall = cursorInstall.indexOf('create_cursor_sidecar "$SOURCE_GSTACK_DIR"');
+    expect(linkCall).toBeGreaterThan(-1);
+    expect(sidecarCall).toBeGreaterThan(-1);
+    expect(linkCall).toBeLessThan(sidecarCall);
   });
 
   test('setup installs OpenCode skills into a nested gstack runtime root', () => {
@@ -3493,5 +3630,85 @@ describe('PREAMBLE resolution requires declared preamble-tier', () => {
       if (fs.existsSync(tmplPath)) checkTmpl(tmplPath);
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2499: gbrain MCP detection must read BOTH ~/.claude.json scopes.
+// Claude Code registers MCP servers at user scope (.mcpServers) and project
+// scope (.projects["/abs/path"].mcpServers — what `claude mcp add` without
+// --scope user writes). The rendered brain-sync block previously read only
+// user scope, so a correctly configured project-scoped brain was invisible.
+// ---------------------------------------------------------------------------
+describe('brain-sync block reads project-scoped MCP registrations (#2499)', () => {
+  const rendered = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
+
+  test('rendered _GBRAIN_MCP_ENTRY jq resolves project scope with nearest-ancestor cwd match', () => {
+    const line = rendered.split('\n').find((l) => l.includes('_GBRAIN_MCP_ENTRY=$('));
+    expect(line).toBeDefined();
+    // Project-scope read present, driven by $PWD.
+    expect(line!).toContain('--arg cwd "$PWD"');
+    expect(line!).toContain('.projects');
+    // User scope still resolved first.
+    expect(line!).toContain('.mcpServers.gbrain');
+    // The old user-scope-only filter is gone from the rendered output.
+    expect(rendered).not.toContain('.mcpServers.gbrain.type // .mcpServers.gbrain.transport');
+    expect(rendered).not.toContain(".mcpServers.gbrain.url // empty");
+  });
+
+  test('rendered _GBRAIN_MCP_TYPE and _GBRAIN_HOST extract from the resolved entry', () => {
+    const typeLine = rendered.split('\n').find((l) => l.includes('_GBRAIN_MCP_TYPE=$('));
+    const hostLine = rendered.split('\n').find((l) => l.includes('_GBRAIN_HOST=$('));
+    expect(typeLine).toBeDefined();
+    expect(hostLine).toBeDefined();
+    expect(typeLine!).toContain('_GBRAIN_MCP_ENTRY');
+    expect(hostLine!).toContain('_GBRAIN_MCP_ENTRY');
+  });
+
+  test('rendered jq lines FUNCTION: project-scoped registration resolves for a cwd inside the project', () => {
+    // Execute the exact rendered bytes, not a re-derivation: extract the
+    // _GBRAIN_MCP_ENTRY + _GBRAIN_MCP_TYPE lines from the generated SKILL.md
+    // and run them in bash against a fixture ~/.claude.json that carries ONLY
+    // a project-scoped gbrain registration.
+    const lines = rendered.split('\n');
+    const entryLine = lines.find((l) => l.includes('_GBRAIN_MCP_ENTRY=$('));
+    const typeLine = lines.find((l) => l.includes('_GBRAIN_MCP_TYPE=$('));
+    expect(entryLine).toBeDefined();
+    expect(typeLine).toBeDefined();
+
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-2499-home-'));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-2499-proj-'));
+    const nestedCwd = path.join(projectDir, 'src', 'deep');
+    fs.mkdirSync(nestedCwd, { recursive: true });
+    try {
+      fs.writeFileSync(
+        path.join(tmpHome, '.claude.json'),
+        JSON.stringify({
+          projects: {
+            [projectDir]: {
+              mcpServers: { gbrain: { type: 'http', url: 'https://brain.example.com/mcp' } },
+            },
+          },
+        }),
+      );
+      const script = `cd "$1" || exit 1\n${entryLine!.trim()}\n${typeLine!.trim()}\necho "RESOLVED:$_GBRAIN_MCP_TYPE"`;
+      const r = spawnSync('bash', ['-c', script, 'bash', nestedCwd], {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: tmpHome },
+        timeout: 10_000,
+      });
+      expect(r.stdout).toContain('RESOLVED:http');
+
+      // Discriminator: a cwd OUTSIDE the project must NOT resolve it.
+      const outside = spawnSync('bash', ['-c', script, 'bash', os.tmpdir()], {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: tmpHome },
+        timeout: 10_000,
+      });
+      expect(outside.stdout).toContain('RESOLVED:\n');
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 });

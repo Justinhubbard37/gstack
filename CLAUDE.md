@@ -166,11 +166,12 @@ gstack/
 │   ├── test/        # Integration tests
 │   └── dist/        # Compiled binary
 ├── extension/       # Chrome extension (side panel + activity feed + CSS inspector)
-├── lib/             # Shared libraries (worktree.ts, egress-receipt.ts, context-bill.ts, redact-engine.ts, tracker-guard.ts, code-intelligence/)
+├── lib/             # Shared libraries (worktree.ts, egress-receipt.ts, context-bill.ts, redact-engine.ts, tracker-guard.ts, version-source.ts, code-intelligence/)
+├── patches/         # bun `patchedDependencies` patches (playwright-core windowsHide)
 ├── docs/designs/    # Design documents
 ├── setup-deploy/    # /setup-deploy skill (one-time deploy config)
 ├── .github/         # CI workflows + Docker image
-│   ├── workflows/   # evals.yml (E2E on Ubicloud), quality-gate.yml (secret scan), dependency-review.yml, osv-scanner.yml, skill-docs.yml, actionlint.yml, and 7 more (windows, periodic evals, release gates, ci-image)
+│   ├── workflows/   # evals.yml (E2E on Ubicloud), quality-gate.yml (secret scan), dependency-review.yml, osv-scanner.yml, skill-docs.yml, actionlint.yml, and 8 more (windows, periodic evals, release gates, ci-image)
 │   └── docker/      # Dockerfile.ci (pre-baked toolchain + Playwright/Chromium)
 ├── contrib/         # Contributor-only tools (never installed for users)
 │   └── add-host/    # /gstack-contrib-add-host skill
@@ -429,9 +430,16 @@ leak always BLOCKs (deterministic).
 - Classifier model cache: `~/.gstack/models/testsavant-small/` (112MB, first run only)
 - Attack log: `~/.gstack/security/attempts.jsonl` — written by
   `tunnel-denial-log.ts` (tunnel-surface rejections; rotates at 10MB, 5 generations)
-- Session state: `~/.gstack/security/session-state.json` (cross-process, atomic;
-  NOTE: classifierStatus currently has no live writer — shield status derives
-  from what's on disk)
+
+History note (#2557): the cross-process session state
+(`~/.gstack/security/session-state.json`), `getStatus()`, the `/health`
+`security` field, and the sidepanel SEC shield were all removed — the state
+file lost its only writer when sidebar-agent.ts was ripped, so the shield
+reported a permanent 'inactive' or a stale false-green 'protected' from
+leftover disk state. The live defenses (L1-L3 filters, L4 sidecar on the
+inject-scan path) report through their own call sites, never through
+/health. `browse/test/server-security-surface.test.ts` pins both the
+removal and the live L4 wiring. Do not re-document these as live.
 
 ## Dev symlink awareness
 
@@ -448,8 +456,11 @@ symlink or a real copy. If it's a symlink to your working directory, be aware th
   global install at `~/.claude/skills/gstack/` is used instead
 
 **Prefix setting:** Setup creates real directories (not symlinks) at the top level
-with a SKILL.md symlink inside (e.g., `qa/SKILL.md -> gstack/qa/SKILL.md`). This
-ensures Claude discovers them as top-level skills, not nested under `gstack/`.
+with a SKILL.md symlink inside (e.g., `qa/SKILL.md -> gstack/qa/SKILL.md`), plus
+links to each skill's runtime assets (sections/, templates, checklists — everything
+except SKILL.md, tests, build output, and `.tmpl` sources). Alias skills
+(`_gstack-command`, `connect-chrome`) install as rewritten copies, never symlinks.
+This ensures Claude discovers them as top-level skills, not nested under `gstack/`.
 Names are either short (`qa`) or namespaced (`gstack-qa`), controlled by
 `skill_prefix` in `~/.gstack/config.yaml`. Pass `--no-prefix` or `--prefix` to
 skip the interactive prompt.
@@ -652,6 +663,17 @@ claims v1.7.0.0 as a MINOR and branch B is also a MINOR, B lands at v1.8.0.0
 "MINOR = feature-only, PATCH = fix-only" as a strict contract. This is why
 `bin/gstack-next-version` advances within the chosen bump level rather than
 repicking the level when collisions happen.
+
+**package.json carries the npm-valid translation, not VERSION verbatim.**
+VERSION stays the 4-digit source of truth (e.g. `1.67.0.0`); package.json and
+any subdirectory manifests with a `version` field get the 3-digit npm-valid
+translation (`1.67.0`), and lockfile `version` fields sync only when the
+lockfile already exists. `bin/gstack-version-bump` (via `lib/version-source.ts`)
+owns the translation and judges drift on translated forms — do NOT "fix" the
+apparent mismatch by hand, and do not write a 4-digit version into
+package.json (npm rejects it). Rationale and translation rules live in the
+`lib/version-source.ts` header; `test/gstack-version-bump.test.ts` pins the
+contract.
 
 **Scale-aware bumps — use common sense.** When the diff is big, bump MINOR (or
 MAJOR), not PATCH. PATCH is for bug fixes and small additions; MINOR is for

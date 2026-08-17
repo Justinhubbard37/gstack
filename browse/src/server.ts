@@ -24,7 +24,6 @@ import {
   runContentFilters, type ContentFilterResult,
   markHiddenElements, getCleanTextWithStripping, cleanupHiddenMarkers,
 } from './content-security';
-import { getStatus as getSecurityStatus } from './security';
 import { isSidecarAvailable, scanWithSidecar } from './security-sidecar-client';
 import { writeSecureFile, mkdirSecure, appendSecureFile } from './file-permissions';
 import { handleSnapshot, SNAPSHOT_FLAGS } from './snapshot';
@@ -47,6 +46,9 @@ import { inspectElement, modifyStyle, resetModifications, getModificationHistory
 // Bun.spawn used instead of child_process.spawn (compiled bun binaries
 // fail posix_spawn on all executables including /bin/bash)
 import { safeUnlink, safeUnlinkQuiet, safeKill } from './error-handling';
+import {
+  findAvailablePort, formatExplicitPortUnavailableError, formatRandomPortUnavailableError,
+} from './port-allocator';
 import { readAgentRecord, killAgentByRecord, agentRecordPath, spawnTerminalAgent } from './terminal-agent-control';
 import { isProcessAlive } from './error-handling';
 import { sanitizeBody, stripLoneSurrogateEscapes, stripLoneSurrogates, sanitizeReplacer } from './sanitize';
@@ -915,124 +917,14 @@ let isShuttingDown = false;
 // the good final snapshot with a degraded one (zero tabs).
 let sessionPersistInterval: ReturnType<typeof setInterval> | null = null;
 
-type PortCheckResult =
-  | { available: true }
-  | { available: false; code?: string; message: string };
-
-type FailedPortAttempt = {
-  port: number;
-  result: Extract<PortCheckResult, { available: false }>;
-};
-
-const RANDOM_PORT_MIN = 10000;
-const RANDOM_PORT_MAX = 60000;
-const RANDOM_PORT_RETRIES = 5;
-
-function normalizePortError(err: unknown): Extract<PortCheckResult, { available: false }> {
-  const maybeNodeError = err as NodeJS.ErrnoException | undefined;
-  return {
-    available: false,
-    code: maybeNodeError?.code,
-    message: maybeNodeError?.message || String(err),
-  };
-}
-
-function isOccupiedPort(result: Extract<PortCheckResult, { available: false }>): boolean {
-  return result.code === 'EADDRINUSE';
-}
-
-function formatPortFailureDetail(attempt: FailedPortAttempt): string {
-  const { code, message } = attempt.result;
-  return code ? `${attempt.port} (${code}: ${message})` : `${attempt.port} (${message})`;
-}
-
-function formatExplicitPortUnavailableError(
-  port: number,
-  result: Extract<PortCheckResult, { available: false }>
-): Error {
-  if (isOccupiedPort(result)) {
-    return new Error(`[browse] Port ${port} (from BROWSE_PORT env) is in use`);
-  }
-
-  const detail = result.code ? `${result.code}: ${result.message}` : result.message;
-  return new Error(
-    `[browse] Cannot bind BROWSE_PORT=${port} on 127.0.0.1 (${detail}). ` +
-    `This usually means localhost port binding is blocked by the current sandbox or OS permissions, ` +
-    `not that the port is occupied. Allow localhost binding, or run browse from an unrestricted terminal.`
-  );
-}
-
-function formatRandomPortUnavailableError(attempts: FailedPortAttempt[]): Error {
-  const blockingAttempts = attempts.filter((attempt) => !isOccupiedPort(attempt.result));
-
-  if (blockingAttempts.length > 0) {
-    const last = blockingAttempts[blockingAttempts.length - 1];
-    return new Error(
-      `[browse] Cannot bind localhost ports after ${attempts.length} attempts in range ` +
-      `${RANDOM_PORT_MIN}-${RANDOM_PORT_MAX}. Last error: ${formatPortFailureDetail(last)}. ` +
-      `This usually means the current sandbox or OS permissions are blocking localhost port binding, ` +
-      `not that every sampled port is occupied. Allow localhost binding, set BROWSE_PORT to an approved ` +
-      `port, or run browse from an unrestricted terminal.`
-    );
-  }
-
-  return new Error(
-    `[browse] No available port after ${RANDOM_PORT_RETRIES} attempts in range ` +
-    `${RANDOM_PORT_MIN}-${RANDOM_PORT_MAX}; every sampled port was already in use`
-  );
-}
-
-// Test if a port is available by binding and immediately releasing.
-// Uses net.createServer instead of Bun.serve to avoid a race condition
-// in the Node.js polyfill where listen/close are async but the caller
-// expects synchronous bind semantics. See: #486
-function checkPortAvailable(port: number, hostname: string = '127.0.0.1'): Promise<PortCheckResult> {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    let settled = false;
-    const finish = (result: PortCheckResult) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-
-    srv.once('error', (err) => finish(normalizePortError(err)));
-    try {
-      srv.listen(port, hostname, () => {
-        srv.close(() => finish({ available: true }));
-      });
-    } catch (err) {
-      finish(normalizePortError(err));
-    }
-  });
-}
-
-function isPortAvailable(port: number, hostname: string = '127.0.0.1'): Promise<boolean> {
-  return checkPortAvailable(port, hostname).then((result) => result.available);
-}
+// Port allocation lives in port-allocator.ts (#2314, decision 8) so the
+// terminal-agent shares the SAME fixed 10000-60000 scan range instead of
+// binding port:0 into the OS ephemeral range. The imports at the top of
+// this file re-expose the pieces __testInternals__ pins.
 
 // Find port: explicit BROWSE_PORT, or random in 10000-60000
-async function findPort(): Promise<number> {
-  // Explicit port override (for debugging)
-  if (BROWSE_PORT) {
-    const result = await checkPortAvailable(BROWSE_PORT);
-    if (result.available) {
-      return BROWSE_PORT;
-    }
-    throw formatExplicitPortUnavailableError(BROWSE_PORT, result);
-  }
-
-  // Random port with retry
-  const attempts: FailedPortAttempt[] = [];
-  for (let attempt = 0; attempt < RANDOM_PORT_RETRIES; attempt++) {
-    const port = RANDOM_PORT_MIN + Math.floor(Math.random() * (RANDOM_PORT_MAX - RANDOM_PORT_MIN));
-    const result = await checkPortAvailable(port);
-    if (result.available) {
-      return port;
-    }
-    attempts.push({ port, result });
-  }
-  throw formatRandomPortUnavailableError(attempts);
+function findPort(): Promise<number> {
+  return findAvailablePort(BROWSE_PORT);
 }
 
 /**
@@ -1493,6 +1385,13 @@ async function handleCommand(body: any, tokenInfo?: TokenInfo | null): Promise<R
 if (import.meta.main) {
   // SIGINT (Ctrl+C): user intentionally stopping → shutdown.
   process.on('SIGINT', () => activeShutdown?.());
+  // SIGHUP (terminal hangup): with handleSIGHUP:false at the three launch
+  // sites (#2220), Playwright no longer closes Chromium when this process
+  // gets hung up on — this handler is now the ONLY Chromium cleanup on
+  // SIGHUP (ENG-OV4). Route to the same shutdown path as SIGINT:
+  // activeShutdown closes the browser, releases ports, and removes the
+  // state file. Without it, a hangup would leak a live Chromium.
+  process.on('SIGHUP', () => activeShutdown?.());
   // SIGTERM behavior depends on mode:
   // - Normal (headless) mode: Claude Code's Bash sandbox fires SIGTERM when the
   //   parent shell exits between tool invocations. Ignoring it keeps the server
@@ -2005,10 +1904,13 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           mode: browserManager.getConnectionMode(),
           uptime: Math.floor((Date.now() - startTime) / 1000),
           tabs: browserManager.getTabCount(),
-          // Security module status — drives the shield icon in the sidepanel.
-          // Returns {status: 'protected'|'degraded'|'inactive', layers: {...}}.
-          // Fed by the page-content side (testsavant sidecar, canary state).
-          security: getSecurityStatus(),
+          // No `security` field (#2557): the only writer of the status it
+          // reported (sidebar-agent.ts's session-state file) went away with
+          // the chat path, so it read from a file nothing wrote — reporting
+          // a permanent 'inactive', or a stale false-green 'protected'
+          // wherever an old state file survived on disk. The live defenses
+          // (content-security L1-L3, the L4 sidecar on /pty-inject-scan)
+          // report through their own call sites, not through /health.
           // Terminal-agent discovery. ONLY a port number — never a token.
           // Tokens flow via the /pty-session HttpOnly cookie path. See
           // `pty-session-cookie.ts` for the rationale (codex outside-voice

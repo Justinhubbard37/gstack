@@ -777,7 +777,7 @@ export async function handleMetaCommand(
         let activated = false;
         for (const appName of appNames) {
           try {
-            execSync(`osascript -e 'tell application "${appName}" to activate'`, { stdio: 'pipe', timeout: 3000 });
+            execSync(`osascript -e 'tell application "${appName}" to activate'`, { stdio: 'pipe', timeout: 3000, windowsHide: true });
             activated = true;
             break;
           } catch (err: any) {
@@ -841,7 +841,7 @@ export async function handleMetaCommand(
       const { execSync } = await import('child_process');
       let gitRoot: string;
       try {
-        gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }).trim();
       } catch (err: any) {
         // execSync throws with exit status on non-git directories
         if (err?.status === undefined && !err?.message?.includes('Command failed')) throw err;

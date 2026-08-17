@@ -23,18 +23,19 @@
  *          host process): the combiner is pure and tested, and server.ts's
  *          inline L4 path is the consumer of record.
  *
- * Cross-process state lives at ~/.gstack/security/session-state.json.
- * classifierStatus in that state has no live writer since the chat-path rip
- * (the sidecar reports status over its own NDJSON protocol instead).
+ * There is no longer any cross-process session state (#2557).
+ * ~/.gstack/security/session-state.json existed to carry classifier status
+ * across the server.ts / sidebar-agent.ts boundary; sidebar-agent.ts went
+ * away with the PTY terminal rewrite, leaving nothing to write the file and
+ * a /health.security status that reported stale or empty data — a permanent
+ * 'inactive', or a false-green 'protected' wherever an old state file
+ * survived on disk. getStatus / SessionState / read+writeSessionState and
+ * the /health field were removed together. Per-tab decision files under
+ * ~/.gstack/security/decisions/ are unaffected, and the L4 sidecar reports
+ * status over its own NDJSON protocol (security-sidecar-client.ts).
  */
 
-import { randomBytes, createHash } from 'crypto';
-import { spawn } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import { restrictFilePermissions, appendSecureFile, mkdirSecure } from './file-permissions';
-import { atomicWriteQuiet } from '../../lib/fs-atomic';
+import { randomBytes } from 'crypto';
 
 // ─── Thresholds + verdict types ──────────────────────────────
 
@@ -81,17 +82,6 @@ export interface SecurityResult {
   reason?: string;
   signals: LayerSignal[];
   confidence: number;
-}
-
-export type SecurityStatus = 'protected' | 'degraded' | 'inactive';
-
-export interface StatusDetail {
-  status: SecurityStatus;
-  layers: {
-    testsavant: 'ok' | 'degraded' | 'off';
-    canary: 'ok' | 'off';
-  };
-  lastUpdated: string;
 }
 
 // ─── Verdict combiner (ensemble rule, label-first for transcript) ────
@@ -322,79 +312,8 @@ export function checkCanaryInStructure(value: unknown, canary: string): boolean 
 // attempts.jsonl rotation + telemetry spawn plumbing) lived here until the
 // chat-path scanner that called it was ripped with sidebar-agent.ts. The
 // LIVE attempts.jsonl writer is tunnel-denial-log.ts, which owns its own
-// rotation.
-
-const SECURITY_DIR = path.join(os.homedir(), '.gstack', 'security');
-
-// ─── Cross-process session state ─────────────────────────────
-
-const STATE_FILE = path.join(SECURITY_DIR, 'session-state.json');
-
-/**
- * SessionState is a DISK FORMAT (~/.gstack/security/session-state.json).
- * Old files may carry a `transcript` field inside classifierStatus from the
- * removed Haiku layer — readSessionState tolerates it (JSON.parse keeps the
- * extra key; getStatus ignores it), but we never write it.
- */
-export interface SessionState {
-  sessionId: string;
-  canary: string;
-  warnedDomains: string[]; // per-session rate limit for special telemetry
-  classifierStatus: {
-    testsavant: 'ok' | 'degraded' | 'off';
-  };
-  lastUpdated: string;
-}
-
-/**
- * Atomic write of session state (via lib/fs-atomic). Writes are safe
- * across process boundaries. Swallow-with-log polarity: a failed write
- * must never take down the caller (security state is best-effort cache).
- */
-export function writeSessionState(state: SessionState): void {
-  try { mkdirSecure(SECURITY_DIR); } catch { /* write below fails and logs */ }
-  if (atomicWriteQuiet(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 })) {
-    // Windows ACL hardening (POSIX chmod is redundant with mode above).
-    restrictFilePermissions(STATE_FILE);
-  } else {
-    console.error('[security] writeSessionState failed');
-  }
-}
-
-export function readSessionState(): SessionState | null {
-  try {
-    if (!fs.existsSync(STATE_FILE)) return null;
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-// ─── Status reporting (for shield icon via /health) ──────────
-
-export function getStatus(): StatusDetail {
-  const state = readSessionState();
-  // Read the field explicitly (never spread classifierStatus): old on-disk
-  // state may carry a stale `transcript` key from the removed Haiku layer,
-  // and spreading would leak it into the /health payload.
-  const testsavant = state?.classifierStatus?.testsavant ?? 'off';
-  const canary = state?.canary ? 'ok' : 'off';
-
-  let status: SecurityStatus;
-  if (testsavant === 'ok' && canary === 'ok') {
-    status = 'protected';
-  } else if (testsavant === 'off' && canary === 'off') {
-    status = 'inactive';
-  } else {
-    status = 'degraded';
-  }
-
-  return {
-    status,
-    layers: { testsavant, canary: canary as 'ok' | 'off' },
-    lastUpdated: state?.lastUpdated ?? new Date().toISOString(),
-  };
-}
+// rotation. The cross-process session state + getStatus shield feed went
+// the same way (#2557) — see the module header.
 
 /**
  * Extract url domain for logging. Never logs path or query string.

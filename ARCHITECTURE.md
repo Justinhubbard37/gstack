@@ -69,11 +69,11 @@ The server writes `.gstack/browse.json` (atomic write via tmp + rename, mode 0o6
 { "pid": 12345, "port": 34567, "token": "uuid-v4", "startedAt": "...", "binaryVersion": "abc123" }
 ```
 
-The CLI reads this file to find the server. If the file is missing or the server fails an HTTP health check, the CLI spawns a new server. On Windows, PID-based process detection is unreliable in Bun binaries, so the health check (GET /health) is the primary liveness signal on all platforms.
+The CLI reads this file to find the server. If the file is missing or the daemon process is dead, the CLI spawns a new server. A process that is alive but not answering `/health` is busy, not dead: the CLI probes for a bounded ~8s, then reports busy with a nonzero exit — only an explicit `--force-restart` kills a live daemon. Process liveness uses signal-0 (`isProcessAlive`, EPERM counts as alive) on every platform, with the health check (GET /health) as the responsiveness signal. Daemon stdout/stderr persists to `<project>/.gstack/browse-daemon.log`.
 
 ### Port selection
 
-Random port between 10000-60000 (retry up to 5 on collision). This means 10 Conductor workspaces can each run their own browse daemon with zero configuration and zero port conflicts. The old approach (scanning 9400-9409) broke constantly in multi-workspace setups.
+Random port between 10000-49151 (retry up to 5 on collision), allocated through the shared `browse/src/port-allocator.ts` so every long-lived gstack listener draws from the same range. The range ends at 49151 on purpose: 49152-65535 is the macOS ephemeral pool, and allocating inside it meant the OS could hand the same port to another process moments later. This means 10 Conductor workspaces can each run their own browse daemon with zero configuration and zero port conflicts. The old approach (scanning 9400-9409) broke constantly in multi-workspace setups.
 
 ### Version auto-restart
 
@@ -176,19 +176,19 @@ The Chrome sidebar agent has tools (Bash, Read, Glob, Grep, WebFetch) and reads 
 
 1. **L1-L3 content security (`browse/src/content-security.ts`).** Runs on every page-content command and every tool output: datamarking, hidden-element strip, ARIA regex, URL blocklist, and a trust-boundary envelope wrapper. Applied at both the server and the agent.
 
-2. **L4 ML classifier — TestSavantAI (`browse/src/security-classifier.ts`).** A 22MB BERT-small ONNX model (int8 quantized) bundled with the agent. Runs locally, no network. Scans every user message and every Read/Glob/Grep/WebFetch tool output before Claude sees it. Opt-in 721MB DeBERTa-v3 ensemble via `GSTACK_SECURITY_ENSEMBLE=deberta`.
+2. **L4 ML classifier — TestSavantAI (`browse/src/security-classifier.ts`).** A 22MB BERT-small ONNX model (int8 quantized) running in the security sidecar subprocess. Runs locally, no network. Scans page-derived content on the inject-scan path before the agent sees it.
 
-3. **L4b transcript classifier.** A Claude Haiku pass that looks at the full conversation shape (user message, tool calls, tool output), not just text. Gated by `LOG_ONLY: 0.40` so most clean traffic skips the paid call.
+3. **L4b transcript classifier (removed).** A Claude Haiku conversation-shape pass existed until the chat-path agent that invoked it was ripped; it was deleted as dead code (zero production callers), along with the opt-in DeBERTa ensemble. Do not re-document either as live.
 
-4. **L5 canary token (`browse/src/security.ts`).** A random token injected into the system prompt at session start. Rolling-buffer detection across `text_delta` and `input_json_delta` streams catches the token if it shows up anywhere in Claude's output, tool arguments, URLs, or file writes. Deterministic BLOCK — if the token leaks, the attacker convinced Claude to reveal the system prompt, and the session ends.
+4. **L5 canary token (`browse/src/security.ts`).** Generate/inject/detect utilities for a random system-prompt token whose leak means the attacker convinced the model to reveal the system prompt. Canary leak BLOCKs deterministically. The utilities are pure and tested; the chat prompt-builder that injected the canary was ripped, so no production path injects it today.
 
 5. **L6 ensemble combiner (`combineVerdict`).** BLOCK requires agreement from two ML classifiers at >= `WARN` (0.75), not a single confident hit. This is the Stack Overflow instruction-writing false-positive mitigation. On tool-output scans, single-layer high confidence BLOCKs directly — the content wasn't user-authored, so the FP concern doesn't apply.
 
-**Critical constraint:** `security-classifier.ts` runs only in the sidebar-agent process, never in the compiled browse binary. `@huggingface/transformers` v4 requires `onnxruntime-node`, which fails `dlopen` from Bun compile's temp extract directory. Only the pure-string pieces (canary inject/check, verdict combiner, attack log, status) are in `security.ts`, which is safe to import from `server.ts`.
+**Critical constraint:** `security-classifier.ts` runs only in the security sidecar subprocess (`security-sidecar-entry.ts`), never in the compiled browse binary. `@huggingface/transformers` v4 requires `onnxruntime-node`, which fails `dlopen` from Bun compile's temp extract directory. Only the pure-string pieces (canary inject/check, verdict combiner) are in `security.ts`, which is safe to import from `server.ts`. (The attack log lives in `tunnel-denial-log.ts`; the session-state/status surface was removed in #2557.)
 
-**Env knobs:** `GSTACK_SECURITY_OFF=1` is a real kill switch (skips ML scan, canary still injects). Model cache at `~/.gstack/models/testsavant-small/` (112MB, first run) and `~/.gstack/models/deberta-v3-injection/` (721MB, opt-in only). Attack log at `~/.gstack/security/attempts.jsonl` (salted sha256 + domain, rotates at 10MB, 5 generations). Per-device salt at `~/.gstack/security/device-salt` (0600), cached in-process to survive FS-unwritable environments.
+**Env knobs:** `GSTACK_SECURITY_OFF=1` is a real kill switch (classifier stays off even if warmed; the L1-L3 filters keep running). Model cache at `~/.gstack/models/testsavant-small/` (112MB, first run). Attack log at `~/.gstack/security/attempts.jsonl` (salted sha256 + domain, rotates at 10MB, 5 generations). Per-device salt at `~/.gstack/security/device-salt` (0600), cached in-process to survive FS-unwritable environments.
 
-**Visibility.** The sidebar header shows a shield icon (green/amber/red) polled via `/sidebar-chat`. A centered banner appears on canary leak or BLOCK verdict with the exact layer scores. `bin/gstack-security-dashboard` aggregates local attempts; `supabase/functions/community-pulse` aggregates opt-in community telemetry across users.
+**Visibility.** A centered banner appears on canary leak or BLOCK verdict with the exact layer scores. `bin/gstack-security-dashboard` aggregates local attempts; `supabase/functions/community-pulse` aggregates opt-in community telemetry across users. (The sidebar header's SEC shield icon and the `/health` `security` field were removed in #2557: their only data source — `~/.gstack/security/session-state.json` — lost its only writer when the chat-path agent was ripped, so the shield reported stale or empty state. The live defenses report through their own call sites.)
 
 ## The ref system
 

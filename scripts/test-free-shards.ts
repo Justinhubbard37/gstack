@@ -170,6 +170,10 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
   // POSIX-ness is what they TEST, or arrives via a variable). Receipts:
   // PR #2593 windows-free-tests run 31918591602.
   {
+    file: 'test/codex-under-codex-detection.test.ts',
+    reason: 'drives the rendered preflight bash under a hardcoded POSIX PATH (/usr/bin:/bin) — bash is unreachable through that PATH on Windows, so every case sees empty output (v1.67 windows lane run 95234224148)',
+  },
+  {
     file: 'test/regression-pr1169-build-app-sed.test.ts',
     reason: 'tests sed escape sequences in build-app.sh — sed/bash are the subject under test',
   },
@@ -255,6 +259,26 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
 // pattern hit is a false positive — the point of these files is Windows
 // coverage, so auto-excluding them defeats the regression tests they carry.
 const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
+  {
+    file: 'test/setup-windows-rerun-refresh.test.ts',
+    // Trips the "spawns bin/ shebang script" pattern via path.join(..., 'bin',
+    // 'tool.sh') fixture paths, but every spawn goes through spawnSync('bash',
+    // ['-c', ...]) — Git Bash executes it fine on windows-latest. This file IS
+    // the #2444 Windows regression coverage (IS_WINDOWS=1 copy-refresh path);
+    // excluding it here would keep the bug class unexercised on the one
+    // platform it bites.
+    reason: 'bin/ hits are fixture path segments; spawns bash explicitly — the IS_WINDOWS=1 refresh path must run on windows-latest',
+  },
+  {
+    file: 'test/uninstall-windows-copies.test.ts',
+    // Trips the "spawns bin/ shebang script" pattern via the
+    // path.join(ROOT, 'bin', 'gstack-uninstall') constant, but the script is
+    // always spawned through spawnSync('bash', [UNINSTALL, ...]). This file
+    // carries the #2563 Windows real-dir-copy uninstall coverage — the bug
+    // ONLY reproduces on the copy install shape windows-latest exercises.
+    // The symlink-shape describe block self-skips on win32.
+    reason: 'bin/ hit is a bash-spawned script path; #2563 real-dir uninstall coverage must run on windows-latest',
+  },
   {
     file: 'browse/test/file-permissions.test.ts',
     // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
@@ -355,6 +379,10 @@ export const TREE_MUTATING: Record<string, string> = {
   'test/skill-validation.test.ts': 'regenerates .agents/ (codex host) artifacts in place (3 sites)',
   'test/gbrain-detection-override.test.ts':
     'regenerates SKILL.md in place with --respect-detection (gbrain variant), then git-restores — readers see inflated skeletons mid-window',
+  'test/host-config.test.ts':
+    'golden tests read .agents/.factory artifacts produced by gen-skill-docs.test.ts, and its beforeAll generates them when missing (#2532) — must not race the parallel readers or run before the mutators window',
+  'test/catalog-trim.test.ts':
+    'imports scripts/gen-skill-docs.ts, whose top-level body regenerates the full claude host at import time (71 files; idempotent on a fresh tree, but a stale tree gets rewritten mid-window) — same hazard class as #2532',
   // Ratchet readers (measure the tree; need it quiet):
   'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
   'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',

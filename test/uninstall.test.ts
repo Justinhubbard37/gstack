@@ -161,5 +161,73 @@ describe('gstack-uninstall', () => {
       // Non-gstack should survive
       expect(fs.existsSync(path.join(mockHome, '.claude', 'skills', 'other-tool'))).toBe(true);
     });
+
+    test('--force removes Cursor gstack skills and leaves other Cursor skills', () => {
+      // Cursor installs are rendered real dirs, so removal is gated on the
+      // generated banner in SKILL.md (S5) — the managed fixtures carry it.
+      const banner = '<!-- AUTO-GENERATED from SKILL.md.tmpl - DO NOT EDIT DIRECTLY -->\n# x\n';
+      fs.mkdirSync(path.join(mockHome, '.cursor', 'skills', 'gstack'), { recursive: true });
+      fs.writeFileSync(path.join(mockHome, '.cursor', 'skills', 'gstack', 'SKILL.md'), banner);
+      fs.mkdirSync(path.join(mockHome, '.cursor', 'skills', 'gstack-review'), { recursive: true });
+      fs.writeFileSync(path.join(mockHome, '.cursor', 'skills', 'gstack-review', 'SKILL.md'), banner);
+      fs.mkdirSync(path.join(mockHome, '.cursor', 'skills', 'frontend-design'), { recursive: true });
+      fs.writeFileSync(path.join(mockHome, '.cursor', 'skills', 'frontend-design', 'SKILL.md'), 'keep');
+
+      fs.mkdirSync(path.join(mockGitRoot, '.cursor', 'skills', 'gstack-ship'), { recursive: true });
+      fs.writeFileSync(path.join(mockGitRoot, '.cursor', 'skills', 'gstack-ship', 'SKILL.md'), banner);
+      fs.mkdirSync(path.join(mockGitRoot, '.cursor', 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(mockGitRoot, '.cursor', 'rules', 'keep.md'), 'keep');
+
+      const result = spawnSync('bash', [UNINSTALL, '--force'], {
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HOME: mockHome,
+          GSTACK_DIR: path.join(mockHome, '.claude', 'skills', 'gstack'),
+          GSTACK_STATE_DIR: path.join(mockHome, '.gstack'),
+        },
+        cwd: mockGitRoot,
+      });
+
+      expect(result.status).toBe(0);
+
+      expect(fs.existsSync(path.join(mockHome, '.cursor', 'skills', 'gstack'))).toBe(false);
+      expect(fs.existsSync(path.join(mockHome, '.cursor', 'skills', 'gstack-review'))).toBe(false);
+      expect(fs.existsSync(path.join(mockHome, '.cursor', 'skills', 'frontend-design'))).toBe(true);
+      expect(fs.existsSync(path.join(mockGitRoot, '.cursor', 'skills', 'gstack-ship'))).toBe(false);
+      expect(fs.existsSync(path.join(mockGitRoot, '.cursor', 'rules', 'keep.md'))).toBe(true);
+    });
+
+    test("a user's own gstack-prefixed Cursor dir (no banner) survives and is listed", () => {
+      // S5: the bare gstack* glob must not sweep a dir that merely starts
+      // with "gstack" — provenance comes from the generated banner, and a
+      // hand-written SKILL.md never carries it.
+      const foreign = path.join(mockHome, '.cursor', 'skills', 'gstack-fork-notes');
+      fs.mkdirSync(foreign, { recursive: true });
+      fs.writeFileSync(path.join(foreign, 'SKILL.md'), '# my own notes\n');
+
+      const foreignLocal = path.join(mockGitRoot, '.cursor', 'skills', 'gstack-my-rules');
+      fs.mkdirSync(foreignLocal, { recursive: true });
+      fs.writeFileSync(path.join(foreignLocal, 'SKILL.md'), '# hand-written\n');
+
+      const result = spawnSync('bash', [UNINSTALL, '--force'], {
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HOME: mockHome,
+          GSTACK_DIR: path.join(mockHome, '.claude', 'skills', 'gstack'),
+          GSTACK_STATE_DIR: path.join(mockHome, '.gstack'),
+        },
+        cwd: mockGitRoot,
+      });
+
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(foreign)).toBe(true);
+      expect(fs.existsSync(foreignLocal)).toBe(true);
+      const stderr = result.stderr.toString();
+      expect(stderr).toContain('left in place');
+      expect(stderr).toContain('gstack-fork-notes');
+      expect(stderr).toContain('gstack-my-rules');
+    });
   });
 });

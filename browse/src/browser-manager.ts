@@ -22,6 +22,7 @@ import { emitActivity } from './activity';
 import { validateNavigationUrl } from './url-validation';
 import { TabSession, type RefEntry } from './tab-session';
 import { resolveChromiumProfile, cleanSingletonLocks } from './config';
+import { launchWithXProtectHeal } from './xprotect-heal';
 import { withCdpSession } from './cdp-bridge';
 import type { MemorySnapshot, MemoryStructureStats, MemoryTabSnapshot, MemoryProcess } from './memory-snapshot';
 
@@ -458,8 +459,23 @@ export class BrowserManager {
       console.log(`[browse] Extensions loaded from: ${extensionsDir}`);
     }
 
-    this.browser = await chromium.launch({
+    // XProtect self-heal wrapper (P0 #2554): a macOS definition update can
+    // start SIGKILLing the pinned Chromium at spawn. On the classified
+    // signature, clear quarantine on the Playwright cache + force-reinstall
+    // once, then retry this launch once. This headless path always uses the
+    // Playwright cache (no executablePath), so the heal is never scoped out.
+    this.browser = await launchWithXProtectHeal(() => chromium.launch({
       headless: useHeadless,
+      // #2220: the daemon owns signal policy, not Playwright. Playwright's
+      // default handlers close Chromium the moment THIS process receives
+      // SIGINT/SIGTERM/SIGHUP — which fights the deliberate headless
+      // SIGTERM-ignore in server.ts (the daemon survives the signal but
+      // loses its browser out from under it). All three are false; server.ts
+      // routes the signals it actually honors through activeShutdown, which
+      // closes Chromium itself.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       // On Windows, Chromium's sandbox fails when the server is spawned through
       // the Bun→Node process chain (GitHub #276). Disable it — local daemon
       // browsing user-specified URLs has marginal sandbox benefit. Also disabled
@@ -468,7 +484,7 @@ export class BrowserManager {
       chromiumSandbox: shouldEnableChromiumSandbox(),
       ...(launchArgs.length > 0 ? { args: launchArgs } : {}),
       ...(this.proxyConfig ? { proxy: this.proxyConfig } : {}),
-    });
+    }));
 
     // Chromium disconnect → distinguish clean user-quit from crash. Both
     // events look identical to Playwright (one 'disconnected' fires), but
@@ -651,8 +667,16 @@ export class BrowserManager {
     // three more (--disable-popup-blocking, --disable-component-update,
     // --disable-default-apps — each a documented automation tell per Patchright).
     const { STEALTH_IGNORE_DEFAULT_ARGS } = await import('./stealth');
-    this.context = await chromium.launchPersistentContext(userDataDir, {
+    // XProtect self-heal wrapper (P0 #2554). usesCustomExecutable scopes the
+    // heal out when GSTACK_CHROMIUM_PATH supplies the bundle — that bundle
+    // belongs to the wrapper/embedder and is never quarantine-cleared or
+    // reinstalled over (probePoisonedChromiumBundle's scope contract).
+    this.context = await launchWithXProtectHeal(() => chromium.launchPersistentContext(userDataDir, {
       headless: false,
+      // #2220: daemon owns signal policy — see launch() for the rationale.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       // Match the sandbox policy used by launch() above. Without this,
       // Playwright auto-adds --no-sandbox on every headed launch and the user
       // sees Chromium's "unsupported command-line flag" yellow infobar.
@@ -663,7 +687,7 @@ export class BrowserManager {
       ...(executablePath ? { executablePath } : {}),
       ...(this.proxyConfig ? { proxy: this.proxyConfig } : {}),
       ignoreDefaultArgs: STEALTH_IGNORE_DEFAULT_ARGS,
-    });
+    }), { usesCustomExecutable: Boolean(executablePath) });
     this.browser = this.context.browser();
     this.connectionMode = 'headed';
     this.intentionalDisconnect = false;
@@ -1702,8 +1726,15 @@ export class BrowserManager {
       // The handoff path (headless → headed re-launch) takes the same
       // anti-detection posture.
       const { STEALTH_IGNORE_DEFAULT_ARGS } = await import('./stealth');
-      newContext = await chromium.launchPersistentContext(userDataDir, {
+      // XProtect self-heal wrapper (P0 #2554): handoff always launches the
+      // Playwright-cache bundle (no executablePath), so the heal applies
+      // exactly as in launch()/launchHeaded().
+      newContext = await launchWithXProtectHeal(() => chromium.launchPersistentContext(userDataDir, {
         headless: false,
+        // #2220: daemon owns signal policy — see launch() for the rationale.
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false,
         // Match the sandbox policy used by launchHeaded() / launch(). The
         // handoff path is the headless→headed re-launch and shares the same
         // anti-detection posture, including no spurious --no-sandbox infobar.
@@ -1713,7 +1744,7 @@ export class BrowserManager {
         ...(this.proxyConfig ? { proxy: this.proxyConfig } : {}),
         ignoreDefaultArgs: STEALTH_IGNORE_DEFAULT_ARGS,
         timeout: 15000,
-      });
+      }));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return `ERROR: Cannot open headed browser — ${msg}. Headless browser still running.`;

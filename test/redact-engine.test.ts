@@ -189,6 +189,52 @@ describe("MEDIUM demoted credential-shaped patterns (TENSION-1)", () => {
     expect(ids("API_KEY=${MY_VAR}")).not.toContain("env.kv");
   });
 
+  // #1946 gap 3: the uppercase-`=`-only shape made lowercase and YAML/JSON
+  // colon assignments invisible — the exact config shapes people actually
+  // push. Each closed detection fail-open gets a pinned case.
+  test("env.kv fires on lowercase = assignment (#1946)", () => {
+    expect(ids("api_key=8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ")).toContain("env.kv");
+  });
+  test("env.kv fires on YAML colon assignment (#1946)", () => {
+    expect(ids("password: 8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ")).toContain("env.kv");
+  });
+  test("env.kv fires on quoted JSON key colon assignment (#1946)", () => {
+    expect(ids('"apiKey": "8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ"')).toContain("env.kv");
+  });
+  test("env.kv colon/lowercase forms stay entropy-gated and placeholder-safe", () => {
+    expect(ids("password: changeme")).not.toContain("env.kv");
+    expect(ids("apiKey: YOUR_API_KEY_HERE")).not.toContain("env.kv");
+    expect(ids("api_key=${MY_VAR}")).not.toContain("env.kv");
+  });
+  // T1 calibration: the zero-or-more-prefix net matched ANY identifier ending
+  // in a suffix, so ordinary code (`cacheKey: <entropic id>`) hit a MEDIUM
+  // confirm prompt. Name shape must be credential-semantic to count.
+  test("env.kv ignores non-credential names ending in a suffix (entropic values)", () => {
+    const v = "8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ";
+    expect(ids(`cacheKey: ${v}`)).not.toContain("env.kv");
+    expect(ids(`sortKey: ${v}`)).not.toContain("env.kv");
+    expect(ids(`partitionKey: ${v}`)).not.toContain("env.kv");
+    expect(ids(`hotkey: ${v}`)).not.toContain("env.kv");
+    expect(ids(`monkey: ${v}`)).not.toContain("env.kv");
+    expect(ids(`idempotencyKey: ${v}`)).not.toContain("env.kv");
+  });
+  test("env.kv still fires on every credential-shaped name form", () => {
+    const v = "8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ";
+    expect(ids(`api_key=${v}`)).toContain("env.kv"); // (i) separator
+    expect(ids(`API_KEY=${v}`)).toContain("env.kv"); // (i) + ALL-CAPS
+    expect(ids(`x-access-key: ${v}`)).toContain("env.kv"); // (i) dash separator
+    expect(ids(`key: ${v}`)).toContain("env.kv"); // (ii) bare suffix
+    expect(ids(`APIKEY=${v}`)).toContain("env.kv"); // (iii) ALL-CAPS compound
+    expect(ids(`apiKey: ${v}`)).toContain("env.kv"); // (iv) credential camel
+    expect(ids(`authToken: ${v}`)).toContain("env.kv"); // (iv) credential camel
+    expect(ids(`clientSecret: ${v}`)).toContain("env.kv"); // (iv) credential camel
+  });
+  test("env.kv stays MEDIUM (calibration: generic net, not a blocker)", () => {
+    const f = scan("api_key=8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ", { repoVisibility: "private" })
+      .findings.find((x) => x.id === "env.kv");
+    expect(f?.tier).toBe("MEDIUM");
+  });
+
   // #1946 — Bearer is the most FP-prone shape in the wave: docs and examples
   // are full of "Authorization: Bearer <token>". MEDIUM + header proximity +
   // the env.kv entropy recipe keep it calibrated.

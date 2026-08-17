@@ -54,16 +54,24 @@ describe('process liveness probe (Windows terminal-agent leak)', () => {
     expect(isProcessAlive(2147483646)).toBe(false);
   });
 
-  test('3. isProcessAlive spawns NO subprocess on POSIX (signal-0 path)', () => {
+  test('2b. EPERM means ALIVE: an unsignalable-but-existing PID is not dead (T2)', () => {
+    // signal-0 to a process we lack permission over throws EPERM — the
+    // process EXISTS, we just can't signal it. Treating EPERM as "dead" is
+    // the false negative that leaked agents. PID 1 (launchd/init) on POSIX
+    // and PID 4 (System) on Windows always exist and are either signalable
+    // or EPERM — both must read as alive.
+    expect(isProcessAlive(process.platform === 'win32' ? 4 : 1)).toBe(true);
+  });
+
+  test('3. isProcessAlive spawns NO subprocess on ANY platform (signal-0, #1952)', () => {
     // The heart of the bug: a liveness probe that forks is slow enough to
     // time out, and a timed-out probe silently answers "dead". Signal 0
-    // cannot time out because it never leaves the process.
-    //
-    // Merged design note: on win32 the helper DOES keep a single hardened
-    // tasklist probe (windowsHide, bounded timeout, quoted-CSV PID match)
-    // because Bun's process.kill(pid, 0) throws ESRCH for live Windows PIDs
-    // in compiled binaries. The POSIX path stays subprocess-free.
-    if (process.platform === 'win32') return;
+    // cannot time out because it never leaves the process. Node maps
+    // process.kill(pid, 0) to an OpenProcess existence check on Windows —
+    // and the Windows daemon runs under Node (server-node.mjs +
+    // bun-polyfill), so the POSIX idiom is portable and the win32 tasklist
+    // branch is GONE (it caused both the false negatives above and the
+    // per-tick console flash of #1952).
     const origSpawn = (Bun as any).spawn;
     const origSpawnSync = (Bun as any).spawnSync;
     const spawns: string[] = [];
@@ -79,16 +87,14 @@ describe('process liveness probe (Windows terminal-agent leak)', () => {
     }
   });
 
-  test('4. no source file probes liveness via tasklist outside the central helper', () => {
-    // Static tripwire: ad-hoc tasklist existence checks scattered across src/
-    // resurrect the false-negative class (each call site re-invents the
-    // timeout/parse handling and gets it subtly wrong). The ONE sanctioned
-    // site is error-handling.ts's isProcessAlive win32 branch — centralized,
-    // windowsHide, bounded timeout, quoted-CSV `"${pid}"` match. Every other
-    // file must route through the helper.
+  test('4. no source file probes liveness via tasklist — signal-0 is the only probe (#1952)', () => {
+    // Static tripwire: a tasklist existence check ANYWHERE in src/
+    // resurrects both the false-negative class (#2414: a timed-out spawnSync
+    // still returns, with partial stdout, so a live process reads as dead)
+    // and the per-tick console flash (#1952). isProcessAlive uses
+    // process.kill(pid, 0) on every platform; nothing gets an exemption.
     const offenders: string[] = [];
     for (const { file, content } of readAllSourceFiles()) {
-      if (file === 'error-handling.ts') continue; // the canonical helper
       const code = stripComments(content);
       // `PID eq` is the existence-probe form specifically. Other tasklist
       // uses (e.g. IMAGENAME filters for browser detection) are unaffected.

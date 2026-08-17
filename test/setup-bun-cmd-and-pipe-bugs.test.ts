@@ -45,16 +45,19 @@ describe('setup: gen:skill-docs:user exit-code propagation (pipe-masking fix)', 
     expect(r.stdout).not.toContain('LOG:  warning');
   });
 
-  test('setup: the live gbrain regen block has no pipe before the || guard', () => {
+  test('setup: the live gbrain render block has no pipe masking its exit code', () => {
     // Slice the exact block from setup and confirm the fix is in place
-    // without resorting to a fragile line-number check.
-    const start = SETUP_SRC.indexOf('gbrain detected — regenerating');
+    // without resorting to a fragile line-number check. (#2569 renamed the
+    // block from "regenerating" to "rendering ... into $_GSTACK_RENDER_DIR" —
+    // the exit-code-propagation invariant is unchanged.)
+    const start = SETUP_SRC.indexOf('gbrain detected — rendering');
     expect(start).toBeGreaterThan(-1);
-    const end = SETUP_SRC.indexOf('|| log', start);
+    const end = SETUP_SRC.indexOf('warning: gen:skill-docs:user failed', start);
     expect(end).toBeGreaterThan(start);
     const block = SETUP_SRC.slice(start, end);
     expect(block).toContain('bun_cmd run gen:skill-docs:user --host claude');
-    // The bug shape: `... | tail -N` between the call and the `|| log` guard.
+    // The bug shape: `... | tail -N` between the call and the failure guard —
+    // a pipe would replace the render's exit code with tail's.
     expect(block).not.toMatch(/gen:skill-docs:user[^\n]*\|\s*tail/);
   });
 });

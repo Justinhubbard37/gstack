@@ -44,6 +44,24 @@ function runHook(
   return { code: r.status ?? 0, stderr: r.stderr ?? "" };
 }
 
+/**
+ * Env override that puts `binDir` first on the search path, for tests that
+ * shadow a real binary with a stub.
+ *
+ * Two portability details, both of which a hardcoded `PATH: "dir:" + ...`
+ * gets wrong (mirrors `prependPath` in test/gstack-brain-context-load.test.ts):
+ *   - The separator is `;` on Windows, not `:`. Using the literal produces one
+ *     unparseable entry, so the stub is never found and the REAL binary runs —
+ *     a test that silently passes through rather than failing loudly.
+ *   - Windows env keys are case-insensitive and commonly spelled `Path`. Adding
+ *     a second `PATH` key alongside an inherited `Path` leaves which one wins up
+ *     to the spawn implementation, so reuse whichever key already exists.
+ */
+function prependPath(binDir: string): Record<string, string> {
+  const pathKey = Object.keys(process.env).find((k) => k.toLowerCase() === "path") || "PATH";
+  return { [pathKey]: `${binDir}${path.delimiter}${process.env[pathKey] || ""}` };
+}
+
 const ZERO = "0000000000000000000000000000000000000000";
 
 // Assembled at runtime so the LITERAL never appears in a pushed diff — the
@@ -147,30 +165,44 @@ describe("fail closed on unscannable diffs (#1946)", () => {
     expect(stderr).not.toContain("could not compute the pushed diff");
   });
 
-  test("a diff killed by a signal (null status — the maxBuffer/kill class) BLOCKS", () => {
-    // Stub git: probes delegate to the real git; the diff invocation kills
-    // itself, producing spawnSync status === null. This is the exact branch
-    // gitStrict's docstring names (oversized-diff overflow is delivered the
-    // same way) — pre-landing review flagged it as untested.
-    const realGit = Bun.which("git") || "/usr/bin/git";
-    const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "prepush-stubgit-"));
-    try {
-      const stub = `#!/bin/sh\nif [ "$1" = "diff" ]; then kill -KILL $$; fi\nexec "${realGit}" "$@"\n`;
-      fs.writeFileSync(path.join(stubDir, "git"), stub);
-      fs.chmodSync(path.join(stubDir, "git"), 0o755);
+  // POSIX-only, for two independent reasons. `spawnSync` reports
+  // `status === null` only when a child dies from a signal, and Windows has no
+  // equivalent — a force-killed process surfaces a non-zero exit code there — so
+  // the branch this test names is unreachable. The stub below is also a
+  // `#!/bin/sh` file named `git`, which Windows will not execute at all, since
+  // process creation resolves commands through PATHEXT (.exe/.cmd/.bat) and
+  // ignores the shebang. A Windows variant would have to assert the non-zero
+  // exit path instead, i.e. a different branch than the name claims, so it is
+  // skipped rather than rewritten. Gate style follows
+  // test/session-runner-timeout.test.ts and test/setup-emoji-font.test.ts.
+  test.skipIf(process.platform === "win32")(
+    "a diff killed by a signal (null status — the maxBuffer/kill class) BLOCKS",
+    () => {
+      // Stub git: probes delegate to the real git; the diff invocation kills
+      // itself, producing spawnSync status === null. This is the exact branch
+      // gitStrict's docstring names (oversized-diff overflow is delivered the
+      // same way) — pre-landing review flagged it as untested.
+      const realGit = Bun.which("git") || "/usr/bin/git";
+      const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "prepush-stubgit-"));
+      try {
+        const stub = `#!/bin/sh\nif [ "$1" = "diff" ]; then kill -KILL $$; fi\nexec "${realGit}" "$@"\n`;
+        fs.writeFileSync(path.join(stubDir, "git"), stub);
+        fs.chmodSync(path.join(stubDir, "git"), 0o755);
 
-      const base = git(["rev-parse", "HEAD"]);
-      const head = commit("clean.txt", "clean content\n", "clean commit");
-      const { code, stderr } = runHook(`refs/heads/main ${head} refs/heads/main ${base}\n`, {
-        PATH: `${stubDir}:${process.env.PATH}`,
-      });
-      expect(code).toBe(1);
-      expect(stderr).toContain("could not compute the pushed diff");
-      expect(stderr).toContain("GSTACK_REDACT_PREPUSH=skip");
-    } finally {
-      fs.rmSync(stubDir, { recursive: true, force: true });
-    }
-  });
+        const base = git(["rev-parse", "HEAD"]);
+        const head = commit("clean.txt", "clean content\n", "clean commit");
+        const { code, stderr } = runHook(
+          `refs/heads/main ${head} refs/heads/main ${base}\n`,
+          prependPath(stubDir),
+        );
+        expect(code).toBe(1);
+        expect(stderr).toContain("could not compute the pushed diff");
+        expect(stderr).toContain("GSTACK_REDACT_PREPUSH=skip");
+      } finally {
+        fs.rmSync(stubDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("install UX surfaces (#1946 / eng review D3+D10)", () => {
@@ -188,6 +220,82 @@ describe("install UX surfaces (#1946 / eng review D3+D10)", () => {
     expect(tmpl).toContain("install-prepush-hook");
     expect(tmpl).toContain(".redact-prepush-prompted");
     expect(tmpl).toContain("redact_prepush_hook");
+  });
+
+  // #1946 / maintainer decision 6: setup asks ONCE for consent on a real TTY,
+  // records the answer to the existing redact_prepush_hook key, and keeps the
+  // hint-only posture everywhere else. Default stays FALSE; setup never
+  // installs the hook itself (the assertion above pins that).
+  describe("one-time consent prompt in setup (#1946, decision 6)", () => {
+    const setup = fs.readFileSync(path.join(ROOT, "setup"), "utf8");
+    const block = setup.slice(setup.indexOf("# ─── Redact pre-push guard consent"));
+
+    test("prompt is gated on key ABSENCE and a real TTY, with a timed default-N read", () => {
+      expect(block).toContain("grep -q '^redact_prepush_hook:'");
+      expect(block).toContain('[ -t 0 ] && [ -t 1 ]');
+      expect(block).toContain("[y/N]");
+      expect(block).toContain('read -t "$_REDACT_PROMPT_TIMEOUT"');
+    });
+
+    test("an explicit answer persists true/false; timeout persists NOTHING", () => {
+      expect(block).toContain("set redact_prepush_hook true");
+      expect(block).toContain("set redact_prepush_hook false");
+      // The timeout branch must not write the key (a silent decline would
+      // permanently suppress the ask without the user ever seeing it). The
+      // branch's hint TEXT mentions the command; the executable invocation is
+      // the quoted "$GSTACK_CONFIG" form.
+      const timeoutBranch = block.slice(block.indexOf("*)"), block.indexOf("esac"));
+      expect(timeoutBranch).not.toContain('"$GSTACK_CONFIG" set redact_prepush_hook');
+    });
+
+    test("non-interactive setup keeps the hint-only posture (no prompt, no key write)", () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "gstack-consent-"));
+      try {
+        const script = [
+          "QUIET=0",
+          'log() { echo "$@"; }',
+          `GSTACK_CONFIG="${path.join(ROOT, "bin", "gstack-config")}"`,
+          block,
+        ].join("\n");
+        const r = spawnSync("bash", ["-c", script], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"], // stdin not a TTY
+          env: { ...process.env, GSTACK_HOME: home },
+          timeout: 15_000,
+        });
+        expect(r.status).toBe(0);
+        expect(r.stdout).toContain("Tip:");
+        expect(r.stdout).not.toContain("[y/N]");
+        const cfg = path.join(home, "config.yaml");
+        const cfgText = fs.existsSync(cfg) ? fs.readFileSync(cfg, "utf8") : "";
+        expect(cfgText).not.toContain("redact_prepush_hook");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    test("a recorded answer is never re-asked (key present → silent)", () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "gstack-consent-set-"));
+      try {
+        fs.writeFileSync(path.join(home, "config.yaml"), "redact_prepush_hook: false\n");
+        const script = [
+          "QUIET=0",
+          'log() { echo "$@"; }',
+          `GSTACK_CONFIG="${path.join(ROOT, "bin", "gstack-config")}"`,
+          block,
+        ].join("\n");
+        const r = spawnSync("bash", ["-c", script], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, GSTACK_HOME: home },
+          timeout: 15_000,
+        });
+        expect(r.status).toBe(0);
+        expect(r.stdout.trim()).toBe("");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 });
 

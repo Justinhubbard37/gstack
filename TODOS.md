@@ -2,6 +2,166 @@
 
 ## NEXT PRIORITY
 
+### P1: ZeroEntropy sunset — gbrain's default embedding provider dies Sept 4, 2026 (#2365)
+
+**What:** ZeroEntropy (acquired by Notion) shuts down September 4, 2026. gbrain's
+default embedding provider needs a migration path before then; gstack's
+setup-gbrain flow should stop recommending it and detect/warn existing installs.
+
+**Why:** Hard external deadline. After Sept 4, fresh setup-gbrain runs against the
+default provider fail, and existing brains stop embedding new pages silently.
+
+**Effort:** M (human ~2d, CC ~1h — mostly gbrain-side; gstack side is detect+warn).
+**Priority:** P1 (calendar-driven). **Depends on:** gbrain upstream provider support.
+
+### P2: v1.67 fix-wave deferrals — next-wave queue
+
+Filed at v1.67.0.0 implementation time (see the wave plan's "Cut from this
+wave"). Each was explicitly deferred with rationale, not dropped:
+
+- **#2522 Windows omnibus mining** — the targeted Windows fixes landed in
+  v1.67 (#2414/#2510/#2561/#2542/#2452-half); the omnibus PR still carries a
+  doctor/migration surface worth extracting. Effort M→S with CC.
+- **#2443 AskUserQuestion numbering redesign** — real mismatch (brief letters
+  vs host-rendered numbers), but a prompt-behavior redesign that shifts eval
+  baselines; needs its own PR with baseline refresh. Effort S.
+- **#2447 typecheck infra** — tsconfig + repo-wide typecheck script + latent
+  type fixes. High-value, repo-wide blast radius, own PR with bake time.
+  Effort M. Re-derive on current main (several of its fixes landed since).
+- **#2492 per-project Chromium profile** — needs an on-disk migration story
+  for the machine-wide profile default and SingletonLock scoping. Effort M.
+- **#2286 `triggers:` frontmatter** — the Claude Code router never reads the
+  key; folding voice-triggers into description costs catalog tokens. Needs a
+  maintainer token-budget decision (catalog cap is enforced). Effort S.
+- **#2378 release-tag upgrade semantics** — update-check gates on
+  main:VERSION while upgrade installs main HEAD; installs sit between
+  releases. Design decision: tag-pinned installs vs HEAD. Effort M.
+- **Feature-PR triage queue** — #2564 (/deck), #2497 (browse record — best of
+  the batch), #2476 (a11y review, unblocked by the CDP media-emulation entry
+  landed in v1.67), #2446 (Cua), #2448 (tiered outside voice), #2412 (lens
+  layer), #2241 (/grok), #2507 (pi host), #2298 (Kimi host), #2438+#2436
+  (gbrain doc-sync pair, ordered), #2442 (portable skill roots), #2534
+  (gbrain MCP routing), #2535 (outside voice for /investigate,/cso,/devex),
+  #2576 (fast-ship rework — re-evaluate against v1.66's CI speedup),
+  #2580 (land-and-deploy CI tiers — human-gate UX needs maintainer call).
+
+### P2: v1.67 adversarial-review residuals (verified, deferred with rationale)
+
+Filed at v1.67 ship time from the Codex + Claude adversarial passes. Each was
+verified real but needs design input or device access the wave lacked:
+
+- **brain-sync enqueue lock** — the drain's surgical rewrite closes the reader
+  side, but a lockless producer appending between the live re-read and the
+  tmp+mv can still orphan one record. Needs a shared enqueue/drain lock
+  (mkdir-style, like the drain's). Effort S.
+- **iOS tap routing across windows** — Bridges template's frontmostWindow can
+  swallow taps when a keyboard/menu/transparent overlay window is topmost but
+  doesn't handle the coordinate. Needs hit-test-aware routing + real-device
+  verification. Effort M. (Related: the multi-window rewrite has no static
+  pins — see the test-gap backlog below.)
+- **pair-agent implicit --force-restart** — pair-agent auto-kills a healthy
+  headless daemon (tabs/cookies) with no consent, contradicting the #2219
+  iron rule it now sits beside. Needs a consent prompt or explicit-flag
+  requirement; UX call. Effort S.
+- **bin-context slugFromEnvironment walk-up parity (win32)** — the native
+  fallback slugs the INNERMOST repo while bash gstack-slug walks to the
+  outermost canonical remote; nested/vendored repos split stores. Effort S.
+- **hasRemoteOnlyGbrainMcp is machine-global** — one project's remote gbrain
+  registration reclassifies broken local engines as thin-client everywhere;
+  also confirm Claude Code's user-vs-project MCP precedence against
+  brain-cache's user-first assumption. Effort S.
+- **next-version git-fallback breadth** — the degraded path counts every
+  remote-tracking ref on every remote (stale experiment branches inflate the
+  allocation) and a failed 3-digit base read flips width to 4. Warned today;
+  tighten to origin + width-pin. Effort S.
+- **Stop-hook registration pins the setup-time absolute path** — registering
+  from a dev worktree bakes that path into settings.json; deleting the
+  worktree leaves a dead hook erroring on every session stop until removed.
+  Register the global-install path or re-point on upgrade. Effort S.
+- **Accepted threat-model notes (documented, no action planned):**
+  redact-prepush treats content pushed to ANY private remote as already-left
+  (accident-only threat model); a parcel-shaped twin within 400 chars can
+  suppress phone redaction (WARN-tier pattern, attacker-influence accepted);
+  codex-probe's 400-signature grep can misread a transient proxy 400 as
+  MODEL_UNUSABLE (bounded by the 15-min negative-cache TTL).
+
+### P2: v1.67 coverage-audit test-gap backlog (5-agent sweep, ranked)
+
+The wave's Step-7 coverage audit (5 subsystem agents, ~700 changed paths,
+~84% covered) ranked these residual gaps. None block v1.67 (the behaviors
+shipped verified by hand or adjacent tests); each is a cheap pin against
+silent regression:
+
+- **setup Playwright bootstrap block** — `_clear_playwright_quarantine`,
+  `_PW_LOCK` stale-holder reclaim, `_kill_tree`/`_wait_with_deadline`, Ubuntu
+  26.04 platform override: zero test references. The P0 #2554 heal's shell
+  half. Effort S each.
+- **redact-prepush `scanAddedLines` slicing** — the >1MiB catch-up-diff chunk
+  path (the reason the function exists) is unexercised; a regression
+  reintroduces blocking-while-unscanned. Effort S.
+- **supabase telemetry-ingest edge function** — zero tests; producer caps at
+  200 chars vs ingest's 500 (dead server cap); no column↔migration pin.
+- **gbrain-repo-policy-client** — no direct test file; the spawn-failed vs
+  unreadable split (its raison d'être) and win32 bash-wrapping unpinned.
+- **extension client half of token bootstrap** — `POST /extension-token` 403
+  → disconnected path untested (server half is exhaustively pinned); also
+  pin manifest `key` ↔ `GSTACK_EXTENSION_ID` via extension-id.ts. Effort S.
+- **`assertJsOriginAllowed`** — this wave made the js/eval origin gate
+  mandatory; the gate itself has zero direct tests. Effort S.
+- **`runBoundedChromiumReinstall`** — every heal test stubs it; the 120s
+  deadline + process-group SIGKILL + spawn-error branch never execute.
+- **CI three-way image-tag drift** — ci-image.yml + evals.yml +
+  evals-periodic.yml each carry the hashFiles tag expression, synced by
+  comment only. One test reading all three. Effort S.
+- **evals.yml matrix census** — the silent-never-ran class (see the two
+  files this wave had to re-add) has no membership test.
+- **design-doc-discovery resolver** — new anti-drift block, zero tests for
+  the -nt freshness rule or cross-render identity.
+- **Bridges.swift multi-window rewrite** — no static pins for
+  orderedWindows/searchRoots ordering; DebugBridgeTouch's `#if !defined(DEBUG)`
+  guard and Package.swift's `.define("DEBUG")` have no tripwire (Guideline
+  2.5.1 exposure on revert); parity test runs periodic-lane only.
+- **Smaller pins:** gstack-egress `sanitizeForDisplay`; freeze-dir tilde
+  expansion; gstack-config `pair_agent` key + space-bearing values;
+  session-cookie-store tripwire scope (points at the wrapper, not the
+  factory); redact-patterns `/^pass(word)?$/i` placeholder loosening +
+  compact-timestamp negative; fs-atomic adoption tripwire; tracker-guard
+  `safeSource`; eval-watch `PARTIAL_PATH`; `killProcessGroup`;
+  make-pdf orchestrator `PAYLOAD_TMP_DIR` + CJK stack + smartypants NUL;
+  gbrain-guards `gbrainHome()`; gbrain-local-status `"timeout"` exclusion;
+  meta-commands state-load tripwire re-point; flushBuffers/audit 0600 census;
+  openclaw `version:` frontmatter drop (pre-wave, main-side — restore
+  extraFields or record as intentional); terse-build's stale "all 4" set
+  (main-side 5th terse-gated resolver).
+
+### P2: v1.67 review-fix-batch deferrals (post-wave review army findings)
+
+Filed at review-fix-batch time, deferred with rationale:
+
+- **setup host-function dedup** — four near-verbatim `create_*_runtime_root`
+  + `link_*_skill_dirs` copies (codex/factory/opencode/cursor) drift
+  independently (the #2142 ownership gate had to be patched at every site).
+  Parameterize on host name + skills dir. Effort S with CC.
+- **cmd.exe `%VAR%` expansion in gbrainInvocation quoting** — Windows-only,
+  contrived escalation (requires attacker-controlled env var names), but the
+  quoting is not cmd.exe-safe. Fix direction: route win32 spawns through
+  cross-spawn (dependency decision — bun-polyfill.cjs already carries it for
+  the browse daemon). Effort S.
+- **make-pdf flag registry metadata** — commands.ts flags are bare strings;
+  add a takes-value field and DERIVE cli.ts's BOOLEAN_FLAGS from the
+  registry (the structural `--no-*` test added in this batch covers only the
+  negation shape). Effort S.
+- **legacy host-glob uninstall provenance gating** — gstack-uninstall's
+  codex/factory/kiro `gstack*` globs still rm -rf without a provenance
+  check; bring them to parity with the cursor banner gate added in this
+  batch (v1.67 added cursor; the legacy three are inherited behavior).
+  Effort S.
+- **cursor auto-detect breadth** — `-d ~/.cursor` triggers a full extra
+  render + install for every Cursor-having dev on every ./setup (the dir
+  exists for anyone who ever launched the IDE). Product call on narrowing to
+  CLI detection (`command -v cursor`) or an opt-in flag. Effort S, needs a
+  maintainer decision on the detection contract.
+
 ### P2: Persona-fleet hostile-user harness (fork port wave 2 deferral)
 
 **What:** Port the methodology behind time-attack/gstack's 87-hostile-user
@@ -3050,35 +3210,24 @@ rendering quirks"); or (c) move this test to periodic until (a)/(b) lands.
 `test/helpers/claude-pty-runner.ts:308` (`isNumberedOptionListVisible`). Evidence:
 `~/.gstack-dev/eval-runs/pdwu-verify-*.log`. **Effort:** M (human ~half day / CC ~30min).
 
-### P2: Follow-up fix waves from the 2026-08-14 tracker audit (v1.64.0.0)
+### P3: Residuals from the 2026-08-14 tracker-audit waves (mostly shipped in v1.67.0.0)
 
-The full-tracker audit behind v1.64.0.0 verified every open PR/issue against
-main and consciously deferred four coherent fix waves. Audit records:
-`~/.gstack/projects/garrytan-gstack/` eng-review artifacts + the v1.64 PR body.
+The four deferred waves (A: browse-daemon lifecycle, B: install integrity,
+C: gbrain trust boundary, D: ship/version allocator) LANDED in the v1.67.0.0
+fix wave: XProtect self-heal + Playwright bump + busy-daemon iron rule +
+signal policy (A); alias shadowing + cursor slice + runtime assets + Windows
+refresh (B); brain-sync disposition model + source pins + thin-client
+detection (C); version allocator end-state + subdir manifests + diff-scope
+globs (D). What remains, re-filed individually:
 
-**Wave A — browse-daemon lifecycle.** Watchdog kills headed handoff sessions
-(PRs 2565/2405/2346), macOS headed launch broken by the rebrand-invalidated
-Chromium signature + XProtect (issues 2554/2242/2138/1829/1379 — the three
-darwin-skipped handoff tests in browse/test/handoff.test.ts un-skip when this
-lands), busy-daemon kill (2219/2231), cosmetic SIGTERM ignore (2220),
-Playwright pin bump (PR 1761, #1703 — rebuilds the CI browser image).
-Start with the signature/re-sign question; everything else is small.
-
-**Wave B — install integrity.** connect-chrome alias shadowing (PR 2202,
-issues 2201/2511), Playwright bootstrap aborts/timeouts (PRs 2233/2359,
-issues 1902/2136), --host cursor/slate wiring (PRs 2547/2432, issue 2361),
-review checklist/specialists never copied (issues 2317/2518), Windows re-run
-refresh (#2444). Blast radius is `setup` — one focused PR.
-
-**Wave C — gbrain trust boundary.** Transcript trust/scope/source isolation
-(PR 2232, issue 2140), brain-sync queue truncation (#2549), worktree source
-pins (PR 2417, #2516), thin-client detection gaps (#2520/#2456), plus small
-absorbs (2371/2360/2406/2369/2368/2321). Needs never-double-store review.
-
-**Wave D — ship/version allocator.** Queue-down fallback (PRs 2545/2546),
-npm-invalid subdir manifest versions (PR 2531), versionless repos
-(2343/2334/2501, #1474), diff-scope specialist routing rewrite
-(#2526/#2299/#2455), /review token runaway (#2519).
-
-**Depends on:** v1.64.0.0 landing. Each wave is one bundled PR per the
-fix-wave pattern.
+- Watchdog kills headed handoff sessions (PRs 2565/2405/2346) and the three
+  darwin-skipped handoff tests in browse/test/handoff.test.ts — verify
+  whether the v1.67 XProtect + rebrand work un-blocks them, then un-skip or
+  fix. Effort S.
+- Transcript trust/scope/source isolation (PR 2232, issue 2140) — needs the
+  never-double-store review. Effort M.
+- Versionless-repo onboarding (#1474, issues 2343/2334) — the #2501 JSON
+  version-path half landed; the no-version-file-at-all flow did not.
+- Playwright bootstrap abort/timeout absorbs (PRs 2233/2359, issues
+  1902/2136) — partially superseded by v1.67's bounded bootstrap; verify
+  and close or extract the remainder.

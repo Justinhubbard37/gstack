@@ -8,8 +8,14 @@
 set -e
 
 GSTACK_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+# Windows (MSYS/Git Bash): convert to a Windows-style path — Bun cannot open
+# MSYS /c/... absolute paths ("FileNotFound opening root directory").
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) GSTACK_DIR="$(cygpath -m "$GSTACK_DIR")" ;;
+esac
 SRC_DIR="$GSTACK_DIR/browse/src"
 DIST_DIR="$GSTACK_DIR/browse/dist"
+mkdir -p "$DIST_DIR"
 
 echo "Building Node-compatible server bundle..."
 
