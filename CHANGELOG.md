@@ -11,11 +11,11 @@ The pre-push secret scanner now catches all-caps database passwords. Persisted b
 
 ### The numbers that matter
 
-Source: a two-wave read-only audit (72 agents, two independent verifiers per finding) plus a four-specialist pre-landing review. Reproduce the headline check with `echo 'postgres://admin:PROD2026SECRET@h/db' | bin/gstack-redact` (exit 3) and `bun run test`.
+Source: a two-wave read-only audit (72 agents, two independent verifiers per finding) plus a four-specialist pre-landing review. Reproduce the headline check with `echo "postgres://admin:${DB_PW:-PROD2026SECRET}@h/db" | bin/gstack-redact` (the shell expands the braces to the real all-caps password; exit 3) and `bun run test`.
 
 | Property | Before | After |
 |---|---|---|
-| `postgres://admin:PROD2026SECRET@host` at pre-push | passed the HIGH gate | HIGH block (exit 3) |
+| DSN with an all-caps password (`PROD2026SECRET`) at pre-push | passed the HIGH gate | HIGH block (exit 3) |
 | `postgresql://USER:PASSWORD@host` doc placeholder | skipped | still skipped (pinned) |
 | Persisted session cookies in a `.gitignore`-less repo | git-committable | ignored by construction |
 | Minted App Store Connect key scope | every app on the team | the one app being shipped |
@@ -32,7 +32,7 @@ If you run gstack from a build that pulled in community or fork-ported code, thi
 ### Itemized changes
 
 #### Fixed
-- The pre-push credential scanner blocks a real all-caps URL password (`postgres://admin:PROD2026SECRET@host`) at the HIGH tier. The `USER:PASSWORD` documentation convention still suppresses, pinned in both directions with a table-driven test over the full placeholder set. (`lib/redact-patterns.ts`)
+- The pre-push credential scanner blocks a DSN whose password is a real all-caps secret (`PROD2026SECRET`-style) at the HIGH tier. The `USER:PASSWORD` documentation convention still suppresses, pinned in both directions with a table-driven test over the full placeholder set. (`lib/redact-patterns.ts`)
 - The browse state directory (`.gstack/`) carries a self-contained `.gitignore` written unconditionally when the directory is created, so persisted `session-state.json` cookies and `browse-network.log` / `browse-audit.jsonl` request headers can never be committed, regardless of the project's own `.gitignore`. (`browse/src/config.ts`)
 - The Node `Bun.spawn` polyfill regains its `exited` promise, eager stdout/stderr drain, and 16MB output cap, restoring correct child-process handling on the Windows Node fallback (cookie import, browser-skill children). (`browse/src/bun-polyfill.cjs`)
 - The iOS QA touch bridge's private UIKit/IOKit synthesis is gated `#if TARGET_OS_IOS && DEBUG` with a matching `cSettings` DEBUG define, so it compiles out of Release builds. (`ios-qa/templates/`)
