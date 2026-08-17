@@ -225,6 +225,8 @@ describe('timeline-stop-hook (#2553, F5 fail-open)', () => {
 });
 
 describe('timeline-stop-hook wiring', () => {
+  const SETTINGS_HOOK = path.join(ROOT, 'bin', 'gstack-settings-hook');
+
   test('setup registers the Stop hook with its own source tag and tears it down on --no-team', () => {
     const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
     expect(setup).toContain('--event Stop');
@@ -233,6 +235,150 @@ describe('timeline-stop-hook wiring', () => {
     // --no-team teardown removes it alongside the plan-tune hooks.
     const teardown = setup.slice(setup.indexOf('# Also tear down plan-tune'));
     expect(teardown).toContain('remove-source --source gstack-timeline-stop');
+  });
+
+  test('setup routes the Stop hook through ensure-event, not presence-only dedup', () => {
+    const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
+    // ensure-event registers when missing AND re-points a stale path in place.
+    expect(setup).toMatch(/ensure-event[\s\S]{0,220}--source gstack-timeline-stop/);
+    // The old guard skipped registration whenever the source tag was merely
+    // PRESENT, so a stale absolute path (deleted dev worktree) was never
+    // re-pointed on a setup re-run.
+    expect(setup).not.toMatch(/list-sources 2>\/dev\/null \| grep -q "gstack-timeline-stop"/);
+  });
+
+  test('fresh register prefers the global-install hook path when present', () => {
+    // Drive setup's _hook_install_path directly: global install present → the
+    // registration survives deleting the worktree setup ran from.
+    const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
+    const fn = setup.match(/_hook_install_path\(\) \{[\s\S]*?\n\}/);
+    expect(fn).not.toBeNull();
+
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-hookpath-'));
+    try {
+      const globalHook = path.join(
+        fakeHome, '.claude', 'skills', 'gstack', 'hosts', 'claude', 'hooks', 'timeline-stop-hook',
+      );
+      fs.mkdirSync(path.dirname(globalHook), { recursive: true });
+      fs.writeFileSync(globalHook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      const env = { ...process.env, HOME: fakeHome, SOURCE_GSTACK_DIR: '/some/dev/worktree' };
+
+      const withGlobal = spawnSync(
+        'bash',
+        ['-c', `${fn![0]}\n_hook_install_path hosts/claude/hooks/timeline-stop-hook`],
+        { env, encoding: 'utf-8', timeout: 10_000 },
+      );
+      expect(withGlobal.stdout.trim()).toBe(globalHook);
+
+      // No global install (fresh first install from a clone) → setup-time path.
+      fs.rmSync(globalHook);
+      const withoutGlobal = spawnSync(
+        'bash',
+        ['-c', `${fn![0]}\n_hook_install_path hosts/claude/hooks/timeline-stop-hook`],
+        { env, encoding: 'utf-8', timeout: 10_000 },
+      );
+      expect(withoutGlobal.stdout.trim()).toBe('/some/dev/worktree/hosts/claude/hooks/timeline-stop-hook');
+    } finally {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test('ensure-event re-points a stale absolute path and leaves exactly one registration', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ensure-'));
+    try {
+      const settingsFile = path.join(dir, 'settings.json');
+      fs.writeFileSync(settingsFile, JSON.stringify({
+        hooks: {
+          Stop: [{
+            _gstack_source: 'gstack-timeline-stop',
+            hooks: [{ type: 'command', command: '/deleted/worktree/hosts/claude/hooks/timeline-stop-hook', timeout: 5 }],
+          }],
+        },
+      }, null, 2) + '\n');
+
+      const r = spawnSync('bash', [
+        SETTINGS_HOOK, 'ensure-event',
+        '--event', 'Stop',
+        '--command', HOOK,
+        '--source', 'gstack-timeline-stop',
+        '--timeout', '5',
+      ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
+
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('re-pointed');
+      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+      expect(s.hooks.Stop).toHaveLength(1); // replaced in place — never two
+      expect(s.hooks.Stop[0].hooks[0].command).toBe(HOOK);
+      expect(s.hooks.Stop[0]._gstack_source).toBe('gstack-timeline-stop');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('ensure-event is a true no-op when the registration already matches (no write, no backup churn)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ensure-noop-'));
+    try {
+      const settingsFile = path.join(dir, 'settings.json');
+      const args = [
+        SETTINGS_HOOK, 'ensure-event',
+        '--event', 'Stop',
+        '--command', HOOK,
+        '--source', 'gstack-timeline-stop',
+        '--timeout', '5',
+      ];
+      const env = { ...process.env, GSTACK_SETTINGS_FILE: settingsFile };
+      const first = spawnSync('bash', args, { env, encoding: 'utf-8', timeout: 15_000 });
+      expect(first.status).toBe(0);
+      const bytesAfterFirst = fs.readFileSync(settingsFile, 'utf-8');
+
+      const second = spawnSync('bash', args, { env, encoding: 'utf-8', timeout: 15_000 });
+      expect(second.status).toBe(0);
+      expect(second.stdout).toContain('unchanged');
+      expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(bytesAfterFirst);
+      // Re-running ./setup must not accumulate settings.json.bak.<ts> files.
+      const baks = fs.readdirSync(dir).filter((f) => f.includes('.bak'));
+      expect(baks).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a failed update leaves exactly one registration — never zero, never two', () => {
+    // Root can write through 0o555 directories, so the failure injection
+    // (read-only dir) does not bind there; the invariant is still covered by
+    // the atomic tmp+rename pinned in the re-point test above.
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ensure-fail-'));
+    try {
+      const settingsFile = path.join(dir, 'settings.json');
+      fs.writeFileSync(settingsFile, JSON.stringify({
+        hooks: {
+          Stop: [{
+            _gstack_source: 'gstack-timeline-stop',
+            hooks: [{ type: 'command', command: '/stale/path/timeline-stop-hook', timeout: 5 }],
+          }],
+        },
+      }, null, 2) + '\n');
+
+      fs.chmodSync(dir, 0o555); // every write path (backup, tmp, rename) fails
+      const r = spawnSync('bash', [
+        SETTINGS_HOOK, 'ensure-event',
+        '--event', 'Stop',
+        '--command', HOOK,
+        '--source', 'gstack-timeline-stop',
+        '--timeout', '5',
+      ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
+      fs.chmodSync(dir, 0o755);
+
+      expect(r.status).not.toBe(0); // the failure is loud, not swallowed
+      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+      expect(s.hooks.Stop).toHaveLength(1); // old registration intact
+      expect(s.hooks.Stop[0].hooks[0].command).toBe('/stale/path/timeline-stop-hook');
+    } finally {
+      try { fs.chmodSync(dir, 0o755); } catch {}
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('gstack-uninstall removes the Stop hook registration', () => {

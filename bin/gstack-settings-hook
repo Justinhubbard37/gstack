@@ -10,13 +10,24 @@
 #   2. Schema-aware (plan-tune cathedral T3 — supports PreToolUse + PostToolUse):
 #        gstack-settings-hook add-event --event <SessionStart|PreToolUse|PostToolUse> \
 #          --command <cmd> --source <tag> [--matcher <regex>] [--timeout <s>]
+#        gstack-settings-hook ensure-event --event ... --command ... --source ... [--matcher ...] [--timeout <s>]
 #        gstack-settings-hook remove-source --source <tag>
 #        gstack-settings-hook diff-event   --event ... --command ... --source ... [--matcher ...]
 #        gstack-settings-hook rollback     # restore latest backup
 #        gstack-settings-hook list-sources # show all gstack-tagged hook entries
 #
+# ensure-event is the update-in-place verb: same flags as add-event, but it
+# first compares the REGISTERED payload for (event, matcher, source) against
+# the requested one. Identical → no write, no backup ("unchanged"). Different
+# → the single matching entry is replaced via one atomic tmp+rename, so a
+# failed update can never leave zero or two registrations. This is what heals
+# a stale absolute hook path (e.g. a deleted dev worktree) baked into
+# settings.json by an earlier setup — presence-only dedup never re-pointed it.
+#
 # Every add-event/remove-source writes a backup to ~/.claude/settings.json.bak.<ts>
-# before mutating (Codex correction — silent settings.json mutation is wrong).
+# before mutating (Codex correction — silent settings.json mutation is wrong);
+# ensure-event backs up only when it actually mutates, so a no-op re-run of
+# ./setup doesn't churn backup files.
 #
 # Dedup: legacy `add`/`remove` dedupe by the historical `gstack-session-update`
 # substring. Schema-aware `add-event` dedupes by (event, matcher, _gstack_source) so
@@ -34,6 +45,7 @@ Usage:
   gstack-settings-hook add <hook-command>             # legacy SessionStart add
   gstack-settings-hook remove <hook-command>          # legacy SessionStart remove
   gstack-settings-hook add-event --event <name> --command <cmd> --source <tag> [--matcher <re>] [--timeout <s>]
+  gstack-settings-hook ensure-event --event <name> --command <cmd> --source <tag> [--matcher <re>] [--timeout <s>]
   gstack-settings-hook remove-source --source <tag>
   gstack-settings-hook diff-event --event <name> --command <cmd> --source <tag> [--matcher <re>] [--timeout <s>]
   gstack-settings-hook rollback
@@ -114,7 +126,7 @@ case "$ACTION" in
     ' 2>/dev/null
     ;;
 
-  add-event|diff-event)
+  add-event|diff-event|ensure-event)
     EVENT=""
     COMMAND=""
     SOURCE=""
@@ -132,7 +144,7 @@ case "$ACTION" in
       esac
     done
     if [ -z "$EVENT" ] || [ -z "$COMMAND" ] || [ -z "$SOURCE" ]; then
-      echo "add-event/diff-event require --event, --command, --source" >&2
+      echo "add-event/ensure-event/diff-event require --event, --command, --source" >&2
       exit 1
     fi
     case "$EVENT" in
@@ -144,6 +156,8 @@ case "$ACTION" in
     fi
     DIFF_ONLY=""
     if [ "$ACTION" = "diff-event" ]; then DIFF_ONLY=1; fi
+    ENSURE=""
+    if [ "$ACTION" = "ensure-event" ]; then ENSURE=1; fi
     GSTACK_SETTINGS_PATH="$SETTINGS_FILE" \
     GSTACK_EVENT="$EVENT" \
     GSTACK_COMMAND="$COMMAND" \
@@ -151,6 +165,7 @@ case "$ACTION" in
     GSTACK_MATCHER="$MATCHER" \
     GSTACK_TIMEOUT="$TIMEOUT" \
     GSTACK_DIFF_ONLY="$DIFF_ONLY" \
+    GSTACK_ENSURE="$ENSURE" \
     bun -e '
       const fs = require("fs");
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
@@ -160,6 +175,7 @@ case "$ACTION" in
       const matcher = process.env.GSTACK_MATCHER || "";
       const timeoutRaw = process.env.GSTACK_TIMEOUT || "";
       const diffOnly = process.env.GSTACK_DIFF_ONLY === "1";
+      const ensure = process.env.GSTACK_ENSURE === "1";
 
       let settings = {};
       try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
@@ -202,10 +218,43 @@ case "$ACTION" in
         process.exit(0);
       }
 
-      const tmp = settingsPath + ".tmp";
-      fs.writeFileSync(tmp, after + "\n");
-      fs.renameSync(tmp, settingsPath);
-      console.log("OK: " + event + " hook registered (source: " + source + ")");
+      if (ensure && before === after) {
+        // Registered payload already matches the canonical one — no write, no
+        // backup, no churn. Re-running ./setup stays a true no-op.
+        console.log("OK: " + event + " hook unchanged (source: " + source + ")");
+        process.exit(0);
+      }
+
+      try {
+        if (ensure && fs.existsSync(settingsPath)) {
+          // Mirrors backup_settings (bash) — but only when a write actually
+          // happens, so a no-op ensure-event never creates backup files.
+          const d = new Date();
+          const pad = (n) => String(n).padStart(2, "0");
+          const ts = "" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+            "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+          fs.copyFileSync(settingsPath, settingsPath + ".bak." + ts);
+          fs.writeFileSync(settingsPath + ".bak-latest", settingsPath + ".bak." + ts + "\n");
+        }
+
+        // Atomic tmp+rename: the settings file is either the old JSON (with
+        // the old single registration) or the new JSON (with the replaced
+        // one) — a failed update can never leave zero or two registrations.
+        const tmp = settingsPath + ".tmp";
+        fs.writeFileSync(tmp, after + "\n");
+        fs.renameSync(tmp, settingsPath);
+      } catch (e) {
+        // Explicit catch + exit 1: bun -e has been observed (1.3.13) to turn
+        // an uncaught sync fs error into a SILENT exit 0, which would let a
+        // failed update masquerade as success to the caller.
+        console.error("error: could not update " + settingsPath + ": " + (e && e.message ? e.message : e));
+        process.exit(1);
+      }
+      if (ensure && existing) {
+        console.log("OK: " + event + " hook re-pointed (source: " + source + ")");
+      } else {
+        console.log("OK: " + event + " hook registered (source: " + source + ")");
+      }
     '
     ;;
 
