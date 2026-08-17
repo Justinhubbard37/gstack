@@ -377,6 +377,29 @@ subcmd_once() {
   local mode
   mode=$("$CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || echo off)
 
+  # #2516: advance the brain worktree gbrain indexes to the artifacts repo's
+  # HEAD once a day — previously it only moved when setup-gbrain / sync-gbrain
+  # / brain-restore ran, so brains silently served stale code forever. Runs
+  # inside THIS run lock (never concurrent with the ingest steps below) and
+  # before they touch the worktree. Attempt-throttled: the stamp is written on
+  # ATTEMPT, so a persistently-failing advance warns once per 24h, not at
+  # every skill boundary. The advance itself refuses dirty or unmanaged
+  # worktrees and never force-removes (see gstack-gbrain-source-wireup).
+  if [ -e "${GSTACK_BRAIN_WORKTREE:-$HOME/.gstack-brain-worktree}" ]; then
+    local adv_stamp adv_now adv_last adv_age
+    adv_stamp="$GSTACK_HOME/.brain-worktree-last-advance"
+    adv_now=$(date +%s)
+    adv_last=$(cat "$adv_stamp" 2>/dev/null || echo 0)
+    case "$adv_last" in ''|*[!0-9]*) adv_last=0 ;; esac
+    adv_age=$(( adv_now - adv_last ))
+    if [ "$adv_age" -ge 86400 ]; then
+      echo "$adv_now" > "$adv_stamp" 2>/dev/null || true
+      if ! "$SCRIPT_DIR/gstack-gbrain-source-wireup" --advance-only 1>&2; then
+        echo "BRAIN_SYNC: warning: brain worktree advance failed — gbrain may be indexing stale code (run gstack-gbrain-source-wireup to repair)" >&2
+      fi
+    fi
+  fi
+
   # #2549 unpushed-commit detector: a prior drain may have COMMITTED but
   # failed to push (auth blip, offline). The data was never lost — it sits in
   # a local commit — but nothing re-pushed it until NEW changes arrived.
