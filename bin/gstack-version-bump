@@ -463,13 +463,25 @@ function cmdRepair(args: string[], cwd: string): void {
   const current = readVersionFile(versionPath, versionRel);
   // Guard against readVersionFile folding "file exists but is empty / unparsable"
   // into DEFAULT ("0.0.0.0") — same data-corruption pathway as file-missing (#2600).
-  // A fabricated version must never propagate into package.json.
+  // A fabricated version must never propagate into package.json. But DEFAULT is
+  // ambiguous: a VERSION file that GENUINELY reads "0.0.0.0" (a brand-new repo)
+  // is a legitimate version, not the sentinel. Disambiguate on the raw bytes:
+  // if the trimmed file content itself matches the version shape, proceed with
+  // the repair; reject only when the raw content is empty or unparseable.
   if (current === DEFAULT) {
-    fail(
-      `VERSION file at ${versionRel} is empty or contains no parsable version. ` +
-        "Cannot repair package.json with a fabricated version.",
-      2,
-    );
+    let rawTrimmed = "";
+    try {
+      rawTrimmed = readFileSync(versionPath, "utf-8").trim();
+    } catch {
+      rawTrimmed = "";
+    }
+    if (!VERSION_RE.test(rawTrimmed)) {
+      fail(
+        `VERSION file at ${versionRel} is empty or contains no parsable version. ` +
+          "Cannot repair package.json with a fabricated version.",
+        2,
+      );
+    }
   }
   if (!VERSION_RE.test(current)) {
     fail(

@@ -129,12 +129,16 @@ export function outermostRemoteRepo(startDir: string): { root: string; url: stri
  *      - old-bug shape (#1125): cached value equals basename(cwd) while the
  *        walk-up says cwd is NOT the project root; that cache came from the
  *        pre-walk-up resolver, so recompute and heal.
- *      - degraded-ancestor shape (2026-08-17): cached equals the marker root's
- *        basename while a remote-bearing repo BELOW the marker root exists —
- *        the pre-remote-first resolver degraded to a stray ancestor's basename
- *        (stray empty ~/.git → SLUG=<username>). Legit #2212 stickiness is
- *        safe: there the repo that adopted the remote IS the marker root
- *        (remote root == project root), so the heal never fires.
+ *      - degraded-ancestor shape (2026-08-17), STRAY-REPO shape ONLY: cached
+ *        equals the marker root's basename, the marker root is anchored by a
+ *        .git entry whose origin does NOT resolve (the stray empty ~/.git
+ *        live bug), and a remote-bearing repo BELOW it exists — the
+ *        pre-remote-first resolver degraded to that stray ancestor's basename
+ *        (SLUG=<username>). A marker root anchored by package.json /
+ *        pyproject etc. with NO .git is legit #2212 sticky identity and must
+ *        NOT be healed. Legit remote-adopting stickiness is safe too: there
+ *        the repo that adopted the remote IS the marker root (remote root ==
+ *        project root), so the heal never fires.
  *   3. Canonical remote-derived slug from the OUTERMOST remote-bearing repo
  *      (see outermostRemoteRepo — never PROJECT_ROOT, which may be a
  *      marker-only ancestor with no remote): [:/]<owner>/<repo>[.git] →
@@ -176,7 +180,16 @@ export function slugFromEnvironment(gstackHome?: string, cwd: string = process.c
           !oldBugShape &&
           projectRoot !== "" &&
           cached === rootBase &&
+          // STRAY-REPO shape only: the marker root must be anchored by a .git
+          // entry whose origin does NOT resolve. A root anchored by
+          // package.json etc. (no .git) is legit #2212 sticky identity.
+          existsSync(join(projectRoot, ".git")) &&
           (() => {
+            const rootOrigin = spawnSync("git", ["-C", projectRoot, "remote", "get-url", "origin"], {
+              encoding: "utf-8",
+            });
+            const rootUrl = rootOrigin.status === 0 ? (rootOrigin.stdout || "").trim() : "";
+            if (rootUrl) return false; // marker root's own origin resolves — not the stray shape
             const r = resolveRemote();
             return r.url !== "" && r.root !== projectRoot;
           })();

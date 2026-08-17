@@ -662,6 +662,102 @@ describe("fetchGitClaimed — non-mutating live remote query (ls-remote first)",
   });
 });
 
+describe("fetchGitClaimed — unfetched live claims (G2: ls-remote advertises SHAs without objects)", () => {
+  // `git ls-remote` lists a branch's tip sha without transferring objects, so
+  // a branch pushed AFTER the last local fetch has no local object and both
+  // VERSION reads fail. The old `continue` silently dropped that LIVE claim —
+  // the exact duplicate-allocation this fallback exists to prevent.
+  function git(cwd: string, ...args: string[]) {
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+  }
+
+  function cloneFixture(): { root: string; origin: string; clone: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-unfetched-"));
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "VERSION"), "0.1.66.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.66.0 chore: base");
+    const clone = join(root, "clone");
+    git(root, "clone", "-q", origin, clone);
+    return { root, origin, clone };
+  }
+
+  test("a claim branch pushed after the last local fetch is read via a targeted fetch", () => {
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      // The claim lands on origin AFTER the clone — its objects are absent
+      // locally, so `git show <sha>:VERSION` and the remote-tracking read
+      // both fail until the targeted fetch runs.
+      git(origin, "checkout", "-q", "-b", "late-claim");
+      writeFileSync(join(origin, "VERSION"), "0.1.70.0\n");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "v0.1.70.0 feat: late claim");
+      git(origin, "checkout", "-q", "main");
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.version)).toContain("0.1.70.0");
+      expect(warnings.join(" ")).not.toContain("UNKNOWN claim");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a claim STILL unreadable after the fetch surfaces as an UNKNOWN-claim warning, never silence", () => {
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      // A ref origin advertises but cannot serve: dangling sha written
+      // straight into refs/. ls-remote lists it; every local read fails, the
+      // targeted fetch fails ("not our ref"), and the object never appears.
+      writeFileSync(
+        join(origin, ".git", "refs", "heads", "ghost"),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      );
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.branch)).not.toContain("origin/ghost");
+      const joined = warnings.join(" ");
+      expect(joined).toContain("origin/ghost");
+      expect(joined).toContain("UNKNOWN claim");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a live branch that simply carries no VERSION file is not a claim and not an UNKNOWN warning", () => {
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      // Branch exists BEFORE the clone (objects local), VERSION deleted on it:
+      // the read fails because the PATH is absent, not the object. Old
+      // semantics (skip quietly) must hold — no phantom UNKNOWN noise.
+      git(origin, "checkout", "-q", "-b", "docs-only");
+      git(origin, "rm", "-q", "VERSION");
+      git(origin, "commit", "-qm", "docs: no version file");
+      git(origin, "checkout", "-q", "main");
+      git(clone, "fetch", "-q", "origin");
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.branch)).not.toContain("origin/docs-only");
+      expect(warnings.join(" ")).not.toContain("docs-only");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("width pinned on failed base read (3-digit repos)", () => {
   // readBaseVersion used to return a literal "0.0.0.0" when origin/<base> was
   // unreadable — a 4-digit string, which flipped versionWidth() to 4 and

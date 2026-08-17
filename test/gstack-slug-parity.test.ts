@@ -233,6 +233,28 @@ describe('gstack-slug ↔ remote-slug parity', () => {
     expect(fs.readFileSync(cacheFile, 'utf8').trim()).toBe('dotty');
   });
 
+  test('package.json wrapper root (no .git): sticky basename slug is PRESERVED — heal is stray-repo-shape only', () => {
+    // Legit #2212 shape: a monorepo wrapper anchored by package.json used
+    // gstack before an inner dir grew a remote-bearing repo. The degraded-
+    // ancestor heal must NOT fire here — it is restricted to marker roots
+    // anchored by a .git entry whose origin does NOT resolve (the live-bug
+    // stray-repo shape).
+    const wrapper = path.join(fixtures, 'wrapperproj');
+    fs.mkdirSync(wrapper, { recursive: true });
+    fs.writeFileSync(path.join(wrapper, 'package.json'), '{"name":"wrapper"}\n');
+    const inner = makeRepo(path.join(wrapper, 'apps', 'web'), 'https://github.com/acme/web.git');
+
+    const cacheDir = path.join(tmpHome, '.gstack', 'slug-cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, encodedCacheKey(inner));
+    fs.writeFileSync(cacheFile, 'wrapperproj');
+
+    const r = runSlug(inner, tmpHome);
+    expect(r.status).toBe(0);
+    expect(slugOf(r)).toBe('wrapperproj'); // NOT healed to acme-web
+    expect(fs.readFileSync(cacheFile, 'utf8').trim()).toBe('wrapperproj');
+  });
+
   test('sticky identity preserved (#2212): repo that adopted a remote after first use is NOT healed', () => {
     // Legit sticky shape: the repo itself is the marker root (REMOTE_ROOT ==
     // PROJECT_ROOT) and its cached identity is its pre-origin basename slug.

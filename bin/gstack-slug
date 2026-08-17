@@ -188,12 +188,16 @@ _resolve_remote() {
 #     - Old-bug shape (#1125): the pre-walk-up resolver cached basename(pwd)
 #       for a SUBDIRECTORY of the real project — cached == pwd basename while
 #       the walk-up says pwd is NOT the project root.
-#     - Degraded-ancestor shape (2026-08-17): the pre-remote-first resolver
-#       cached basename(PROJECT_ROOT) for a marker-only ancestor (stray
-#       ~/.git) that is NOT the remote-bearing repo — cached == the marker
-#       root's basename while a remote-bearing repo BELOW it exists. Legit
-#       #2212 stickiness is safe: there the repo that adopted the remote IS
-#       the marker root (REMOTE_ROOT == PROJECT_ROOT), so the heal never fires.
+#     - Degraded-ancestor shape (2026-08-17), STRAY-REPO shape ONLY: the
+#       pre-remote-first resolver cached basename(PROJECT_ROOT) for an
+#       ancestor anchored by a .git entry whose origin does NOT resolve (the
+#       stray empty ~/.git live bug) while a remote-bearing repo BELOW it
+#       exists. A marker root anchored by package.json / pyproject etc. with
+#       NO .git is legit #2212 sticky identity (a monorepo wrapper that used
+#       gstack before its inner dir grew a remote) and must NOT be healed.
+#       Legit remote-adopting stickiness is safe too: there the repo that
+#       adopted the remote IS the marker root (REMOTE_ROOT == PROJECT_ROOT),
+#       so the heal never fires.
 if [[ -z "$SLUG" && -f "$CACHE_FILE" ]]; then
   _CACHED=$(cat "$CACHE_FILE" 2>/dev/null | tr -cd 'a-zA-Z0-9._-')
   if [[ -n "$_CACHED" ]]; then
@@ -204,9 +208,10 @@ if [[ -z "$SLUG" && -f "$CACHE_FILE" ]]; then
     fi
     if [[ "$_CACHED" == "$_PWD_BASE" && -n "$PROJECT_ROOT" && "$PROJECT_ROOT" != "$PROJECT_DIR" ]]; then
       : # old-bug shape — recompute below and self-heal the cache
-    elif [[ -n "$PROJECT_ROOT" && "$_CACHED" == "$_ROOT_BASE" ]] \
+    elif [[ -n "$PROJECT_ROOT" && "$_CACHED" == "$_ROOT_BASE" && -e "$PROJECT_ROOT/.git" ]] \
+      && ! git -C "$PROJECT_ROOT" remote get-url origin >/dev/null 2>&1 \
       && { _resolve_remote; [[ -n "$REMOTE_URL" && "$REMOTE_ROOT" != "$PROJECT_ROOT" ]]; }; then
-      : # degraded-ancestor shape — recompute below and self-heal the cache
+      : # degraded-ancestor (stray-repo) shape — recompute below and self-heal the cache
     else
       SLUG="$_CACHED"
     fi

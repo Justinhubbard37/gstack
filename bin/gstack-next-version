@@ -552,6 +552,45 @@ function fetchGitClaimed(
       // read from the local remote-tracking ref.
       show = runCommand("git", ["show", `refs/remotes/origin/${branch}:${versionPath}`]);
     }
+    if (!show.ok && sha) {
+      // ls-remote advertises SHAs without objects: a branch pushed after our
+      // last fetch has NO local object, so both reads above fail. The old
+      // `continue` here silently dropped a LIVE claim — the exact duplicate-
+      // allocation this fallback exists to prevent. Distinguish "object
+      // missing" from "branch has no VERSION file" before deciding.
+      const haveObject = runCommand("git", ["cat-file", "-e", sha]);
+      if (haveObject.ok) {
+        // Object is local and the path read still failed → the branch simply
+        // carries no version file. Genuinely not a claim; skip quietly.
+        continue;
+      }
+      // Fetch just this ref shallowly (no prompts, no tags, bounded) and
+      // retry reading VERSION from the now-local object (or FETCH_HEAD).
+      const fetch = spawnSync(
+        "git",
+        ["fetch", "origin", `refs/heads/${branch}`, "--depth=1", "--no-tags"],
+        { encoding: "utf8", timeout: 10000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      );
+      if (fetch.status === 0 && !fetch.error) {
+        show = runCommand("git", ["show", `${sha}:${versionPath}`]);
+        if (!show.ok) show = runCommand("git", ["show", `FETCH_HEAD:${versionPath}`]);
+        if (!show.ok && runCommand("git", ["cat-file", "-e", sha]).ok) {
+          // Fetched and the object exists but the path doesn't → no VERSION
+          // file on this branch. Not a claim.
+          continue;
+        }
+      }
+      if (!show.ok) {
+        // STILL unreadable — never skip silently. Surface it as an UNKNOWN
+        // claim so the caller knows the allocation may be unsafe.
+        warnings.push(
+          `origin/${branch}: VERSION unreadable even after a targeted fetch — ` +
+            `counted as an UNKNOWN claim; allocation may collide with this branch. ` +
+            `Run \`git fetch origin ${branch}\` and re-run to verify.`,
+        );
+        continue;
+      }
+    }
     if (!show.ok) continue;
     const raw = extractVersion(show.stdout, versionPath);
     if (!raw || !parseVersion(raw)) continue;

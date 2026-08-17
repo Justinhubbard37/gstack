@@ -651,6 +651,34 @@ describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missin
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.5.0');
   });
 
+  test('repair proceeds when VERSION genuinely reads 0.0.0.0 (a real file, not the sentinel)', () => {
+    // current === DEFAULT is ambiguous: it is BOTH the missing/unparseable
+    // sentinel AND a legitimate literal "0.0.0.0" in a brand-new repo. The
+    // guard now disambiguates on the raw bytes — a real 0.0.0.0 repairs
+    // package.json to the npm-valid 0.0.0.
+    const dir = makeDir();
+    fs.writeFileSync(path.join(dir, 'VERSION'), '0.0.0.0\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.5.0' }, null, 2) + '\n');
+
+    const out = execFileSync('bun', [BIN, 'repair'], { cwd: dir }).toString();
+    const result = JSON.parse(out);
+    expect(result.repaired).toBe('0.0.0.0');
+    expect(result.packageJsonVersion).toBe('0.0.0');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.0.0');
+  });
+
+  test('repair still rejects whitespace-only VERSION content (sentinel path, not a real version)', () => {
+    const dir = makeDir();
+    fs.writeFileSync(path.join(dir, 'VERSION'), '   \n\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.5.0' }, null, 2) + '\n');
+
+    let code = 0;
+    try { execFileSync('bun', [BIN, 'repair'], { cwd: dir, stdio: 'pipe' }); }
+    catch (e: any) { code = e.status; }
+    expect(code).toBe(2);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.5.0');
+  });
+
   test('repair reproduces the exact issue scenario: VERSION in root, package.json in app/ (#2600)', () => {
     // The exact layout from the issue: VERSION at repo root, package.json in app/
     // Running repair from app/ cwd with no VERSION there used to write 0.0.0.0 into app/package.json.

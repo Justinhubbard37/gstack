@@ -167,14 +167,14 @@ export const CDP_ALLOWLIST: ReadonlyArray<CdpAllowEntry> = Object.freeze([
     method: 'setCPUThrottlingRate',
     scope: 'tab',
     output: 'trusted',
-    justification: 'CPU slowdown multiplier on the active tab, for measuring performance on a realistic low-end client instead of the developer workstation. Same domain and mutating character as setDeviceMetricsOverride; affects only timing, reads nothing, exfiltrates nothing.',
+    justification: 'CPU slowdown multiplier on the active tab, for measuring performance on a realistic low-end client instead of the developer workstation. Same domain and mutating character as setDeviceMetricsOverride; affects only timing, reads nothing, exfiltrates nothing. NOTE: like setEmulatedMedia the override persists on the tab until cleared (rate: 1) — callers own restoration.',
   },
   {
     domain: 'Network',
     method: 'emulateNetworkConditions',
     scope: 'tab',
     output: 'trusted',
-    justification: 'Bandwidth/latency emulation on the active tab, for measuring page behaviour on a slow connection. Constrains traffic rather than reading it — no request bodies, headers or cookies are exposed.',
+    justification: 'Bandwidth/latency emulation on the active tab, for measuring page behaviour on a slow connection. Constrains traffic rather than reading it — no request bodies, headers or cookies are exposed. NOTE: like setEmulatedMedia the override persists on the tab until cleared (offline: false plus default throughput/latency) — callers own restoration.',
   },
   // ─── Page capture (output, not navigation) ─────────────────
   {

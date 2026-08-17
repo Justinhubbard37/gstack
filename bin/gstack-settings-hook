@@ -104,7 +104,7 @@ case "$ACTION" in
           hooks: [{ type: "command", command: hookCmd }]
         });
       }
-      const tmp = settingsPath + ".tmp";
+      const tmp = settingsPath + ".tmp." + process.pid; // per-process: parallel writers must not share a tmp
       fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
       fs.renameSync(tmp, settingsPath);
     '
@@ -130,7 +130,7 @@ case "$ACTION" in
         if (settings.hooks.SessionStart.length === 0) delete settings.hooks.SessionStart;
         if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
       }
-      const tmp = settingsPath + ".tmp";
+      const tmp = settingsPath + ".tmp." + process.pid; // per-process: parallel writers must not share a tmp
       fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
       fs.renameSync(tmp, settingsPath);
     ' 2>/dev/null
@@ -218,7 +218,19 @@ case "$ACTION" in
         return sameMatcher && sameCommand;
       };
 
-      let existing = settings.hooks[event].find(matchesEntry);
+      // Collect ALL matches, not just the first: pre-existing installs can
+      // carry two entries with the same (event, _gstack_source) from the old
+      // matcher-keyed dedup. `.find()` updated only the first and left the
+      // stale twin running forever. Keep ONE canonical entry (the first),
+      // remove the rest in the same atomic write.
+      const matched = settings.hooks[event].filter(matchesEntry);
+      let existing = matched.length > 0 ? matched[0] : undefined;
+      let collapsed = 0;
+      if (matched.length > 1) {
+        const extras = new Set(matched.slice(1));
+        settings.hooks[event] = settings.hooks[event].filter((e) => !extras.has(e));
+        collapsed = matched.length - 1;
+      }
       const hookEntry = { type: "command", command: cmd };
       if (timeoutRaw) {
         const n = Number(timeoutRaw);
@@ -270,7 +282,10 @@ case "$ACTION" in
         // Atomic tmp+rename: the settings file is either the old JSON (with
         // the old single registration) or the new JSON (with the replaced
         // one) — a failed update can never leave zero or two registrations.
-        const tmp = settingsPath + ".tmp";
+        // Per-process tmp suffix: a fixed settings.json.tmp let two parallel
+        // writers consume one another. (No apostrophes here: this JS lives
+        // inside a bash single-quoted string.)
+        const tmp = settingsPath + ".tmp." + process.pid;
         fs.writeFileSync(tmp, after + "\n");
         fs.renameSync(tmp, settingsPath);
       } catch (e) {
@@ -279,6 +294,9 @@ case "$ACTION" in
         // failed update masquerade as success to the caller.
         console.error("error: could not update " + settingsPath + ": " + (e && e.message ? e.message : e));
         process.exit(1);
+      }
+      if (collapsed > 0) {
+        console.error("collapsed " + collapsed + " duplicate (event, source) hook entr" + (collapsed === 1 ? "y" : "ies") + " for " + event + " (source: " + source + ")");
       }
       if (ensure && existing) {
         console.log("OK: " + event + " hook re-pointed (source: " + source + ")");
@@ -318,7 +336,7 @@ case "$ACTION" in
         if (settings.hooks[event].length === 0) delete settings.hooks[event];
       }
       if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
-      const tmp = settingsPath + ".tmp";
+      const tmp = settingsPath + ".tmp." + process.pid; // per-process: parallel writers must not share a tmp
       fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
       fs.renameSync(tmp, settingsPath);
       console.log("OK: removed " + removed + " hook entry/entries tagged source=" + source);

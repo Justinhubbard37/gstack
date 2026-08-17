@@ -92,6 +92,10 @@ describe('CDP allowlist (T2: deny-default)', () => {
       expect(e).not.toBeNull();
       expect(e!.scope).toBe('tab');
       expect(e!.output).toBe('trusted');
+      // Like setEmulatedMedia, both overrides persist on the tab until
+      // cleared (rate: 1 / offline: false + defaults) — the justification
+      // must say so, since callers own restoration.
+      expect(e!.justification).toContain('persists on the tab until cleared');
     }
   });
 

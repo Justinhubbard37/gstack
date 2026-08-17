@@ -326,6 +326,35 @@ describe("walk-up parity with bin/gstack-slug (outermost project root)", () => {
     expect(fs.readFileSync(cacheFile, "utf-8")).toBe("garrytan-gstack");
   });
 
+  test("package.json wrapper root (no .git): sticky basename slug is PRESERVED — heal is stray-repo-shape only", () => {
+    // Legit #2212 shape: a monorepo wrapper anchored by package.json used
+    // gstack before an inner dir grew a remote-bearing repo. The degraded-
+    // ancestor heal must NOT fire — it is restricted to marker roots anchored
+    // by a .git entry whose origin does NOT resolve (the live-bug shape).
+    const wrapper = path.join(tmp, "wrapperproj");
+    const inner = path.join(wrapper, "apps", "web");
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(wrapper, "package.json"), '{"name":"wrapper"}\n');
+    spawnSync("git", ["init", "-q", inner]);
+    spawnSync("git", ["-C", inner, "remote", "add", "origin", "https://github.com/acme/web.git"]);
+
+    const cacheDir = path.join(nativeHome(), "slug-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, toMsysPath(inner).replace(/\//g, "_"));
+    fs.writeFileSync(cacheFile, "wrapperproj"); // legit sticky identity
+
+    expect(slugFromEnvironment(nativeHome(), inner)).toBe("wrapperproj"); // NOT healed to acme-web
+    expect(fs.readFileSync(cacheFile, "utf-8")).toBe("wrapperproj");
+
+    // The bash implementation agrees on the same fixture (own home, seeded cache).
+    if (HAS_BASH) {
+      const bashCacheDir = path.join(tmp, "bash-home", ".gstack", "slug-cache");
+      fs.mkdirSync(bashCacheDir, { recursive: true });
+      fs.writeFileSync(path.join(bashCacheDir, toMsysPath(inner).replace(/\//g, "_")), "wrapperproj");
+      expect(bashSlug(inner)).toBe("wrapperproj");
+    }
+  });
+
   test("sticky identity preserved (#2212): a remote adopted AT the marker root is NOT healed", () => {
     // Legit sticky shape: the repo that adopted the remote IS the marker root
     // (remote root == project root), so the degraded-ancestor heal must not

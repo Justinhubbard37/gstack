@@ -140,8 +140,10 @@ spool_has_records() {
 # os.replace, one file per line). Reads the file TWICE before unlinking: a
 # pre-rename writer can still append through its already-open fd after our
 # rename, and those appends land in the renamed file — the second pass
-# catches them (the tail race the shared-file design could never close).
-# Unparseable lines migrate as-is; finalize_queue keeps + warns on them.
+# NARROWS the tail-race window (transition-only: it applies to pre-spool
+# writers, and a writer that appends after the second read but before the
+# unlink can still lose that line; spool-native writers are immune).
+# Unparseable lines migrate as-is; finalize_queue quarantines + warns on them.
 convert_legacy_file() {
   local legacy="$1"
   python3 - "$legacy" "$QUEUE_DIR" <<'PYEOF' 2>/dev/null || true
@@ -244,16 +246,29 @@ def load_lines(path):
         return []
 
 def load_privacy_map(path):
+    # Returns (entries, corrupt). Non-dict entries are filtered out
+    # defensively — the map may be PULLED from the artifacts remote, so a
+    # malformed entry like ["bad"] is remotely triggerable and used to raise
+    # mid-classification (after the snapshot manifest was written), which the
+    # old finalize turned into a full queue wipe. Any malformed shape also
+    # marks the map CORRUPT: privacy classification cannot be trusted, so the
+    # caller holds every queued record instead of guessing (a corrupt privacy
+    # map silently treated as empty would over-share behavioral data).
     try:
         with open(path) as f:
             data = json.load(f)
-        # Expected: [{"pattern": "glob", "class": "artifact" | "behavioral"}]
-        return data if isinstance(data, list) else []
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+    except FileNotFoundError:
+        return [], False
+    except json.JSONDecodeError:
+        return [], True
+    if not isinstance(data, list):
+        return [], True
+    # Expected: [{"pattern": "glob", "class": "artifact" | "behavioral"}]
+    entries = [e for e in data if isinstance(e, dict)]
+    return entries, len(entries) != len(data)
 
 allowlist_globs = load_lines(allowlist_path)
-privacy_map = load_privacy_map(privacy_path)
+privacy_map, privacy_corrupt = load_privacy_map(privacy_path)
 # Normalize skip entries to the POSIX form queued paths use, so a backslash
 # entry in .brain-skip.txt still matches on Windows. The drain is the safety
 # boundary that actually stages files, so it must normalize identically to
@@ -318,6 +333,14 @@ def mode_allows(cls, mode):
 
 final = []
 classified = {"retained": [], "dropped": {"skipped": [], "invalid": [], "unmatched": [], "missing": []}}
+if privacy_corrupt:
+    # Fail-safe: with an untrustworthy privacy map, stage NOTHING and drop
+    # NOTHING — retain every queued record until the map is fixed. The next
+    # drain re-classifies from scratch.
+    print("BRAIN_SYNC: warning: privacy map at " + privacy_path +
+          " is malformed — holding all queued records until it is fixed", file=sys.stderr)
+    classified["retained"] = sorted(queue_paths)
+    queue_paths = set()
 for p in sorted(queue_paths):
     if p in skip_lines:
         classified["dropped"]["skipped"].append(p)
@@ -353,25 +376,34 @@ PYEOF
 }
 
 # Finalize the drain: delete exactly the spool record files this drain
-# consumed (per the snapshot manifest), keeping retained (privacy/mode-held)
-# and unparseable records queued. The predecessor (a shared-file queue
-# rewrite) had a lockless-append race between its live re-read and the
-# os.replace; with one file per record that race class is structurally gone —
-# a concurrent enqueue is a separate file the snapshot never listed, so
-# finalize cannot touch it. Crash semantics are at-least-once: a drain that
-# dies before finalize leaves its spool files in place and the next run
-# re-drains them; downstream content-hash dedup absorbs the duplicates.
-# Dropped-path detail goes to a 0600 sidecar so the status line can stay
-# content-free (counts only).
+# consumed (per the snapshot manifest) AND positively classified. Deletion is
+# EXPLICIT-DELETE-ONLY: a record is unlinked only when its path appears in
+# (staged paths ∪ classified dropped). The old polarity ("delete unless
+# retained") turned a missing/unparseable classification into retained=∅ and
+# wiped every snapshotted record — remotely triggerable via a malformed
+# pulled privacy map that raised AFTER the manifest write. Now a
+# missing/unparseable class_file or paths_file deletes NOTHING (warn +
+# return), and a path the classification never mentions stays queued.
+# The predecessor (a shared-file queue rewrite) had a lockless-append race
+# between its live re-read and the os.replace; with one file per record that
+# race class is structurally gone — a concurrent enqueue is a separate file
+# the snapshot never listed, so finalize cannot touch it. Crash semantics are
+# at-least-once: a drain that dies before finalize leaves its spool files in
+# place and the next run re-drains them; downstream content-hash dedup
+# absorbs the duplicates. Unparseable records move to $QUEUE_DIR/quarantine/
+# (never deleted) so they stop re-warning at every boundary. Dropped-path
+# detail goes to a 0600 sidecar so the status line can stay content-free
+# (counts only).
 finalize_queue() {
   local snapshot_file="$1"  # spool filenames this drain consumed, one per line
   local class_file="$2"     # classification JSON from compute_paths_to_stage
+  local paths_file="$3"     # staged paths (compute_paths_to_stage stdout), one per line
   # Fail-open by design (a failed finalize self-corrects next run: re-stage →
   # nothing-to-commit), but say so — a silent failure here would let the
   # subsequent "ok/idle" status claim a drain that did not happen.
-  python3 - "$QUEUE_DIR" "$snapshot_file" "$class_file" "$GSTACK_HOME/.brain-sync-drops.json" <<'PYEOF' || echo "BRAIN_SYNC: warning: queue finalize failed — entries retained; next run re-drains" >&2
+  python3 - "$QUEUE_DIR" "$snapshot_file" "$class_file" "$paths_file" "$GSTACK_HOME/.brain-sync-drops.json" <<'PYEOF' || echo "BRAIN_SYNC: warning: queue finalize failed — entries retained; next run re-drains" >&2
 import json, os, sys, time
-spool_dir, snapshot_file, class_file, drops_file = sys.argv[1:5]
+spool_dir, snapshot_file, class_file, paths_file, drops_file = sys.argv[1:6]
 
 def lines(path):
     try:
@@ -380,15 +412,26 @@ def lines(path):
     except FileNotFoundError:
         return []
 
+# Explicit-delete-only inputs. Either input unreadable → delete NOTHING.
 try:
     with open(class_file) as f:
         classified = json.load(f)
+    if not isinstance(classified, dict):
+        raise ValueError("classification is not an object")
 except Exception:
-    classified = {"retained": [], "dropped": {}}
-retained = set(classified.get("retained", []))
+    print("BRAIN_SYNC: warning: classification unreadable — no queue records deleted; next run re-drains", file=sys.stderr)
+    sys.exit(0)
+try:
+    with open(paths_file) as f:
+        staged = {l.strip() for l in f if l.strip()}
+except Exception:
+    print("BRAIN_SYNC: warning: staged-paths file unreadable — no queue records deleted; next run re-drains", file=sys.stderr)
+    sys.exit(0)
+
 dropped = set()
 for group in (classified.get("dropped", {}) or {}).values():
     dropped.update(group)
+deletable = staged | dropped
 
 unparseable = 0
 for name in lines(snapshot_file):
@@ -404,16 +447,24 @@ for name in lines(snapshot_file):
     except Exception:
         pass
     if not isinstance(p, str):
-        unparseable += 1         # keep — never destroy what we can't read
+        # Never destroy what we can't read — but don't leave it re-warning at
+        # every boundary either: move it aside for inspection.
+        unparseable += 1
+        try:
+            qdir = os.path.join(spool_dir, "quarantine")
+            os.makedirs(qdir, exist_ok=True)
+            os.replace(full, os.path.join(qdir, name))
+        except OSError:
+            pass                 # quarantine move failed — leave in place; next run retries
         continue
-    if p in retained:
-        continue                 # stays queued: syncs under a higher mode
+    if p not in deletable:
+        continue                 # retained / unclassified: stays queued (explicit-delete-only)
     try:
         os.unlink(full)          # staged or dropped: fully processed
     except FileNotFoundError:
         pass
 if unparseable:
-    print(f"BRAIN_SYNC: {unparseable} unparseable spool record(s) held (inspect {spool_dir})", file=sys.stderr)
+    print(f"BRAIN_SYNC: {unparseable} unparseable spool record(s) moved to quarantine (inspect {os.path.join(spool_dir, 'quarantine')})", file=sys.stderr)
 
 if dropped:
     fd = os.open(drops_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -573,11 +624,13 @@ subcmd_once() {
   # nothing to classify, retain, or drop, and a record created after this
   # check simply waits for the next boundary. The legacy file is checked too:
   # an OLD writer may have recreated it after the migration above (it gets
-  # migrated next run, but the depth is honest now). (The detector above
-  # already ran: its whole point is re-pushing stranded commits when the
-  # queue is empty.) The lock-release trap installed at acquisition covers
-  # this exit.
-  if ! spool_has_records && [ ! -s "$QUEUE" ]; then
+  # migrated next run, but the depth is honest now) — and so is a leftover
+  # .migrating file: if its conversion failed above (e.g. python3 missing),
+  # records are still pending, so "idle" would be dishonest. (The detector
+  # above already ran: its whole point is re-pushing stranded commits when
+  # the queue is empty.) The lock-release trap installed at acquisition
+  # covers this exit.
+  if ! spool_has_records && [ ! -s "$QUEUE" ] && [ ! -s "$QUEUE.migrating" ]; then
     write_status "idle" "queue empty"
     exit 0
   fi
@@ -589,11 +642,20 @@ subcmd_once() {
   # Single trap covers all: lock cleanup AND tempfile cleanup.
   trap 'rm -f "$paths_file" "$class_file" "$snapshot_file" 2>/dev/null; rm -rf "$lock_dir" 2>/dev/null || true' EXIT INT TERM
 
-  compute_paths_to_stage "$mode" "$class_file" "$snapshot_file" > "$paths_file"
+  # Fail-safe (G1): a classifier that dies mid-run (ENOSPC/OOM/SIGKILL, or a
+  # shape the defensive filters don't cover) may have already written the
+  # snapshot manifest but no classification. Finalizing on that state is what
+  # used to wipe the queue — so on a nonzero exit, warn loudly, do NOT call
+  # finalize_queue, and leave everything queued for the next drain.
+  if ! compute_paths_to_stage "$mode" "$class_file" "$snapshot_file" > "$paths_file"; then
+    echo "BRAIN_SYNC: warning: queue classification failed — no records consumed; next run re-drains" >&2
+    write_status "error" "classification failed; queue preserved (next run retries)"
+    exit 0
+  fi
   if [ ! -s "$paths_file" ]; then
     # Nothing stageable. Finalize the snapshot (retained entries survive;
     # classified drops removed; records created after the snapshot untouched).
-    finalize_queue "$snapshot_file" "$class_file"
+    finalize_queue "$snapshot_file" "$class_file" "$paths_file"
     local summary
     summary=$(queue_summary "$class_file")
     write_status "idle" "no stageable changes${summary:+ ($summary)}"
@@ -645,7 +707,7 @@ subcmd_once() {
     commit -q -m "$msg" 2>/dev/null || {
       # Nothing to commit (e.g. all files already committed). The drained
       # records leave the spool; retained + post-snapshot records survive.
-      finalize_queue "$snapshot_file" "$class_file"
+      finalize_queue "$snapshot_file" "$class_file" "$paths_file"
       write_status "idle" "queue drained but no new changes to commit"
       exit 0
     }
@@ -662,7 +724,7 @@ subcmd_once() {
       # Drained records leave the spool — they live in the local commit, which
       # the run-start detector re-pushes next time (#2549). Retained +
       # post-snapshot records survive the finalize.
-      finalize_queue "$snapshot_file" "$class_file"
+      finalize_queue "$snapshot_file" "$class_file" "$paths_file"
       exit 0
     fi
 
@@ -676,7 +738,7 @@ subcmd_once() {
       if git -C "$GSTACK_HOME" merge --no-edit "origin/$branch" >/dev/null 2>&1; then
         if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-push "artifacts_sync_mode!=off" \
             bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
-          finalize_queue "$snapshot_file" "$class_file"
+          finalize_queue "$snapshot_file" "$class_file" "$paths_file"
           date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
           write_status "ok" "pushed $n file(s) after rebase"
           exit 0
@@ -685,12 +747,12 @@ subcmd_once() {
     fi
     # Commit exists locally; the run-start detector re-pushes it next time.
     write_status "push_failed" "push failed: $(printf '%s' "$push_err" | head -1); commit retained locally, will retry next run"
-    finalize_queue "$snapshot_file" "$class_file"
+    finalize_queue "$snapshot_file" "$class_file" "$paths_file"
     exit 0
   }
 
   # Success: drained records leave the spool (retained + post-snapshot survive).
-  finalize_queue "$snapshot_file" "$class_file"
+  finalize_queue "$snapshot_file" "$class_file" "$paths_file"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
   write_status "ok" "pushed $n file(s)"
   exit 0

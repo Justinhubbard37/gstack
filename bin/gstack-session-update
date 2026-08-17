@@ -106,11 +106,26 @@ fi
 
   # Write the HOLDER's PID for stale lock detection (see #2613 note above;
   # macOS ships bash 3.2 with no BASHPID — the sh child's $PPID IS this
-  # subshell, so the fallback is exact there).
-  echo "${BASHPID:-$(sh -c 'echo $PPID')}" > "$LOCK_DIR/pid" 2>/dev/null
+  # subshell, so the fallback is exact there). MYPID is captured once at
+  # write time so the trap below can prove ownership before removing.
+  MYPID="${BASHPID:-$(sh -c 'echo $PPID')}"
+  echo "$MYPID" > "$LOCK_DIR/pid" 2>/dev/null
 
-  # Clean up lock on exit
-  trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT
+  # In-flight heartbeat: the step-boundary touches below only fire AFTER the
+  # pull / setup return, so a legitimately-slow step (cold clone, huge setup)
+  # older than the TTL got reclaimed while ALIVE. This background loop
+  # freshens the pidfile mtime every 5 minutes for as long as we still own
+  # the lock (ownership re-checked each beat: if another updater reclaimed
+  # and wrote its own pid, the loop exits instead of touching THEIR file).
+  ( while :; do sleep 300; [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$MYPID" ] || exit 0; touch "$LOCK_DIR/pid" 2>/dev/null; done ) &
+  HB_PID=$!
+
+  # Clean up lock on exit — ownership-checked: after a TTL reclaim by another
+  # updater, $LOCK_DIR belongs to the NEW holder, and an unconditional rm -rf
+  # here would delete the live holder's lock (cascading reclaims). Remove the
+  # lock ONLY while $LOCK_DIR/pid still contains MYPID; always stop the
+  # heartbeat.
+  trap 'kill "$HB_PID" 2>/dev/null; [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$MYPID" ] && rm -rf "$LOCK_DIR" 2>/dev/null' EXIT
 
   # ── Pull latest ──
   OLD_HEAD=$(git -C "$GSTACK_DIR" rev-parse HEAD 2>/dev/null)

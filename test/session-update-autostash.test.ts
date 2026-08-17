@@ -245,10 +245,36 @@ describe('gstack-session-update lock identity + TTL (#2613)', () => {
     const src = fs.readFileSync(SCRIPT, 'utf8');
     const mvAside = src.match(/mv "\$LOCK_DIR" "\$LOCK_DIR\.reap\.\$\$" 2>\/dev\/null \|\| \{ log_entry "SKIP lock_contested"; exit 0; \}/g) || [];
     expect(mvAside.length).toBe(2); // TTL branch + dead-PID branch
-    // The only rm -rf of the live lock dir is the holder's EXIT trap.
+    // The only rm -rf of the live lock dir is the holder's EXIT trap — and
+    // even that one is ownership-checked (see the static pin below).
     const bareRms = src.match(/rm -rf "\$LOCK_DIR"(?!\.)/g) || [];
     expect(bareRms.length).toBe(1);
-    expect(src).toContain(`trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT`);
+    expect(src).toContain(
+      `trap 'kill "$HB_PID" 2>/dev/null; [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$MYPID" ] && rm -rf "$LOCK_DIR" 2>/dev/null' EXIT`,
+    );
+  });
+
+  test('EXIT trap is ownership-checked and a heartbeat runs during pull/setup (static pins)', () => {
+    const src = fs.readFileSync(SCRIPT, 'utf8');
+    // (a) After a TTL reclaim by another updater, $LOCK_DIR belongs to the
+    // NEW holder — the old holder's trap must remove the lock ONLY while the
+    // pidfile still contains ITS pid (MYPID captured at write time).
+    const trapLine = src.split('\n').find((l) => l.includes("trap '") && l.includes('rm -rf "$LOCK_DIR"'));
+    expect(trapLine).toBeDefined();
+    expect(trapLine!).toContain('[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$MYPID" ] && rm -rf "$LOCK_DIR"');
+    // MYPID is written to the pidfile (the identity the trap compares against).
+    expect(src).toContain('MYPID="${BASHPID:-$(sh -c \'echo $PPID\')}"');
+    expect(src).toContain('echo "$MYPID" > "$LOCK_DIR/pid"');
+    // (b) In-flight heartbeat: the step-boundary touches only fire AFTER the
+    // pull / setup return, so a legitimately-slow step past the 30-min TTL
+    // got reclaimed while ALIVE. The loop re-checks ownership each beat and
+    // exits instead of touching a reclaimed holder's pidfile.
+    expect(src).toMatch(
+      /while :; do sleep 300; \[ "\$\(cat "\$LOCK_DIR\/pid" 2>\/dev\/null\)" = "\$MYPID" \] \|\| exit 0; touch "\$LOCK_DIR\/pid" 2>\/dev\/null; done/,
+    );
+    expect(src).toContain('HB_PID=$!');
+    // The trap stops the heartbeat so it can never outlive the holder.
+    expect(trapLine!).toContain('kill "$HB_PID"');
   });
 
   test('an expired-TTL lock is reclaimed even when its pid is alive (PID reuse)', async () => {

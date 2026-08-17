@@ -553,15 +553,20 @@ describe('#2549 queue integrity', () => {
     expect(detail.dropped.missing).toContain('projects/p/learnings.jsonl');
   });
 
-  test('an unparseable legacy queue line migrates as-is and is preserved, never destroyed', () => {
+  test('an unparseable legacy queue line migrates as-is and is quarantined, never destroyed', () => {
     // The line lands in the legacy single-file queue (pre-spool writer);
-    // migration converts it verbatim to a spool record, and the drain keeps
-    // what it cannot parse.
+    // migration converts it verbatim to a spool record, and the drain moves
+    // what it cannot parse into quarantine (never deletes it, and never
+    // leaves it re-warning at every boundary).
     initWithMode('full');
     fs.appendFileSync(path.join(tmpHome, '.brain-queue.jsonl'), 'not json at all\n');
     const r = run(['gstack-brain-sync', '--once']);
     expect(r.status).toBe(0);
-    expect(spoolText()).toContain('not json at all');
+    const qDir = path.join(spoolDir(), 'quarantine');
+    expect(fs.existsSync(qDir)).toBe(true);
+    const qFiles = fs.readdirSync(qDir);
+    expect(qFiles.length).toBe(1);
+    expect(fs.readFileSync(path.join(qDir, qFiles[0]), 'utf-8')).toContain('not json at all');
   });
 
   test('finalize: a synced record leaves the spool while a held sibling survives the same drain', () => {
@@ -841,7 +846,7 @@ describe('C12 spool queue', () => {
     expect(spoolText()).not.toContain('learnings.jsonl');
   });
 
-  test('an unparseable spool record is kept and warned about; the drain continues', () => {
+  test('an unparseable spool record is quarantined with a warning; the drain continues', () => {
     initWithMode('full');
     fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"x","ts":"2026-01-01T00:00:00Z"}\n');
@@ -850,10 +855,13 @@ describe('C12 spool queue', () => {
     const r = run(['gstack-brain-sync', '--once']);
     expect(r.status).toBe(0);
     expect(r.stderr).toContain('unparseable');
-    // The good sibling synced; the unreadable record was never destroyed.
+    // The good sibling synced; the unreadable record was never destroyed —
+    // it moved to quarantine so it stops re-warning at every boundary.
     expect(remoteLog()).toMatch(/sync: 1 file/);
-    expect(spoolFiles()).toEqual([badFile]);
-    expect(spoolText()).toContain('this is not json');
+    expect(spoolFiles()).toEqual([]);
+    const qPath = path.join(spoolDir(), 'quarantine', badFile);
+    expect(fs.existsSync(qPath)).toBe(true);
+    expect(fs.readFileSync(qPath, 'utf-8')).toContain('this is not json');
   });
 
   test('--status queue_depth counts spool records plus unmigrated legacy lines', () => {
@@ -865,6 +873,73 @@ describe('C12 spool queue', () => {
     expect(r.status).toBe(0);
     const supplemental = JSON.parse(r.stdout.trim().split('\n').pop()!);
     expect(supplemental.queue_depth).toBe(3);
+  });
+
+  test('G1: a malformed pulled privacy map (["bad"]) holds the queue — warns, deletes NOTHING, next run re-drains', () => {
+    // Remotely triggerable kill vector: the privacy map arrives via the
+    // artifacts-repo pull. A non-dict entry used to raise mid-classification
+    // AFTER the snapshot manifest was written, and the old finalize polarity
+    // ("delete unless retained") then unlinked EVERY snapshotted record.
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"x","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    const seeded = spoolFiles();
+    expect(seeded.length).toBe(1);
+    fs.writeFileSync(path.join(tmpHome, '.brain-privacy-map.json'), '["bad"]');
+
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('privacy map');
+    // Zero records deleted; nothing pushed.
+    expect(spoolFiles()).toEqual(seeded);
+    expect(remoteLog()).not.toMatch(/sync:/);
+
+    // Fix the map: the surviving queue re-drains and syncs.
+    fs.writeFileSync(path.join(tmpHome, '.brain-privacy-map.json'), '[]');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(spoolFiles().length).toBe(0);
+    expect(remoteLog()).toMatch(/sync: 1 file/);
+  });
+
+  test('G1: a classifier that dies AFTER the snapshot write consumes nothing (call-site exit check + explicit-delete finalize)', () => {
+    // A dict entry with a non-string pattern passes the shape filter but
+    // raises inside fnmatch DURING classification — the post-manifest crash
+    // window (same shape as ENOSPC/OOM mid-run). The call site must see the
+    // nonzero exit, warn, skip finalize, and leave everything queued.
+    initWithMode('full');
+    fs.mkdirSync(path.join(tmpHome, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, 'projects/p/learnings.jsonl'), '{"skill":"x","ts":"2026-01-01T00:00:00Z"}\n');
+    run(['gstack-brain-enqueue', 'projects/p/learnings.jsonl']);
+    const seeded = spoolFiles();
+    expect(seeded.length).toBe(1);
+    fs.writeFileSync(path.join(tmpHome, '.brain-privacy-map.json'), '[{"pattern": 123}]');
+
+    const r = run(['gstack-brain-sync', '--once']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('classification failed');
+    expect(spoolFiles()).toEqual(seeded); // zero records deleted
+    expect(remoteLog()).not.toMatch(/sync:/);
+    const status = JSON.parse(fs.readFileSync(path.join(tmpHome, '.brain-sync-status.json'), 'utf-8'));
+    expect(status.status).toBe('error');
+    expect(status.message).toContain('queue preserved');
+
+    // Fix the map: the surviving queue re-drains and syncs.
+    fs.writeFileSync(path.join(tmpHome, '.brain-privacy-map.json'), '[]');
+    expect(run(['gstack-brain-sync', '--once']).status).toBe(0);
+    expect(spoolFiles().length).toBe(0);
+    expect(remoteLog()).toMatch(/sync: 1 file/);
+  });
+
+  test('G1: finalize is explicit-delete-only and the fast path is .migrating-aware (static pins)', () => {
+    const src = fs.readFileSync(path.join(BIN, 'gstack-brain-sync'), 'utf-8');
+    // The compute call site checks the python exit status before finalizing.
+    expect(src).toMatch(/if ! compute_paths_to_stage /);
+    // finalize_queue takes the staged-paths file and deletes only staged ∪ dropped.
+    expect(src).toContain('deletable = staged | dropped');
+    expect(src).toContain('if p not in deletable:');
+    // The empty fast path also treats a leftover .migrating file as non-idle.
+    expect(src).toMatch(/spool_has_records && \[ ! -s "\$QUEUE" \] && \[ ! -s "\$QUEUE\.migrating" \]/);
   });
 
   test('--drop-queue keeps the --yes gate and counts spool + legacy entries', () => {

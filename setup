@@ -2095,7 +2095,12 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
     # Consent already recorded — no prompt. But a registration from an earlier
     # setup may carry a stale absolute path (a since-deleted dev worktree);
     # ensure-event re-points it in place and no-ops when everything matches.
-    _install_plan_tune_hooks >/dev/null 2>&1 || true
+    # Non-fatal to setup, but never silent: the hardened settings-hook refuses
+    # to rewrite a corrupt settings.json (exit 1), and swallowing that refusal
+    # left users with stale hooks and no signal.
+    if ! _PT_ENSURE_ERR=$(_install_plan_tune_hooks 2>&1 >/dev/null); then
+      log "  warning: settings hook update failed: $(printf '%s\n' "$_PT_ENSURE_ERR" | head -1) — run $SETTINGS_HOOK manually"
+    fi
     log ""
     log "Plan-tune hooks already installed. Run \`$SETTINGS_HOOK list-sources\` to inspect."
   elif [ "$PT_DECISION" = "yes" ]; then
@@ -2203,7 +2208,7 @@ if [ "$NO_TEAM_MODE" -ne 1 ] && [ -x "$SETTINGS_HOOK" ] && [ -x "$TIMELINE_STOP_
     --event Stop \
     --command "$TIMELINE_STOP_HOOK" \
     --source gstack-timeline-stop \
-    --timeout 5 2>/dev/null); then
+    --timeout 5 2>&1); then
     case "$_TL_ENSURE_OUT" in
       *unchanged*)
         : # already registered with the canonical command — quiet no-op
@@ -2215,6 +2220,11 @@ if [ "$NO_TEAM_MODE" -ne 1 ] && [ -x "$SETTINGS_HOOK" ] && [ -x "$TIMELINE_STOP_
         log "  registered Stop hook: session timeline entries now close even when a skill is interrupted (backup: settings.json.bak.<ts>; remove: $SETTINGS_HOOK remove-source --source gstack-timeline-stop)"
         ;;
     esac
+  else
+    # Non-fatal to setup, but never silent: the hardened settings-hook refuses
+    # to rewrite a corrupt settings.json (exit 1), and swallowing that refusal
+    # left the Stop hook unregistered with no signal.
+    log "  warning: settings hook update failed: $(printf '%s\n' "$_TL_ENSURE_OUT" | head -1) — run $SETTINGS_HOOK manually"
   fi
 fi
 

@@ -300,9 +300,16 @@ describe("internal: parseTranscriptJsonl + buildTranscriptPage shape", () => {
 
 describe("gstack-memory-ingest --limit", () => {
   it("respects --limit by stopping after N writes (mocked via --probe shortcut)", () => {
-    const r = runScript(["--probe", "--limit", "1"]);
+    // Hermetic home: against the operator's real HOME this walked the whole
+    // transcript corpus (and, post policy-parity, batch-checked its real
+    // policy store), making a pure arg-parsing assertion slow and flaky.
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const r = runScript(["--probe", "--limit", "1"], { HOME: home, GSTACK_HOME: gstackHome });
     // --limit doesn't apply to probe but argument should parse without error
     expect(r.exitCode).toBe(0);
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("rejects --limit 0 with exit 1", () => {
@@ -1197,6 +1204,82 @@ describe("#2392: transcript ingest honors per-remote trust policy", () => {
     expect(r.stdout).toMatch(/written:\s+1/);
     expect(r.stdout).not.toMatch(/skipped \(policy/);
     expect(stateSessions(gstackHome).length).toBe(1);
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(f) probe policy parity: a denied remote's transcript lands in skipped_policy_deny, not new_count", () => {
+    // --probe used to count policy-denied transcripts as ingestible (it only
+    // applied attribution), so its numbers overstated what --bulk would write.
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+
+    const denyCwd = makeRepoWithRemote(home, "denied", "https://github.com/denyme/denied.git");
+    writeSessionForRepo(home, "work-denied", "denysess1", denyCwd);
+    setPolicy(gstackHome, "https://github.com/denyme/denied.git", "deny");
+
+    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("Total files in window: 0");
+    expect(r.stdout).toMatch(/New \(never ingested\):\s+0/);
+    expect(r.stdout).toMatch(/Skipped \(policy deny\):\s+1/);
+    expect(r.stdout).not.toMatch(/Skipped \(policy read-only\)/);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(g) probe policy parity: a read-only remote's transcript lands in skipped_policy_readonly", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+
+    const roCwd = makeRepoWithRemote(home, "readonly", "https://github.com/roorg/rorepo.git");
+    writeSessionForRepo(home, "work-readonly", "rosess1", roCwd);
+    setPolicy(gstackHome, "https://github.com/roorg/rorepo.git", "read-only");
+
+    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("Total files in window: 0");
+    expect(r.stdout).toMatch(/Skipped \(policy read-only\):\s+1/);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(h) --limit counts policy-PERMITTED pages only: a denied-first corpus still writes the allowed page", () => {
+    // Walk order is deterministic here: Claude Code projects are walked
+    // BEFORE Codex sessions (walkAllSources), so the DENIED transcript is
+    // prepared first. Pre-fix, --limit 1 was applied to the unfiltered
+    // prepared array — the denied record consumed the limit and the permitted
+    // one starved (written: 0).
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const { binDir } = installFakeGbrain(home);
+
+    const denyCwd = makeRepoWithRemote(home, "denied", "https://github.com/denyme/denied.git");
+    writeSessionForRepo(home, "work-denied", "denysess1", denyCwd); // Claude Code: walked first
+    const okCwd = makeRepoWithRemote(home, "allowed", "https://github.com/okorg/okrepo.git");
+    const today = new Date();
+    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    writeCodexSession(
+      home, ymd,
+      `{"type":"session_meta","payload":{"id":"oksess-codex","cwd":"${okCwd.replace(/\\/g, "\\\\")}"},"timestamp":"${today.toISOString()}"}\n`,
+    );
+    setPolicy(gstackHome, "https://github.com/denyme/denied.git", "deny");
+
+    const r = runScript(["--bulk", "--quiet", "--limit", "1"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/written:\s+1/);
+    expect(r.stdout).toMatch(/skipped \(policy deny\):\s+1/);
+    // The page that landed is the PERMITTED one (the Codex session), not
+    // whichever record happened to be walked first.
+    const sessions = stateSessions(gstackHome);
+    expect(sessions.length).toBe(1);
+    expect(sessions[0]).toContain("rollout-");
 
     rmSync(home, { recursive: true, force: true });
   });

@@ -143,6 +143,13 @@ interface ProbeReport {
   updated_count: number;
   unchanged_count: number;
   skipped_unattributed: number;
+  /**
+   * #2392 parity: transcripts whose remote's trust tier is `deny` /
+   * `read-only`. Probe applies the SAME per-remote policy filter --bulk
+   * applies, so its ingestible counts match what --bulk would write.
+   */
+  skipped_policy_deny: number;
+  skipped_policy_readonly: number;
   estimate_minutes: number;
 }
 
@@ -1079,9 +1086,10 @@ export function readNewFailures(
 
 /**
  * The ONE attribution gate (#2394): a transcript is attributable iff its cwd
- * resolves to a git remote. Both probeMode (via transcriptIsAttributable) and
- * preparePages route through THIS function, so the two stages' post-attribution
- * counts are structurally identical — the parity the probe report promises.
+ * resolves to a git remote. Both probeMode (via transcriptCwdFromPrefix +
+ * resolveGitRemote — the same memoized resolver) and preparePages route
+ * through THIS logic, so the two stages' post-attribution counts are
+ * structurally identical — the parity the probe report promises.
  */
 function sessionIsAttributable(cwd: string | undefined | null): boolean {
   if (!cwd) return false;
@@ -1096,12 +1104,12 @@ function sessionIsAttributable(cwd: string | undefined | null): boolean {
 const TRANSCRIPT_PROBE_MAX_BYTES = 256 * 1024;
 
 /**
- * Lightweight attribution check: does a transcript have a resolvable git
- * remote for its cwd? Reads a BOUNDED prefix (first 256KB, never the whole
- * file — plan C7: the probe must stay a cheap parse on multi-MB transcripts),
- * extracts the cwd with EXACTLY parseTranscriptJsonl's rules, and calls
- * resolveGitRemote. Avoids the full parse (body rendering, message counting)
- * because probe only needs the yes/no answer.
+ * Lightweight cwd extraction for the probe: reads a BOUNDED prefix (first
+ * 256KB, never the whole file — plan C7: the probe must stay a cheap parse on
+ * multi-MB transcripts) and extracts the cwd with EXACTLY
+ * parseTranscriptJsonl's rules. The caller resolves attribution/policy via
+ * resolveGitRemote (memoized). Avoids the full parse (body rendering, message
+ * counting) because probe only needs the cwd.
  *
  * Extraction MIRRORS parseTranscriptJsonl (the single source of truth for
  * cwd semantics — keep the two in lockstep):
@@ -1117,7 +1125,7 @@ const TRANSCRIPT_PROBE_MAX_BYTES = 256 * 1024;
  * Non-transcript types (artifacts) always pass — the attribution filter in
  * preparePages only applies to transcripts (#2394).
  */
-function transcriptIsAttributable(path: string): boolean {
+function transcriptCwdFromPrefix(path: string): string {
   let raw: string;
   try {
     const fd = openSync(path, "r");
@@ -1129,10 +1137,10 @@ function transcriptIsAttributable(path: string): boolean {
       closeSync(fd);
     }
   } catch {
-    return false;
+    return "";
   }
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return false;
+  if (lines.length === 0) return "";
 
   let cwd = "";
   let sawFirstParseable = false;
@@ -1159,8 +1167,7 @@ function transcriptIsAttributable(path: string): boolean {
       break;
     }
   }
-  if (!cwd) return false;
-  return sessionIsAttributable(cwd);
+  return cwd;
 }
 
 async function probeMode(args: CliArgs): Promise<ProbeReport> {
@@ -1184,17 +1191,55 @@ async function probeMode(args: CliArgs): Promise<ProbeReport> {
   let updatedCount = 0;
   let unchangedCount = 0;
   let skippedUnattributed = 0;
+  let skippedPolicyDeny = 0;
+  let skippedPolicyReadonly = 0;
 
+  // Two-phase walk (#2392 parity): collect candidates first (remembering each
+  // transcript's resolved remote), THEN apply the same per-remote policy
+  // filter --bulk applies via one repoPolicyTierBatch spawn. Counting during
+  // the walk would report policy-denied transcripts as ingestible — probe's
+  // numbers must match what --bulk would actually write.
+  const candidates: Array<{ path: string; type: MemoryType; remote: string }> = [];
   for (const { path, type } of walkAllSources(ctx)) {
     // Apply the same attribution filter preparePages uses (#2394):
     // skip transcripts with no resolvable git remote unless --include-unattributed.
-    if (type === "transcript" && !args.includeUnattributed) {
-      if (!transcriptIsAttributable(path)) {
+    let remote = "";
+    if (type === "transcript") {
+      const cwd = transcriptCwdFromPrefix(path);
+      remote = cwd ? resolveGitRemote(cwd) : "";
+      if (!args.includeUnattributed && remote === "") {
         skippedUnattributed++;
         continue;
       }
     }
+    candidates.push({ path, type, remote });
+  }
 
+  // Batch policy check — same hasRepoPolicyStore fast path as preparePages:
+  // no store on disk → zero policy work. Only transcripts with a resolved
+  // remote are policy-filtered; artifacts never are (#2392). A missing or
+  // errored verdict counts as "none" here — probe is read-only and must not
+  // hard-fail the way the write path does.
+  if (hasRepoPolicyStore()) {
+    const remotes = [...new Set(candidates.filter((c) => c.type === "transcript" && c.remote).map((c) => c.remote))];
+    if (remotes.length > 0) {
+      const verdicts = repoPolicyTierBatch(remotes);
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        const c = candidates[i];
+        if (c.type !== "transcript" || !c.remote) continue;
+        const tier = verdicts.get(c.remote)?.tier ?? "none";
+        if (tier === "deny") {
+          skippedPolicyDeny++;
+          candidates.splice(i, 1);
+        } else if (tier === "read-only") {
+          skippedPolicyReadonly++;
+          candidates.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  for (const { path, type } of candidates) {
     totalFiles++;
     let size = 0;
     try {
@@ -1224,6 +1269,8 @@ async function probeMode(args: CliArgs): Promise<ProbeReport> {
     updated_count: updatedCount,
     unchanged_count: unchangedCount,
     skipped_unattributed: skippedUnattributed,
+    skipped_policy_deny: skippedPolicyDeny,
+    skipped_policy_readonly: skippedPolicyReadonly,
     estimate_minutes: estimateMinutes,
   };
 }
@@ -1277,8 +1324,16 @@ function preparePages(
   let parseFailed = 0;
   let partialPages = 0;
 
+  // --limit semantics: "stop after N pages WRITTEN" = N policy-eligible pages.
+  // When a per-remote policy store exists, eligibility is only known after the
+  // batch policy check below, so the walk must not stop early — a denied-first
+  // corpus would otherwise consume the limit and starve permitted pages. With
+  // no store on disk, every prepared page is eligible and the in-loop break
+  // keeps --limit cheap.
+  const policyStoreExists = hasRepoPolicyStore();
+
   for (const { path, type } of walkAllSources(ctx)) {
-    if (args.limit !== null && prepared.length >= args.limit) break;
+    if (args.limit !== null && !policyStoreExists && prepared.length >= args.limit) break;
 
     if (args.mode === "incremental" && !fileChangedSinceState(path, state)) {
       skippedDedup++;
@@ -1354,7 +1409,7 @@ function preparePages(
   let skippedPolicyReadonly = 0;
   let skippedPolicyDeny = 0;
   let policyError: string | undefined;
-  if (hasRepoPolicyStore()) {
+  if (policyStoreExists) {
     const remotes = [
       ...new Set(
         prepared
@@ -1397,6 +1452,13 @@ function preparePages(
         });
       }
     }
+  }
+
+  // --limit applies AFTER policy filtering, over permitted pages only. In the
+  // no-store fast path the walk already stopped at the limit, so this slice
+  // is a no-op there.
+  if (args.limit !== null && finalPrepared.length > args.limit) {
+    finalPrepared = finalPrepared.slice(0, args.limit);
   }
 
   return {
@@ -2281,6 +2343,12 @@ function printProbeReport(r: ProbeReport, json: boolean): void {
   console.log(`Unchanged:             ${r.unchanged_count}`);
   if (r.skipped_unattributed > 0) {
     console.log(`Skipped (unattributed): ${r.skipped_unattributed}  (no git remote; use --include-unattributed to include)`);
+  }
+  if (r.skipped_policy_deny > 0) {
+    console.log(`Skipped (policy deny):  ${r.skipped_policy_deny}  (remote tier is deny; change with: gstack-gbrain-repo-policy set <remote> read-write)`);
+  }
+  if (r.skipped_policy_readonly > 0) {
+    console.log(`Skipped (policy read-only): ${r.skipped_policy_readonly}  (remote tier is read-only; transcript ingest writes pages)`);
   }
   console.log("By type:");
   for (const [t, v] of Object.entries(r.by_type)) {

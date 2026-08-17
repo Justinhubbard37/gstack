@@ -237,6 +237,20 @@ describe('timeline-stop-hook wiring', () => {
     expect(teardown).toContain('remove-source --source gstack-timeline-stop');
   });
 
+  test('setup surfaces a settings-hook refusal instead of swallowing it', () => {
+    // The hardened settings-hook refuses to rewrite a corrupt settings.json
+    // (exit 1). Both setup call sites (ALREADY_INSTALLED plan-tune re-point,
+    // timeline ensure-event) must stay non-fatal but PRINT the failure.
+    const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
+    const warnings = setup.match(/settings hook update failed/g) || [];
+    expect(warnings.length).toBeGreaterThanOrEqual(2);
+    // The old swallow patterns are gone (the --no-team remove-source teardown
+    // legitimately keeps its 2>/dev/null; only the ensure-event registration
+    // must surface stderr).
+    expect(setup).not.toContain('_install_plan_tune_hooks >/dev/null 2>&1 || true');
+    expect(setup).not.toMatch(/ensure-event[\s\S]{0,220}--source gstack-timeline-stop[\s\S]{0,40}2>\/dev\/null/);
+  });
+
   test('setup routes the Stop hook through ensure-event, not presence-only dedup', () => {
     const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
     // ensure-event registers when missing AND re-points a stale path in place.
