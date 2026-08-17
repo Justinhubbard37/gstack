@@ -594,13 +594,16 @@ describe("lib/gbrain-local-status — bearer-token thin-client (#2520)", () => {
     expect(localEngineStatus({ noCache: true })).toBe("thin-client");
   });
 
-  it("returns 'thin-client' when config.json is absent and the registration is PROJECT-scoped (#2499)", () => {
+  it("returns 'thin-client' when config.json is absent and the registration is PROJECT-scoped for THIS cwd (#2499)", () => {
+    // The project key must be the running process's cwd (or an ancestor):
+    // per-project scoping (C15) means only registrations visible to this
+    // cwd count.
     env = makeEnv({
       withGbrain: true,
       gbrainBehavior: "ok",
       withConfig: false,
       claudeJson: {
-        projects: { "/some/repo": { mcpServers: { "gbrain-remote": REMOTE_GBRAIN } } },
+        projects: { [process.cwd()]: { mcpServers: { "gbrain-remote": REMOTE_GBRAIN } } },
       },
     });
     restoreEnv = applyEnv(env);
@@ -657,6 +660,117 @@ describe("lib/gbrain-local-status — bearer-token thin-client (#2520)", () => {
     });
     restoreEnv = applyEnv(env);
     expect(localEngineStatus({ noCache: true })).toBe("missing-config");
+  });
+
+  // ── C15: project scan is scoped to the cwd's nearest-ancestor project ──
+  // Before the fix, hasRemoteOnlyGbrainMcp scanned EVERY project's
+  // mcpServers, so one project's remote registration reclassified broken
+  // local engines as thin-client machine-wide.
+
+  it("C15: an OTHER project's remote entry no longer flips thin-client for this cwd (no config)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: {
+        projects: { "/some/other/repo": { mcpServers: { gbrain: REMOTE_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("missing-config");
+  });
+
+  it("C15: an OTHER project's remote entry no longer reclassifies a broken local engine", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "engine-locked",
+      withConfig: true,
+      claudeJson: {
+        projects: { "/some/other/repo": { mcpServers: { gbrain: REMOTE_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("engine-locked");
+  });
+
+  it("C15: path boundary — a sibling-prefix project key is NOT this cwd's project", () => {
+    // /path/to/repo2 must never match a scan from /path/to/repo (and vice
+    // versa) — same boundary rule as the jq resolver and brain-cache.
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: {
+        projects: { [`${process.cwd()}-sibling`]: { mcpServers: { gbrain: REMOTE_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("missing-config");
+  });
+
+  it("C15: an ANCESTOR project key of this cwd still counts (nearest-ancestor matching)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: {
+        projects: { [dirname(process.cwd())]: { mcpServers: { gbrain: REMOTE_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("C15: a nearer project WITHOUT gbrain does not shadow an ancestor's registration (jq parity)", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "ok",
+      withConfig: false,
+      claudeJson: {
+        projects: {
+          [dirname(process.cwd())]: { mcpServers: { gbrain: REMOTE_GBRAIN } },
+          [process.cwd()]: { mcpServers: { "other-server": { type: "http", url: "https://x.example/mcp" } } },
+        },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  // ── C15: adopted precedence — project-local beats user scope per name ──
+  // Claude Code's own conflict resolution, verified empirically against
+  // claude 2.1.233 with a hermetic fake $HOME (`claude mcp get gbrain`
+  // reports "Scope: Local config" when both scopes define the name).
+
+  it("C15 precedence: THIS project's remote gbrain shadows a user-scope local-stdio gbrain → thin-client", () => {
+    // Union semantics would see the user-scope stdio entry and keep
+    // engine-locked; the adopted precedence says this project's queries go
+    // remote, so thin-client is the truthful classification here.
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "engine-locked",
+      withConfig: true,
+      claudeJson: {
+        mcpServers: { gbrain: LOCAL_GBRAIN },
+        projects: { [process.cwd()]: { mcpServers: { gbrain: REMOTE_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("thin-client");
+  });
+
+  it("C15 precedence: THIS project's local-stdio gbrain shadows a user-scope remote gbrain → local statuses keep their meaning", () => {
+    env = makeEnv({
+      withGbrain: true,
+      gbrainBehavior: "engine-locked",
+      withConfig: true,
+      claudeJson: {
+        mcpServers: { gbrain: REMOTE_GBRAIN },
+        projects: { [process.cwd()]: { mcpServers: { gbrain: LOCAL_GBRAIN } } },
+      },
+    });
+    restoreEnv = applyEnv(env);
+    expect(localEngineStatus({ noCache: true })).toBe("engine-locked");
   });
 
   it("--is-ok exits 0 on a bearer thin-client fixture (end-to-end gate)", () => {

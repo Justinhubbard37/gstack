@@ -127,15 +127,19 @@ function sha8(input: string): string {
  * stable identity hash. Used to detect when the user switches brains
  * (different endpoint → different cache).
  *
- * Reads BOTH registration scopes in ~/.claude.json (#2499): user scope
- * (.mcpServers.gbrain) first, then project scope
+ * Reads BOTH registration scopes in ~/.claude.json (#2499): project scope
  * (.projects["/abs/path"].mcpServers.gbrain — what `claude mcp add`
- * WITHOUT --scope user writes), preferring the nearest ancestor of cwd
- * (longest matching project key) so nested repos resolve to their own
- * brain. Before the project-scope read, two different project-scoped
- * brains both hashed to 'local', so switching between them never
- * invalidated the cache — the exact scenario this function exists to
- * catch.
+ * WITHOUT --scope user writes) first, preferring the nearest ancestor of
+ * cwd (longest matching project key) so nested repos resolve to their own
+ * brain, then user scope (.mcpServers.gbrain) as the fallback. That order
+ * is Claude Code's own name-conflict precedence (local beats user) —
+ * verified empirically against claude 2.1.233 with a hermetic fake $HOME:
+ * `claude mcp get gbrain` reports "Scope: Local config" and the
+ * project-local URL when both scopes define the name — so the hash tracks
+ * the endpoint the project actually talks to. Before the project-scope
+ * read, two different project-scoped brains both hashed to 'local', so
+ * switching between them never invalidated the cache — the exact scenario
+ * this function exists to catch.
  *
  * Params exist for tests; production callers use the defaults.
  */
@@ -163,9 +167,11 @@ interface McpEntryish {
 }
 
 /**
- * User-scope gbrain entry, else the nearest-ancestor project-scope entry
- * for cwd (#2499). Path-boundary-aware: /a/repo never matches /a/repo2.
- * Both separators are accepted so Windows project keys resolve.
+ * Nearest-ancestor project-scope gbrain entry for cwd, else the user-scope
+ * entry (#2499). Project-local first — Claude Code's own precedence for a
+ * same-name conflict (see detectEndpointHash's docstring for the empirical
+ * evidence). Path-boundary-aware: /a/repo never matches /a/repo2. Both
+ * separators are accepted so Windows project keys resolve.
  */
 function resolveGbrainMcpEntry(
   cfg: unknown,
@@ -175,20 +181,21 @@ function resolveGbrainMcpEntry(
     mcpServers?: Record<string, McpEntryish>;
     projects?: Record<string, { mcpServers?: Record<string, McpEntryish> }>;
   } | null;
-  if (root?.mcpServers?.gbrain) return root.mcpServers.gbrain;
   const projects = root?.projects;
-  if (!projects || typeof projects !== 'object') return undefined;
-  let best: { key: string; entry: McpEntryish } | undefined;
-  for (const [key, val] of Object.entries(projects)) {
-    if (!val || typeof val !== 'object') continue;
-    const entry = val.mcpServers?.gbrain;
-    if (!entry || typeof entry !== 'object') continue;
-    const isAncestor =
-      cwd === key || cwd.startsWith(`${key}/`) || cwd.startsWith(`${key}\\`);
-    if (!isAncestor) continue;
-    if (!best || key.length > best.key.length) best = { key, entry };
+  if (projects && typeof projects === 'object') {
+    let best: { key: string; entry: McpEntryish } | undefined;
+    for (const [key, val] of Object.entries(projects)) {
+      if (!val || typeof val !== 'object') continue;
+      const entry = val.mcpServers?.gbrain;
+      if (!entry || typeof entry !== 'object') continue;
+      const isAncestor =
+        cwd === key || cwd.startsWith(`${key}/`) || cwd.startsWith(`${key}\\`);
+      if (!isAncestor) continue;
+      if (!best || key.length > best.key.length) best = { key, entry };
+    }
+    if (best) return best.entry;
   }
-  return best?.entry;
+  return root?.mcpServers?.gbrain;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
