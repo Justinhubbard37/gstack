@@ -6,6 +6,7 @@ import * as path from "path";
 import {
   toMsysPath,
   slugFromEnvironment,
+  outermostProjectRoot,
   resolveSlug,
   NEEDS_NATIVE_SLUG_ON_WINDOWS,
 } from "../lib/bin-context";
@@ -14,8 +15,21 @@ const ROOT = path.resolve(import.meta.dir, "..");
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf-8");
 
 let tmp: string;
-beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gstack-slug-")); });
-afterEach(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} });
+let savedEnvSlug: string | undefined;
+beforeEach(() => {
+  // realpathSync so the native cwd matches what the bash script's `pwd` reports
+  // (macOS: /var/folders/... is a symlink to /private/var/folders/...).
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gstack-slug-")));
+  // An ambient GSTACK_PROJECT_SLUG (leaked from an operator shell or a sibling
+  // test in a shared-process shard) would override every derivation under test.
+  savedEnvSlug = process.env.GSTACK_PROJECT_SLUG;
+  delete process.env.GSTACK_PROJECT_SLUG;
+});
+afterEach(() => {
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  if (savedEnvSlug === undefined) delete process.env.GSTACK_PROJECT_SLUG;
+  else process.env.GSTACK_PROJECT_SLUG = savedEnvSlug;
+});
 
 /**
  * Windows cannot exec bin/gstack-slug -- a `#!/usr/bin/env bash` script with no file
@@ -108,6 +122,186 @@ describe("the fallback stays win32-gated", () => {
       expect(got).not.toBe("unknown");
     } else {
       expect(got).toBe("unknown"); // POSIX behaviour deliberately unchanged
+    }
+  });
+});
+
+/**
+ * Walk-up parity: the native fallback must resolve the same OUTERMOST project
+ * root as bin/gstack-slug's `_outermost_project_root` (see
+ * test/gstack-slug-cwd-walk-up.test.ts for the bash-side pins). Before this
+ * port, the native path derived the slug from `git remote get-url origin` in
+ * cwd — the INNERMOST repo — so a Windows session inside a nested/vendored
+ * repo or an artifact-only subdir filed its state under a different slug than
+ * every bash-side consumer.
+ *
+ * Each scenario is run through BOTH implementations on the same fixture
+ * (separate GSTACK_HOMEs so neither reads the other's cache) and pinned to the
+ * same expected slug. The bash leg is skipped on win32, where bash isn't
+ * reliably spawnable — the native leg still pins the ported semantics there.
+ */
+describe("walk-up parity with bin/gstack-slug (outermost project root)", () => {
+  const SCRIPT = path.join(ROOT, "bin", "gstack-slug");
+  const HAS_BASH = process.platform !== "win32";
+
+  function bashSlug(cwd: string, extraEnv: Record<string, string> = {}): string {
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      HOME: path.join(tmp, "bash-home"),
+      GSTACK_HOME: path.join(tmp, "bash-home", ".gstack"),
+    };
+    delete env.GSTACK_PROJECT_SLUG; // only set when a scenario passes it explicitly
+    Object.assign(env, extraEnv);
+    const r = spawnSync("bash", [SCRIPT], { cwd, env, encoding: "utf-8", timeout: 10_000 });
+    const m = (r.stdout || "").match(/^SLUG=([^\n]*)$/m);
+    return m ? m[1] : "";
+  }
+
+  const nativeHome = () => path.join(tmp, "native-home");
+
+  /** Assert native === expected, and bash === expected where bash is available. */
+  function expectBoth(cwd: string, expected: string) {
+    expect(slugFromEnvironment(nativeHome(), cwd)).toBe(expected);
+    if (HAS_BASH) expect(bashSlug(cwd)).toBe(expected);
+  }
+
+  test("AC-1: .git at root, artifact-only subdir — slug is the ROOT basename", () => {
+    const projectRoot = path.join(tmp, "loadout");
+    const siteSubdir = path.join(projectRoot, "site");
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(siteSubdir, ".vercel"), { recursive: true });
+    fs.writeFileSync(path.join(siteSubdir, ".vercel", "project.json"), "{}\n");
+    expectBoth(siteSubdir, "loadout");
+  });
+
+  test("AC-1 variant: package.json at root, node_modules-only subdir — ROOT basename", () => {
+    const projectRoot = path.join(tmp, "monorepo");
+    const subdir = path.join(projectRoot, "packages", "web");
+    fs.mkdirSync(subdir, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "package.json"), "{}\n");
+    fs.mkdirSync(path.join(subdir, "node_modules"), { recursive: true });
+    expectBoth(subdir, "monorepo");
+  });
+
+  test("AC-2: stale cache (old-bug shape) self-heals to the outermost-root slug", () => {
+    const projectRoot = path.join(tmp, "loadout");
+    const siteSubdir = path.join(projectRoot, "site");
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(siteSubdir, ".vercel"), { recursive: true });
+    // Pre-seed the native cache with the WRONG value (pre-walk-up poisoning:
+    // cached == basename(pwd) while pwd is NOT the project root).
+    const cacheDir = path.join(nativeHome(), "slug-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, toMsysPath(siteSubdir).replace(/\//g, "_"));
+    fs.writeFileSync(cacheFile, "site");
+
+    expect(slugFromEnvironment(nativeHome(), siteSubdir)).toBe("loadout");
+    // The cache file itself must have been overwritten (self-healing).
+    expect(fs.readFileSync(cacheFile, "utf-8")).toBe("loadout");
+  });
+
+  test("sticky cache (#2212): a cached identity that is NOT the old-bug shape survives", () => {
+    const projectRoot = path.join(tmp, "renamed-project");
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    const cacheDir = path.join(nativeHome(), "slug-cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, toMsysPath(projectRoot).replace(/\//g, "_"));
+    fs.writeFileSync(cacheFile, "legacy-name");
+    // cached != basename(pwd), so the sticky rule holds — no recompute.
+    expect(slugFromEnvironment(nativeHome(), projectRoot)).toBe("legacy-name");
+  });
+
+  test("AC-3: cwd IS the project root with .git — slug = basename", () => {
+    const projectRoot = path.join(tmp, "myproject");
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    expectBoth(projectRoot, "myproject");
+  });
+
+  test("AC-4: no markers anywhere on the chain — slug = pwd basename (fallback)", () => {
+    const deep = path.join(tmp, "just", "a", "plain", "folder");
+    fs.mkdirSync(deep, { recursive: true });
+    expectBoth(deep, "folder");
+  });
+
+  test("AC-5: subdir of a repo with a remote — slug derived from the ROOT's remote", () => {
+    // Pins the `git -C "$PROJECT_ROOT"` port: the subdir has no repo of its
+    // own, so the old native path (git in cwd) also reached the parent repo —
+    // but only the walk-up guarantees BOTH implementations root the remote
+    // lookup at the same directory.
+    const projectRoot = path.join(tmp, "realgit");
+    const subdir = path.join(projectRoot, "src", "deep");
+    fs.mkdirSync(subdir, { recursive: true });
+    spawnSync("git", ["init", "-q", projectRoot]);
+    spawnSync("git", ["-C", projectRoot, "remote", "add", "origin", "https://github.com/foo/bar.git"]);
+    expectBoth(subdir, "foo-bar");
+  });
+
+  test("weak marker: README.md at root, artifact-only subdir — ROOT basename", () => {
+    const projectRoot = path.join(tmp, "loadout");
+    const siteSubdir = path.join(projectRoot, "site");
+    fs.mkdirSync(siteSubdir, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "README.md"), "# loadout\n");
+    fs.mkdirSync(path.join(siteSubdir, ".vercel"), { recursive: true });
+    expectBoth(siteSubdir, "loadout");
+  });
+
+  test("two-tier: vendored sub-repo with .git wins over parent README (strong > weak)", () => {
+    const projectRoot = path.join(tmp, "loadout");
+    const subRepo = path.join(projectRoot, "starter-pack");
+    fs.mkdirSync(subRepo, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "README.md"), "# loadout\n");
+    fs.mkdirSync(path.join(subRepo, ".git"), { recursive: true });
+    expectBoth(subRepo, "starter-pack");
+  });
+
+  test("two-tier: outermost weak wins when no strong marker exists on the chain", () => {
+    const projectRoot = path.join(tmp, "loadout");
+    const subdir = path.join(projectRoot, "docs");
+    fs.mkdirSync(subdir, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "README.md"), "# loadout\n");
+    fs.writeFileSync(path.join(subdir, "README.md"), "# docs\n");
+    expectBoth(subdir, "loadout");
+  });
+
+  test("nested repo: outermost .git wins — nested/vendored repos don't split stores", () => {
+    // THE bug this port fixes: the old native path asked the INNERMOST repo's
+    // remote. bin/gstack-slug resolves the OUTERMOST strong marker instead.
+    const outer = path.join(tmp, "outer-project");
+    const inner = path.join(outer, "vendor", "inner-lib");
+    fs.mkdirSync(inner, { recursive: true });
+    spawnSync("git", ["init", "-q", outer]);
+    spawnSync("git", ["-C", outer, "remote", "add", "origin", "git@github.com:acme/outer.git"]);
+    spawnSync("git", ["init", "-q", inner]);
+    spawnSync("git", ["-C", inner, "remote", "add", "origin", "git@github.com:vendor/inner.git"]);
+    expectBoth(inner, "acme-outer");
+  });
+
+  test("GSTACK_PROJECT_SLUG env override beats every other resolution path, never cached", () => {
+    const projectRoot = path.join(tmp, "loadout");
+    const siteSubdir = path.join(projectRoot, "site");
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    fs.mkdirSync(siteSubdir, { recursive: true });
+
+    process.env.GSTACK_PROJECT_SLUG = "custom-override";
+    try {
+      expect(slugFromEnvironment(nativeHome(), siteSubdir)).toBe("custom-override");
+      if (HAS_BASH) {
+        expect(bashSlug(siteSubdir, { GSTACK_PROJECT_SLUG: "custom-override" })).toBe("custom-override");
+      }
+    } finally {
+      delete process.env.GSTACK_PROJECT_SLUG;
+    }
+    // Per-invocation escape hatch, never a durable identity: no cache written.
+    const cacheFile = path.join(nativeHome(), "slug-cache", toMsysPath(siteSubdir).replace(/\//g, "_"));
+    expect(fs.existsSync(cacheFile)).toBe(false);
+  });
+
+  test("outermostProjectRoot terminates on hostile path forms (dirname fixed points)", () => {
+    // Mirrors the windows-free-tests regression on the bash side: mixed-form
+    // paths must hit the dirname fixed point, not loop. A hang here would trip
+    // the suite timeout; reaching the assertions IS the pass.
+    for (const hostile of ["C:/Users/nobody/project", ".", "//server/share/dir"]) {
+      expect(typeof outermostProjectRoot(hostile)).toBe("string");
     }
   });
 });

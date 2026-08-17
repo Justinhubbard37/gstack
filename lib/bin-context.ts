@@ -6,9 +6,9 @@
  */
 
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { basename, join } from "path";
+import { basename, dirname, join } from "path";
 
 /** Keep the slug inside the [a-zA-Z0-9._-] alphabet gstack-slug promises (`tr -cd`). */
 function sanitizeSlug(s: string): string {
@@ -28,42 +28,125 @@ export function toMsysPath(p: string): string {
   return drive ? `/${drive[1].toLowerCase()}${body}` : body;
 }
 
+/** `-f` in bash terms: a regular file (following symlinks), never a directory. */
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// Marker tiers mirror bin/gstack-slug's `_outermost_project_root` exactly.
+// STRONG = canonical version-control / language project files ("this directory
+// is a real project of its own"); .git is checked separately because it can be
+// a directory (normal repo) or a file (worktree / submodule pointer).
+// WEAK = content-only project signals (markdown bundles, asset collections).
+const STRONG_FILE_MARKERS = [".project.yaml", "package.json", "pyproject.toml", "Cargo.toml", "Gemfile", "go.mod"];
+const WEAK_FILE_MARKERS = ["README.md", "README", "README.rst", "LICENSE", "LICENSE.md"];
+
+/**
+ * Native port of bin/gstack-slug's `_outermost_project_root` (:77-113): walk UP
+ * from `startDir` tracking the OUTERMOST ancestor holding a strong marker and
+ * the outermost holding a weak marker. Outermost STRONG wins; else outermost
+ * WEAK; else "". Build/deploy artifacts (.vercel, node_modules, dist, ...) are
+ * deliberately NOT markers, so they can't establish a phantom project root.
+ *
+ * Termination mirrors the bash fix for windows-free-tests: break on dirname's
+ * FIXED POINT (drive roots `C:\`, relative `.`, UNC `//srv` never reach the
+ * literal "/"), with a 64-depth belt-and-braces cap. Exported for the
+ * hostile-path termination tests.
+ */
+export function outermostProjectRoot(startDir: string): string {
+  let dir = startDir;
+  let outermostStrong = "";
+  let outermostWeak = "";
+  let depth = 0;
+  while (dir && dir !== "/" && depth < 64) {
+    if (existsSync(join(dir, ".git")) || STRONG_FILE_MARKERS.some((m) => isFile(join(dir, m)))) {
+      outermostStrong = dir;
+    } else if (WEAK_FILE_MARKERS.some((m) => isFile(join(dir, m)))) {
+      outermostWeak = dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break; // dirname fixed point (C:\, ., //srv)
+    dir = parent;
+    depth += 1;
+  }
+  // Strong markers win over weak; either wins over nothing.
+  return outermostStrong || outermostWeak;
+}
+
 /**
  * Native port of bin/gstack-slug's resolution order, used when that script cannot be
- * spawned (see resolveSlug). Same three steps, same alphabet, same cache file — so
- * this and the shell path always agree. They must: the bins WRITE using this, while
- * the Context Recovery preamble READS using the script.
+ * spawned (see resolveSlug). Same steps, same alphabet, same cache file — so this and
+ * the shell path always agree. They must: the bins WRITE using this, while the
+ * Context Recovery preamble READS using the script.
+ *
+ * Resolution order (parity with the bash script, pinned by
+ * test/bin-context-windows-slug.test.ts against test/gstack-slug-cwd-walk-up.test.ts):
+ *   0. $GSTACK_PROJECT_SLUG env override — wins over everything, never cached.
+ *   1. Walk UP to the OUTERMOST project root (see outermostProjectRoot). Without
+ *      the walk, a nested/vendored repo derived its slug from the INNERMOST
+ *      `git remote get-url origin`, splitting the store the bash side keeps whole.
+ *   2. Cached slug is sticky — EXCEPT the provable old-bug shape (#1125): cached
+ *      value equals basename(cwd) while the walk-up says cwd is NOT the project
+ *      root; that cache came from the pre-walk-up resolver, so recompute and heal.
+ *   3. Git remote AT THE PROJECT ROOT: [:/]<owner>/<repo>[.git] → owner-repo.
+ *   4. Project root's basename; else basename(cwd) for plain non-project folders.
  */
 export function slugFromEnvironment(gstackHome?: string, cwd: string = process.cwd()): string {
   const home = gstackHome || process.env.GSTACK_HOME || join(homedir(), ".gstack");
   const cacheDir = join(home, "slug-cache");
   const cacheFile = join(cacheDir, toMsysPath(cwd).replace(/\//g, "_"));
 
+  // 0. explicit env override — per-invocation escape hatch, never persisted
+  //    (caching it would rebind THIS cwd's slug for every later env-less run).
+  const envSlug = sanitizeSlug((process.env.GSTACK_PROJECT_SLUG || "").trim());
+  if (envSlug) return envSlug;
+
+  // 1. outermost project root along the cwd ancestor chain (may be "").
+  const projectRoot = outermostProjectRoot(cwd);
+
   let slug = "";
-  // 1. cached slug wins (guarantees consistency across sessions)
+  // 2. cached slug is sticky (#2212), except the old-bug shape (#1125).
   if (existsSync(cacheFile)) {
     try {
-      slug = sanitizeSlug(readFileSync(cacheFile, "utf-8").trim());
+      const cached = sanitizeSlug(readFileSync(cacheFile, "utf-8").trim());
+      const pwdBase = sanitizeSlug(basename(cwd));
+      const oldBugShape = cached === pwdBase && projectRoot !== "" && projectRoot !== cwd;
+      if (cached && !oldBugShape) slug = cached;
     } catch {
       slug = "";
     }
   }
-  // 2. else derive from the git remote: [:/]<owner>/<repo>[.git] → owner-repo
-  if (!slug) {
-    const r = spawnSync("git", ["remote", "get-url", "origin"], { encoding: "utf-8", cwd });
+  // 3. derive from the project root's git remote (a subdir without its own
+  //    remote inherits the parent's — same as `git -C "$PROJECT_ROOT"`).
+  if (!slug && projectRoot) {
+    const r = spawnSync("git", ["-C", projectRoot, "remote", "get-url", "origin"], { encoding: "utf-8" });
     const m = (r.stdout || "").trim().match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
     if (m) slug = sanitizeSlug(m[1].replace(/\//g, "-"));
   }
-  // 3. else the directory name
+  // 4. project root's basename, else pwd basename for plain folders.
+  if (!slug && projectRoot) slug = sanitizeSlug(basename(projectRoot));
   if (!slug) slug = sanitizeSlug(basename(cwd));
   if (!slug) return "unknown";
 
-  // 4. cache it, as gstack-slug does — atomic, and failures stay silent (`|| true`)
+  // 5. cache it, as gstack-slug does — atomic, self-healing (only rewrites when
+  //    the value changed — single-shot, key-local), and failures stay silent.
   try {
-    mkdirSync(cacheDir, { recursive: true });
-    const tmp = `${cacheFile}.tmp.${process.pid}`;
-    writeFileSync(tmp, slug, "utf-8");
-    renameSync(tmp, cacheFile);
+    let current = "";
+    try {
+      current = readFileSync(cacheFile, "utf-8");
+    } catch {
+      // no cache yet — write below
+    }
+    if (current !== slug) {
+      mkdirSync(cacheDir, { recursive: true });
+      const tmp = `${cacheFile}.tmp.${process.pid}`;
+      writeFileSync(tmp, slug, "utf-8");
+      renameSync(tmp, cacheFile);
+    }
   } catch {
     // best-effort cache; a miss only costs a re-derive on the next call
   }
