@@ -56,9 +56,11 @@ describe('gstack-config', () => {
     expect(stdout).toBe('false');
   });
 
-  test('get unknown key on missing file returns empty, exit 0', () => {
+  test('get unknown key on missing file returns empty, exit 1 (#2611)', () => {
+    // #2611: an unknown key exits 1 so `|| echo fallback` callers can fire —
+    // "" with exit 0 was indistinguishable from a real empty value.
     const { exitCode, stdout } = run(['get', 'some_unknown_key']);
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
     expect(stdout).toBe('');
   });
 
@@ -69,10 +71,10 @@ describe('gstack-config', () => {
     expect(stdout).toBe('true');
   });
 
-  test('get missing key returns empty', () => {
+  test('get missing key returns empty, exit 1 (#2611)', () => {
     writeFileSync(join(stateDir, 'config.yaml'), 'auto_upgrade: true\n');
     const { exitCode, stdout } = run(['get', 'nonexistent']);
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
     expect(stdout).toBe('');
   });
 
