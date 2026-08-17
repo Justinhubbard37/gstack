@@ -3,6 +3,9 @@
 #
 # Usage:
 #   gstack-config get <key>          — read a config value (falls back to DEFAULTS)
+#   gstack-config has <key>          — exit 0 iff the key is literally present in the
+#                                      config file (get returns DEFAULTS for absent keys,
+#                                      so callers that need provenance use this instead)
 #   gstack-config set <key> <value>  — write a config value
 #   gstack-config list               — show all config (values + defaults)
 #   gstack-config defaults           — show just the defaults table
@@ -300,6 +303,14 @@ case "${1:-}" in
       VALUE=$(lookup_default "$KEY")
     fi
     printf '%s' "$VALUE"
+    ;;
+  has)
+    KEY="${2:?Usage: gstack-config has <key>}"
+    if ! printf '%s' "$KEY" | LC_ALL=C grep -qE '^[a-zA-Z0-9_]+(@[a-zA-Z0-9]+)?$'; then
+      echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<endpoint-id> suffix" >&2
+      exit 1
+    fi
+    grep -qE "^${KEY}:" "$CONFIG_FILE" 2>/dev/null
     ;;
   set)
     KEY="${2:?Usage: gstack-config set <key> <value>}"
