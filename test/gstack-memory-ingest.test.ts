@@ -93,7 +93,7 @@ describe("gstack-memory-ingest CLI", () => {
     const session = `{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"${new Date().toISOString()}","cwd":"/tmp/x"}\n{"type":"assistant","message":{"role":"assistant","content":"hi"},"timestamp":"${new Date().toISOString()}"}\n`;
     writeClaudeCodeSession(home, "tmp-x", "abc123", session);
 
-    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    const r = runScript(["--probe", "--include-unattributed"], { HOME: home, GSTACK_HOME: gstackHome });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Total files in window: 1");
     expect(r.stdout).toContain("transcript");
@@ -109,7 +109,7 @@ describe("gstack-memory-ingest CLI", () => {
     const session = `{"type":"session_meta","payload":{"id":"sess-xyz","cwd":"/tmp/x","git":{"repository_url":"https://github.com/foo/bar"}},"timestamp":"${today.toISOString()}"}\n`;
     writeCodexSession(home, ymd, session);
 
-    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    const r = runScript(["--probe", "--include-unattributed"], { HOME: home, GSTACK_HOME: gstackHome });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Total files in window: 1");
     rmSync(home, { recursive: true, force: true });
@@ -269,7 +269,7 @@ describe("internal: parseTranscriptJsonl + buildTranscriptPage shape", () => {
     mkdirSync(projDir, { recursive: true });
     writeFileSync(join(projDir, "abc123.jsonl"), content, "utf-8");
 
-    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: join(home, ".gstack") });
+    const r = runScript(["--probe", "--include-unattributed"], { HOME: home, GSTACK_HOME: join(home, ".gstack") });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Total files in window: 1");
 
@@ -288,7 +288,7 @@ describe("internal: parseTranscriptJsonl + buildTranscriptPage shape", () => {
       `{"type":"assistant","message":{"role":"assistant","content":"this is truncat`; // no closing brace + no newline
     writeFileSync(join(projDir, "trunc.jsonl"), content, "utf-8");
 
-    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: join(home, ".gstack") });
+    const r = runScript(["--probe", "--include-unattributed"], { HOME: home, GSTACK_HOME: join(home, ".gstack") });
     // Should not crash; should report 1 transcript
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Total files in window: 1");
@@ -859,5 +859,83 @@ describe("#2105 codex response_item rollout shape", () => {
     expect(parsed.message_count).toBe(1);
     expect(parsed.body).toContain("## User\n\nold shape");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── #2394: --probe counts post-attribution, matching what --bulk would write ─
+
+describe("#2394: probe applies the same attribution gate as prepare", () => {
+  function makeAttributableCwd(home: string): string {
+    const repo = join(home, "work", "attributable-repo");
+    mkdirSync(repo, { recursive: true });
+    spawnSync("git", ["-C", repo, "init", "-q"], { encoding: "utf-8" });
+    spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/foo/bar.git"], { encoding: "utf-8" });
+    return repo;
+  }
+
+  function writeMixedCorpus(home: string): void {
+    const attributableCwd = makeAttributableCwd(home);
+    const ts = new Date().toISOString();
+    writeClaudeCodeSession(
+      home, "work-attributable", "attr1",
+      `{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"${ts}","cwd":"${attributableCwd.replace(/\\/g, "\\\\")}"}\n`,
+    );
+    writeClaudeCodeSession(
+      home, "tmp-nowhere", "unattr1",
+      `{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"${ts}","cwd":"${join(home, "not-a-repo").replace(/\\/g, "\\\\")}"}\n`,
+    );
+    mkdirSync(join(home, "not-a-repo"), { recursive: true });
+  }
+
+  it("probe reports post-attribution counts and names what it skipped", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    writeMixedCorpus(home);
+
+    const r = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(r.exitCode).toBe(0);
+    // Post-attribution: only the transcript whose cwd resolves to a remote.
+    expect(r.stdout).toContain("Total files in window: 1");
+    // The excluded remainder is visible, never silent.
+    expect(r.stdout).toContain("Skipped (unattributed): 1");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("--include-unattributed restores raw counts", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    writeMixedCorpus(home);
+
+    const r = runScript(["--probe", "--include-unattributed"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("Total files in window: 2");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("parity: probe post-attribution count equals what prepare actually processes", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    writeMixedCorpus(home);
+
+    const probe = runScript(["--probe"], { HOME: home, GSTACK_HOME: gstackHome });
+    expect(probe.exitCode).toBe(0);
+    const probeNew = Number((probe.stdout.match(/New \(never ingested\):\s+(\d+)/) || [])[1]);
+    expect(probeNew).toBe(1);
+
+    // Same stage on the ingest side: the transcripts that reach the import
+    // step (written + failed) are exactly the ones that passed the shared
+    // attribution gate in preparePages. No gbrain is configured in this
+    // hermetic env, so the attributable transcript FAILS at import — that is
+    // fine: parity is a prepare-stage invariant (probe post-attribution ==
+    // prepare post-attribution), deliberately NOT == final written (#2394).
+    const inc = runScript(["--incremental", "--quiet"], { HOME: home, GSTACK_HOME: gstackHome });
+    const m = inc.stderr.match(/(\d+) written, (\d+) failed/) || inc.stdout.match(/(\d+) written, (\d+) failed/);
+    expect(m).not.toBeNull();
+    const reachedImport = Number(m![1]) + Number(m![2]);
+    expect(reachedImport).toBe(probeNew);
+    rmSync(home, { recursive: true, force: true });
   });
 });
