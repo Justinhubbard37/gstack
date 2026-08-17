@@ -1126,13 +1126,26 @@ const TRANSCRIPT_PROBE_MAX_BYTES = 256 * 1024;
  * preparePages only applies to transcripts (#2394).
  */
 function transcriptCwdFromPrefix(path: string): string {
+  // Chunked read until the prefix contains at least one COMPLETE record
+  // (newline), up to the hard cap — a first record larger than one chunk
+  // (giant pasted prompt) must not truncate mid-JSON and mis-classify a
+  // session --bulk would accept (probe/bulk parity).
   let raw: string;
   try {
     const fd = openSync(path, "r");
     try {
-      const buf = Buffer.alloc(TRANSCRIPT_PROBE_MAX_BYTES);
-      const n = readSync(fd, buf, 0, buf.length, 0);
-      raw = buf.toString("utf-8", 0, n);
+      const chunk = Buffer.alloc(TRANSCRIPT_PROBE_MAX_BYTES);
+      let acc = "";
+      let offset = 0;
+      const HARD_CAP = TRANSCRIPT_PROBE_MAX_BYTES * 16; // 4MB ceiling
+      while (offset < HARD_CAP) {
+        const n = readSync(fd, chunk, 0, chunk.length, offset);
+        if (n <= 0) break;
+        acc += chunk.toString("utf-8", 0, n);
+        offset += n;
+        if (acc.includes("\n")) break; // at least one complete record
+      }
+      raw = acc;
     } finally {
       closeSync(fd);
     }
@@ -1376,7 +1389,6 @@ function preparePages(
           continue;
         }
         page = buildTranscriptPage(path, session);
-        if (page.partial) partialPages++;
       } else {
         page = buildArtifactPage(path, type);
       }
@@ -1460,6 +1472,10 @@ function preparePages(
   if (args.limit !== null && finalPrepared.length > args.limit) {
     finalPrepared = finalPrepared.slice(0, args.limit);
   }
+
+  // Derived from the FINAL set: partial counts must describe pages that are
+  // actually eligible and within the limit, not the whole scanned corpus.
+  partialPages = finalPrepared.filter((p) => p.partial).length;
 
   return {
     prepared: finalPrepared,
