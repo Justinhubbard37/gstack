@@ -19,7 +19,7 @@ import type { TemplateContext, ResolverFn } from './types';
 // Domain modules
 import { generatePreamble } from './preamble';
 import { generateTestFailureTriage } from './preamble';
-import { generateCommandReference, generateSnapshotFlags, generateBrowseSetup } from './browse';
+import { generateCommandReference, generateSnapshotFlags, generateBrowseSetup, generateUntrustedContentWarning } from './browse';
 import { generateDesignMethodology, generateDesignHardRules, generateDesignOutsideVoices, generateDesignReviewLite, generateDesignSketch, generateDesignSetup, generateDesignMockup, generateDesignShotgunLoop, generateTasteProfile, generateUXPrinciples } from './design';
 import { generateTestBootstrap, generateTestCoverageAuditPlan, generateTestCoverageAuditShip } from './testing';
 import { generateReviewDashboard, generatePlanFileReviewReport, generateExitPlanModeGate, generateAntiShortcutClause, generateSpecReviewLoop, generateBenefitsFrom, generateCodexSecondOpinion, generateAdversarialStep, generateCodexPlanReview, generateCodexDocReview, generatePlanCompletionAuditShip, generatePlanCompletionAuditReview, generatePlanVerificationExec, generateScopeDrift, generateCrossReviewDedup } from './review';
@@ -45,6 +45,7 @@ export const RESOLVERS: Record<string, ResolverFn> = {
   DESIGN_DOC_DISCOVERY: generateDesignDocDiscovery,
   COMMAND_REFERENCE: generateCommandReference,
   SNAPSHOT_FLAGS: generateSnapshotFlags,
+  UNTRUSTED_CONTENT_WARNING: generateUntrustedContentWarning,
   PREAMBLE: generatePreamble,
   BROWSE_SETUP: generateBrowseSetup,
   BASE_BRANCH_DETECT: generateBaseBranchDetect,
