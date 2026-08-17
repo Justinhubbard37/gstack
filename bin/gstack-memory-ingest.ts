@@ -68,6 +68,7 @@ import {
 import { execGbrainText, spawnGbrainAsync } from "../lib/gbrain-exec";
 import { writeReceipt } from "../lib/egress-receipt";
 import { checkOwnedStagingDir, STAGING_MARKER } from "../lib/staging-guard";
+import { hasRepoPolicyStore, repoPolicyTierBatch } from "../lib/gbrain-repo-policy-client";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -150,6 +151,14 @@ interface BulkResult {
   skipped_secret: number;
   skipped_dedup: number;
   skipped_unattributed: number;
+  /**
+   * #2392: transcripts skipped because their git remote's trust tier in
+   * ~/.gstack/gbrain-repo-policy.json is `read-only` (search allowed, page
+   * writes never — and transcript ingest writes pages).
+   */
+  skipped_policy_readonly: number;
+  /** #2392: transcripts skipped because their remote's trust tier is `deny`. */
+  skipped_policy_deny: number;
   failed: number;
   duration_ms: number;
   partial_pages: number;
@@ -914,6 +923,14 @@ interface PreparedPage {
   /** Carry-through fields for state recording on success. */
   page_slug: string;
   partial: boolean;
+  /** Memory type — the per-remote policy filter (#2392) applies to transcripts only. */
+  type: MemoryType;
+  /**
+   * Canonical git remote ("host/org/repo") for transcript pages; undefined
+   * for artifacts (whose PageRecord.git_remote is a project slug, not a
+   * remote — artifacts are never policy-filtered).
+   */
+  git_remote?: string;
 }
 
 interface StagingResult {
@@ -1210,8 +1227,16 @@ function preparePages(
   skippedSecret: number;
   skippedDedup: number;
   skippedUnattributed: number;
+  skippedPolicyReadonly: number;
+  skippedPolicyDeny: number;
   parseFailed: number;
   partialPages: number;
+  /**
+   * #2392: set when the per-remote policy store EXISTS but could not be
+   * read (corrupt file, spawn failure). The caller must abort before any
+   * writes — proceeding would bypass a possibly-set deny policy.
+   */
+  policyError?: string;
 } {
   const prepared: PreparedPage[] = [];
   let skippedSecret = 0;
@@ -1280,16 +1305,78 @@ function preparePages(
       rendered_body: renderPageBody(page),
       page_slug: page.slug,
       partial: page.partial ?? false,
+      type,
+      // Only transcripts carry a real remote; buildArtifactPage's git_remote
+      // is a project slug, and artifacts are never policy-filtered (#2392).
+      git_remote: type === "transcript" ? page.git_remote : undefined,
     });
   }
 
+  // #2392: per-remote trust policy for transcript pages — the same store the
+  // code-import gate honors (bin/gstack-gbrain-sync.ts). One batch spawn for
+  // all distinct remotes in the run; no store on disk → zero policy work.
+  // Runs AFTER the loop because preparePages accumulates fully in memory (no
+  // writes happen until the caller stages), so filtering here is still
+  // strictly before any write.
+  let finalPrepared = prepared;
+  let skippedPolicyReadonly = 0;
+  let skippedPolicyDeny = 0;
+  let policyError: string | undefined;
+  if (hasRepoPolicyStore()) {
+    const remotes = [
+      ...new Set(
+        prepared
+          .filter((p) => p.type === "transcript" && p.git_remote)
+          .map((p) => p.git_remote as string),
+      ),
+    ];
+    if (remotes.length > 0) {
+      const verdicts = repoPolicyTierBatch(remotes);
+      // The store EXISTS (checked above), so an unreadable/spawn-failed
+      // result is a HARD ERROR — match the fail-closed polarity of
+      // gstack-gbrain-sync's code-import gate: never bypass a set policy.
+      const broken = remotes.find((r) => {
+        const v = verdicts.get(r);
+        return !v || v.error !== undefined;
+      });
+      if (broken) {
+        const kind = verdicts.get(broken)?.error === "spawn-failed"
+          ? "the policy helper could not be spawned (bash missing from PATH?)"
+          : "the policy store could not be read (corrupt file?)";
+        policyError =
+          `repo policy store exists but ${kind} — refusing transcript ingest rather than ` +
+          `bypassing a possibly-set deny policy. Inspect with: gstack-gbrain-repo-policy list; ` +
+          `re-run /setup-gbrain if the store is corrupt.`;
+      } else {
+        finalPrepared = prepared.filter((p) => {
+          if (p.type !== "transcript" || !p.git_remote) return true;
+          const tier = verdicts.get(p.git_remote)?.tier ?? "none";
+          if (tier === "read-only") {
+            // Honoring an explicit user setting (search allowed, page writes
+            // never) — transcript ingest writes pages, so skip.
+            skippedPolicyReadonly++;
+            return false;
+          }
+          if (tier === "deny") {
+            skippedPolicyDeny++;
+            return false;
+          }
+          return true; // read-write, or none (no policy set for this remote)
+        });
+      }
+    }
+  }
+
   return {
-    prepared,
+    prepared: finalPrepared,
     skippedSecret,
     skippedDedup,
     skippedUnattributed,
+    skippedPolicyReadonly,
+    skippedPolicyDeny,
     parseFailed,
     partialPages,
+    policyError,
   };
 }
 
@@ -1636,6 +1723,25 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
   let written = 0;
   let failed = 0;
 
+  // #2392 HARD ERROR: the policy store exists but could not be consulted.
+  // Abort before ANY write — state recording, staging, gbrain import — so a
+  // corrupt store can never silently bypass a set deny/read-only policy.
+  if (prep.policyError) {
+    console.error(`[memory-ingest] ERR: ${prep.policyError}`);
+    return {
+      written: 0,
+      skipped_secret: prep.skippedSecret,
+      skipped_dedup: prep.skippedDedup,
+      skipped_unattributed: prep.skippedUnattributed,
+      skipped_policy_readonly: prep.skippedPolicyReadonly,
+      skipped_policy_deny: prep.skippedPolicyDeny,
+      failed: prep.parseFailed + prep.prepared.length,
+      duration_ms: Date.now() - t0,
+      partial_pages: prep.partialPages,
+      system_error: prep.policyError,
+    };
+  }
+
   if (args.noWrite) {
     // --no-write: skip the gbrain import call but still record state for
     // prepared pages (treat them as ingested for dedup purposes). Matches
@@ -1664,6 +1770,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
       skipped_secret: prep.skippedSecret,
       skipped_dedup: prep.skippedDedup,
       skipped_unattributed: prep.skippedUnattributed,
+      skipped_policy_readonly: prep.skippedPolicyReadonly,
+      skipped_policy_deny: prep.skippedPolicyDeny,
       failed: prep.parseFailed,
       duration_ms: Date.now() - t0,
       partial_pages: prep.partialPages,
@@ -1680,6 +1788,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
       skipped_secret: prep.skippedSecret,
       skipped_dedup: prep.skippedDedup,
       skipped_unattributed: prep.skippedUnattributed,
+      skipped_policy_readonly: prep.skippedPolicyReadonly,
+      skipped_policy_deny: prep.skippedPolicyDeny,
       failed: prep.parseFailed,
       duration_ms: Date.now() - t0,
       partial_pages: prep.partialPages,
@@ -1695,6 +1805,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
       skipped_secret: prep.skippedSecret,
       skipped_dedup: prep.skippedDedup,
       skipped_unattributed: prep.skippedUnattributed,
+      skipped_policy_readonly: prep.skippedPolicyReadonly,
+      skipped_policy_deny: prep.skippedPolicyDeny,
       failed: prep.parseFailed + prep.prepared.length,
       duration_ms: Date.now() - t0,
       partial_pages: prep.partialPages,
@@ -1842,6 +1954,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
         skipped_secret: prep.skippedSecret,
         skipped_dedup: prep.skippedDedup,
         skipped_unattributed: prep.skippedUnattributed,
+        skipped_policy_readonly: prep.skippedPolicyReadonly,
+        skipped_policy_deny: prep.skippedPolicyDeny,
         failed,
         duration_ms: Date.now() - t0,
         partial_pages: prep.partialPages,
@@ -1881,6 +1995,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
         skipped_secret: prep.skippedSecret,
         skipped_dedup: prep.skippedDedup,
         skipped_unattributed: prep.skippedUnattributed,
+        skipped_policy_readonly: prep.skippedPolicyReadonly,
+        skipped_policy_deny: prep.skippedPolicyDeny,
         failed,
         duration_ms: Date.now() - t0,
         partial_pages: prep.partialPages,
@@ -1917,6 +2033,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
           skipped_secret: prep.skippedSecret,
           skipped_dedup: prep.skippedDedup,
           skipped_unattributed: prep.skippedUnattributed,
+          skipped_policy_readonly: prep.skippedPolicyReadonly,
+          skipped_policy_deny: prep.skippedPolicyDeny,
           failed,
           duration_ms: Date.now() - t0,
           partial_pages: prep.partialPages,
@@ -1935,6 +2053,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
         skipped_secret: prep.skippedSecret,
         skipped_dedup: prep.skippedDedup,
         skipped_unattributed: prep.skippedUnattributed,
+        skipped_policy_readonly: prep.skippedPolicyReadonly,
+        skipped_policy_deny: prep.skippedPolicyDeny,
         failed,
         duration_ms: Date.now() - t0,
         partial_pages: prep.partialPages,
@@ -1963,6 +2083,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
         skipped_secret: prep.skippedSecret,
         skipped_dedup: prep.skippedDedup,
         skipped_unattributed: prep.skippedUnattributed,
+        skipped_policy_readonly: prep.skippedPolicyReadonly,
+        skipped_policy_deny: prep.skippedPolicyDeny,
         failed,
         duration_ms: Date.now() - t0,
         partial_pages: prep.partialPages,
@@ -2015,6 +2137,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
         skipped_secret: prep.skippedSecret,
         skipped_dedup: prep.skippedDedup,
         skipped_unattributed: prep.skippedUnattributed,
+        skipped_policy_readonly: prep.skippedPolicyReadonly,
+        skipped_policy_deny: prep.skippedPolicyDeny,
         failed,
         duration_ms: Date.now() - t0,
         partial_pages: prep.partialPages,
@@ -2094,6 +2218,8 @@ async function ingestPass(args: CliArgs): Promise<BulkResult> {
     skipped_secret: prep.skippedSecret,
     skipped_dedup: prep.skippedDedup,
     skipped_unattributed: prep.skippedUnattributed,
+    skipped_policy_readonly: prep.skippedPolicyReadonly,
+    skipped_policy_deny: prep.skippedPolicyDeny,
     failed: failed + prep.parseFailed,
     duration_ms: Date.now() - t0,
     partial_pages: prep.partialPages,
@@ -2140,6 +2266,12 @@ function printBulkResult(r: BulkResult, args: CliArgs): void {
   console.log(`  skipped (dedup):       ${r.skipped_dedup}`);
   console.log(`  skipped (secret-scan): ${r.skipped_secret}`);
   console.log(`  skipped (unattrib):    ${r.skipped_unattributed}`);
+  if (r.skipped_policy_readonly > 0) {
+    console.log(`  skipped (policy read-only): ${r.skipped_policy_readonly}  (remote tier is read-only; transcript ingest writes pages)`);
+  }
+  if (r.skipped_policy_deny > 0) {
+    console.log(`  skipped (policy deny):      ${r.skipped_policy_deny}  (change with: gstack-gbrain-repo-policy set <remote> read-write)`);
+  }
   console.log(`  failed:                ${r.failed}`);
   console.log(`  duration:              ${(r.duration_ms / 1000).toFixed(1)}s`);
   if (args.benchmark) {

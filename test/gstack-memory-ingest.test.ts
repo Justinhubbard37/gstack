@@ -939,3 +939,213 @@ describe("#2394: probe applies the same attribution gate as prepare", () => {
     rmSync(home, { recursive: true, force: true });
   });
 });
+
+// ── #2392: transcript ingest honors the per-remote trust policy ─────────────
+//
+// The same store the code-import gate honors (bin/gstack-gbrain-sync.ts):
+// tier `deny` and `read-only` transcripts are skipped with their own counters;
+// a store that EXISTS but can't be read is a hard error before any writes
+// (never a silent bypass of a set policy); no store at all = zero policy work.
+// The policy store is seeded through the REAL bin/gstack-gbrain-repo-policy
+// script (its `set` verb owns the file schema + URL normalization).
+
+describe("#2392: transcript ingest honors per-remote trust policy", () => {
+  const POLICY_BIN = join(import.meta.dir, "..", "bin", "gstack-gbrain-repo-policy");
+
+  /** Attributable temp git repo whose origin points at `remoteUrl`. */
+  function makeRepoWithRemote(home: string, name: string, remoteUrl: string): string {
+    const repo = join(home, "work", name);
+    mkdirSync(repo, { recursive: true });
+    spawnSync("git", ["-C", repo, "init", "-q"], { encoding: "utf-8" });
+    spawnSync("git", ["-C", repo, "remote", "add", "origin", remoteUrl], { encoding: "utf-8" });
+    return repo;
+  }
+
+  function writeSessionForRepo(home: string, projectName: string, sessionId: string, cwd: string): void {
+    const record = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: `hello from ${sessionId}` },
+      timestamp: new Date().toISOString(),
+      cwd,
+    });
+    writeClaudeCodeSession(home, projectName, sessionId, record + "\n");
+  }
+
+  function setPolicy(gstackHome: string, url: string, tier: string): void {
+    const r = spawnSync(POLICY_BIN, ["set", url, tier], {
+      encoding: "utf-8",
+      env: { ...process.env, GSTACK_HOME: gstackHome },
+    });
+    expect(r.status).toBe(0);
+  }
+
+  function stateSessions(gstackHome: string): string[] {
+    const statePath = join(gstackHome, ".transcript-ingest-state.json");
+    if (!existsSync(statePath)) return [];
+    return Object.keys(JSON.parse(readFileSync(statePath, "utf-8")).sessions || {});
+  }
+
+  it("(a) deny remote's transcript is skipped and counted as skipped_policy_deny", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const { binDir, logFile } = installFakeGbrain(home);
+
+    const denyCwd = makeRepoWithRemote(home, "denied", "https://github.com/denyme/denied.git");
+    const okCwd = makeRepoWithRemote(home, "allowed", "https://github.com/okorg/okrepo.git");
+    writeSessionForRepo(home, "work-denied", "denysess1", denyCwd);
+    writeSessionForRepo(home, "work-allowed", "oksess1", okCwd);
+    setPolicy(gstackHome, "https://github.com/denyme/denied.git", "deny");
+
+    const r = runScript(["--bulk", "--quiet"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/written:\s+1/);
+    expect(r.stdout).toMatch(/skipped \(policy deny\):\s+1/);
+    expect(r.stdout).not.toMatch(/skipped \(policy read-only\)/);
+
+    // Only the allowed session was imported + state-recorded.
+    expect(existsSync(logFile)).toBe(true);
+    const sessions = stateSessions(gstackHome);
+    expect(sessions.length).toBe(1);
+    expect(sessions[0]).toContain("oksess1");
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(b) read-only remote's transcript is skipped and counted as skipped_policy_readonly", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const { binDir } = installFakeGbrain(home);
+
+    const roCwd = makeRepoWithRemote(home, "readonly", "https://github.com/roorg/rorepo.git");
+    const okCwd = makeRepoWithRemote(home, "allowed", "https://github.com/okorg/okrepo.git");
+    writeSessionForRepo(home, "work-readonly", "rosess1", roCwd);
+    writeSessionForRepo(home, "work-allowed", "oksess1", okCwd);
+    setPolicy(gstackHome, "https://github.com/roorg/rorepo.git", "read-only");
+
+    const r = runScript(["--bulk", "--quiet"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/written:\s+1/);
+    expect(r.stdout).toMatch(/skipped \(policy read-only\):\s+1/);
+    const sessions = stateSessions(gstackHome);
+    expect(sessions.length).toBe(1);
+    expect(sessions[0]).toContain("oksess1");
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(c) read-write remote's transcript is ingested (reaches gbrain import)", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const { binDir, logFile } = installFakeGbrain(home);
+
+    const rwCwd = makeRepoWithRemote(home, "readwrite", "https://github.com/rworg/rwrepo.git");
+    writeSessionForRepo(home, "work-readwrite", "rwsess1", rwCwd);
+    setPolicy(gstackHome, "https://github.com/rworg/rwrepo.git", "read-write");
+
+    const r = runScript(["--bulk", "--quiet"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/written:\s+1/);
+    expect(r.stdout).not.toMatch(/skipped \(policy/);
+    // gbrain import ran exactly once — the page reached the import stage.
+    const calls = readFileSync(logFile, "utf-8").trim().split("\n").filter(Boolean);
+    expect(calls.length).toBe(1);
+    expect(stateSessions(gstackHome).length).toBe(1);
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(d) corrupted store: hard error before any writes, message names recovery", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const { binDir, logFile } = installFakeGbrain(home);
+
+    const cwd = makeRepoWithRemote(home, "somerepo", "https://github.com/some/repo.git");
+    writeSessionForRepo(home, "work-somerepo", "somesess1", cwd);
+    // Corrupt store — the batch verb refuses (exit 2), the client classifies
+    // `unreadable`, and ingest must abort rather than bypass a set policy.
+    writeFileSync(join(gstackHome, "gbrain-repo-policy.json"), "not valid json{", "utf-8");
+
+    const r = runScript(["--bulk", "--quiet"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/\[memory-ingest\] ERR:.*repo policy store exists/);
+    expect(r.stderr).toContain("gstack-gbrain-repo-policy list");
+    expect(r.stderr).toContain("/setup-gbrain");
+    // Nothing written: no gbrain import call, no state file, store untouched.
+    expect(existsSync(logFile)).toBe(false);
+    expect(stateSessions(gstackHome).length).toBe(0);
+    expect(readFileSync(join(gstackHome, "gbrain-repo-policy.json"), "utf-8")).toBe("not valid json{");
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("(e) no store at all: no policy filtering, transcript ingests normally", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(gstackHome, { recursive: true });
+    const { binDir } = installFakeGbrain(home);
+
+    const cwd = makeRepoWithRemote(home, "freerepo", "https://github.com/free/repo.git");
+    writeSessionForRepo(home, "work-freerepo", "freesess1", cwd);
+
+    const r = runScript(["--bulk", "--quiet"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/written:\s+1/);
+    expect(r.stdout).not.toMatch(/skipped \(policy/);
+    expect(stateSessions(gstackHome).length).toBe(1);
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("artifacts are never policy-filtered, even when their project's remote is denied", () => {
+    const home = makeTestHome();
+    const gstackHome = join(home, ".gstack");
+    mkdirSync(join(gstackHome, "projects", "denyme-denied"), { recursive: true });
+    const { binDir } = installFakeGbrain(home);
+
+    // A learning artifact under a project slug matching a denied remote —
+    // the policy is keyed by git remote, which artifacts don't have.
+    writeFileSync(join(gstackHome, "projects", "denyme-denied", "learnings.jsonl"), '{"key":"a","insight":"b"}\n');
+    setPolicy(gstackHome, "https://github.com/denyme/denied.git", "deny");
+
+    const r = runScript(["--bulk", "--quiet"], {
+      HOME: home,
+      GSTACK_HOME: gstackHome,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/written:\s+1/);
+    expect(r.stdout).not.toMatch(/skipped \(policy/);
+
+    rmSync(home, { recursive: true, force: true });
+  });
+});
