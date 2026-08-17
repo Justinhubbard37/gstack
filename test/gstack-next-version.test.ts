@@ -542,6 +542,163 @@ describe("fetchGitClaimed (offline allocation — the anti-duplicate fallback, #
   });
 });
 
+describe("fetchGitClaimed — non-mutating live remote query (ls-remote first)", () => {
+  // The degraded git-fallback used to count EVERY remote-tracking ref on EVERY
+  // remote: branches deleted on origin (stale local refs) and an unrelated
+  // `upstream` remote's branches all inflated the claim set, pushing the
+  // allocation past the real queue. `git ls-remote --heads origin` returns the
+  // remote's LIVE branch list with zero local mutation — a path/file remote
+  // answers it offline, which is exactly what these fixtures use.
+  function git(cwd: string, ...args: string[]) {
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+  }
+
+  // Local origin with: main (0.1.66.0), sibling (0.1.67.0, live claim), and
+  // dead (0.1.98.0) — deleted on origin AFTER the clone, so the clone keeps a
+  // stale refs/remotes/origin/dead. Plus a second remote's stale claim ref.
+  function liveFixture(): { root: string; clone: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-lsremote-"));
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "VERSION"), "0.1.66.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.66.0 chore: base");
+    git(origin, "checkout", "-q", "-b", "sibling");
+    writeFileSync(join(origin, "VERSION"), "0.1.67.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+    git(origin, "checkout", "-q", "-b", "dead");
+    writeFileSync(join(origin, "VERSION"), "0.1.98.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.98.0 feat: deleted later");
+    git(origin, "checkout", "-q", "main");
+    const clone = join(root, "clone");
+    git(root, "clone", "-q", origin, clone);
+    // Deleted on the REMOTE after the clone — the stale local ref survives.
+    git(origin, "branch", "-qD", "dead");
+    // A second remote carrying a stale claim branch: must never be counted.
+    git(clone, "checkout", "-q", "-b", "tmp-upstream");
+    writeFileSync(join(clone, "VERSION"), "0.1.99.0\n");
+    git(clone, "add", "-A");
+    git(clone, "commit", "-qm", "v0.1.99.0 upstream stale claim");
+    const upSha = new TextDecoder().decode(git(clone, "rev-parse", "HEAD").stdout).trim();
+    git(clone, "checkout", "-q", "main");
+    git(clone, "branch", "-qD", "tmp-upstream");
+    git(clone, "update-ref", "refs/remotes/upstream/stale", upSha);
+    return { root, clone };
+  }
+
+  test("live path: only branches that exist on origin RIGHT NOW are claims", () => {
+    const { root, clone } = liveFixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0"); // live sibling claim
+      expect(versions).not.toContain("0.1.98.0"); // deleted on origin — stale local ref ignored
+      expect(versions).not.toContain("0.1.99.0"); // second remote's refs are not our queue
+      // The live path emits no staleness warning.
+      expect(warnings.join(" ")).not.toContain("ls-remote");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("zero local mutation: the stale remote-tracking ref survives the query", () => {
+    // ls-remote reads the remote without fetch/prune — an allocator run must
+    // never rewrite local refs as a side effect.
+    const { root, clone } = liveFixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(clone);
+      fetchGitClaimed("main", "VERSION", []);
+      const ref = git(clone, "rev-parse", "--verify", "-q", "refs/remotes/origin/dead");
+      expect(ref.exitCode).toBe(0);
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fallback: ls-remote failure uses LOCAL refs/remotes/origin only, with a staleness warning", () => {
+    // No origin remote configured at all — ls-remote must fail, and the
+    // fallback must scan refs/remotes/origin ONLY (never other remotes).
+    const dir = mkdtempSync(join(tmpdir(), "nextver-lsfallback-"));
+    const cwd = process.cwd();
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+      const sibSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "-b", "stale2");
+      writeFileSync(join(dir, "VERSION"), "0.1.99.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.99.0 upstream stale claim");
+      const upSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sibSha);
+      git(dir, "update-ref", "refs/remotes/upstream/stale", upSha);
+
+      process.chdir(dir);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0"); // origin's local snapshot still counts
+      expect(versions).not.toContain("0.1.99.0"); // upstream remote is ignored
+      expect(warnings.join(" ")).toContain("stale local refs/remotes/origin");
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("width pinned on failed base read (3-digit repos)", () => {
+  // readBaseVersion used to return a literal "0.0.0.0" when origin/<base> was
+  // unreadable — a 4-digit string, which flipped versionWidth() to 4 and
+  // handed a 3-digit repo a 4-digit slot its tooling can't read back (#2501's
+  // width class, resurfacing through the failure path). The zero base is now
+  // shaped by the LOCAL version file's width.
+  const SCRIPT = join(import.meta.dir, "..", "bin", "gstack-next-version");
+
+  test("a 3-digit repo keeps 3-digit allocation when origin/<base> is unreadable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-width3-"));
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-width3-stub-"));
+    try {
+      // gh/glab stubs fail → host unknown → git fallback; no origin remote →
+      // the base read fails too, which is the path under test.
+      writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      writeFileSync(join(stubDir, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir });
+      writeFileSync(join(dir, "VERSION"), "0.99.2\n");
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { cwd: dir });
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+
+      const proc = Bun.spawnSync(
+        ["bun", "run", SCRIPT, "--base", "main", "--bump", "patch", "--workspace-root", "null"],
+        { cwd: dir, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      );
+      const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+      // Zero base at the repo's OWN width — never "0.0.0.0" in a 3-digit repo.
+      expect(out.base_version).toBe("0.0.0");
+      expect(out.version).toBe("0.0.1"); // 3-digit allocation, not 0.0.1.0
+      expect(out.warnings.join(" ")).not.toContain("0.0.0.0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe("integration (smoke)", () => {
   // Bumps timeout to 30s — the test spawns a real `bun run` subprocess that
   // does a `gh pr list` against the live GitHub API to inspect claimed slots.
