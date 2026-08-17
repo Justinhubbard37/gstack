@@ -61,7 +61,11 @@ describe('setup: _link_or_copy invariant (D7)', () => {
     const hookEnd = SETUP_SRC.indexOf('\nif [ "$TEAM_MODE" -eq 1 ]', hookStart);
     const hookSection = SETUP_SRC.slice(hookStart, hookEnd);
     expect(hookSection).toContain('IS_WINDOWS');
-    expect(hookSection).toContain('bash $SOURCE_GSTACK_DIR/bin/gstack-session-update');
+    // v1.67.2 phantom-hooks fix: the command comes from the CANONICAL install
+    // via _hook_command_path (never $SOURCE_GSTACK_DIR — ephemeral trees were
+    // baked into settings.json), but the Windows bash prefix survives.
+    expect(hookSection).toContain('HOOK_CMD="bash $SESSION_UPDATE_CMD"');
+    expect(hookSection).toContain('_hook_command_path bin/gstack-session-update');
   });
 });
 

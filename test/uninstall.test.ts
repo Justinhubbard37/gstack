@@ -231,3 +231,70 @@ describe('gstack-uninstall', () => {
     });
   });
 });
+
+// ----------------------------------------------------------------------
+// Hook-cleanup ordering (phantom-hooks fix). Pre-v1.67.2, the settings
+// cleanup ran AFTER `rm -rf $CLAUDE_SKILLS/gstack` — and SETTINGS_HOOK
+// resolves via $(dirname "$0") INSIDE that root, so a real global uninstall
+// (running the installed copy) silently orphaned every hook. Prior tests
+// masked this by running the uninstaller from the repo checkout. This test
+// runs the INSTALLED copy.
+// ----------------------------------------------------------------------
+
+describe('hook cleanup runs before the install root is deleted', () => {
+  test('uninstall executed FROM the install root still removes hook entries', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-uninstall-order-'));
+    try {
+      const mockHome = path.join(tmp, 'home');
+      const installRoot = path.join(mockHome, '.claude', 'skills', 'gstack');
+      const installBin = path.join(installRoot, 'bin');
+      fs.mkdirSync(installBin, { recursive: true });
+      // The installed copies — the uninstaller under test IS the one inside
+      // the root it deletes.
+      for (const b of ['gstack-uninstall', 'gstack-settings-hook', 'gstack-session-update', 'gstack-config']) {
+        const src = path.join(ROOT, 'bin', b);
+        const dst = path.join(installBin, b);
+        fs.copyFileSync(src, dst);
+        fs.chmodSync(dst, 0o755);
+      }
+      const settingsFile = path.join(mockHome, '.claude', 'settings.json');
+      fs.writeFileSync(settingsFile, JSON.stringify({
+        hooks: {
+          PostToolUse: [{
+            matcher: '(AskUserQuestion|mcp__.*__AskUserQuestion)',
+            _gstack_source: 'auq-error-fallback',
+            hooks: [{ type: 'command', command: '/dead/wt/hosts/claude/hooks/auq-error-fallback-hook', timeout: 5 }],
+          }],
+          Stop: [{
+            hooks: [{ type: 'command', command: `${installRoot}/hosts/claude/hooks/timeline-stop-hook`, timeout: 5 }],
+          }],
+          PreCompact: [{ hooks: [{ type: 'command', command: '/Users/me/my-own-hook' }] }],
+        },
+      }, null, 2));
+      fs.mkdirSync(path.join(mockHome, '.gstack'), { recursive: true });
+
+      const result = spawnSync('bash', [path.join(installBin, 'gstack-uninstall'), '--force', '--keep-state'], {
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HOME: mockHome,
+          GSTACK_SETTINGS_FILE: settingsFile,
+          GSTACK_STATE_ROOT: path.join(mockHome, '.gstack'),
+        },
+        cwd: tmp,
+      });
+      expect(result.status).toBe(0);
+
+      // Install root gone…
+      expect(fs.existsSync(installRoot)).toBe(false);
+      // …and the hook entries were still cleaned (cleanup ran BEFORE deletion).
+      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+      expect(s.hooks?.PostToolUse).toBeUndefined();
+      expect(s.hooks?.Stop).toBeUndefined();
+      // The user's own hook survives the sweep.
+      expect(s.hooks?.PreCompact?.[0]?.hooks?.[0]?.command).toBe('/Users/me/my-own-hook');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
