@@ -122,3 +122,40 @@ describe('gate wiring — every tunnel activation point consults the guard', () 
     expect(SERVER_SRC).toContain("process.env.BROWSE_TUNNEL === '1' && !isPairAgentEnabled()");
   });
 });
+
+describe('pair-agent headed switch — #2219 iron-rule consent gate', () => {
+  // The behavioral leg (live daemon + no flag → notice, no kill) lives in
+  // busy-daemon-iron-rule.test.ts. These source pins cover the wiring the
+  // integration test can't exercise cheaply: the explicit-flag path and the
+  // capture-before-ensureServer ordering.
+
+  test('headed relaunch of a pre-existing live daemon is gated on explicit --force-restart', () => {
+    const gateAt = CLI_SRC.indexOf('if (pairAgentPreexistingDaemonAlive && !globalFlags.forceRestart) {');
+    expect(gateAt).toBeGreaterThan(-1);
+    // Refusal branch: notice printed, connect never spawned.
+    const elseAt = CLI_SRC.indexOf('} else {', gateAt);
+    expect(elseAt).toBeGreaterThan(gateAt);
+    const refusalBranch = CLI_SRC.slice(gateAt, elseAt);
+    expect(refusalBranch).toContain('continuing against it');
+    expect(refusalBranch).toContain('--force-restart to relaunch headed');
+    expect(refusalBranch).not.toContain('Bun.spawn');
+    // Consented branch (no pre-existing daemon OR explicit flag): the spawn
+    // of `connect --force-restart` lives here and ONLY here.
+    const branchEnd = CLI_SRC.indexOf('await handlePairAgent(state, commandArgs);', gateAt);
+    expect(branchEnd).toBeGreaterThan(elseAt);
+    const consentedBranch = CLI_SRC.slice(elseAt, branchEnd);
+    expect(consentedBranch).toContain("Bun.spawn([browseBin, 'connect', '--force-restart']");
+    // No second spawn site outside the gated block.
+    expect(CLI_SRC.indexOf("'connect', '--force-restart'")).toBe(CLI_SRC.lastIndexOf("'connect', '--force-restart'"));
+  });
+
+  test('pre-existing liveness is captured BEFORE ensureServer can boot a fresh daemon', () => {
+    // If the capture ran after ensureServer, a freshly-booted daemon would be
+    // indistinguishable from a session the user cares about — the gate would
+    // then refuse the headed switch even on a clean machine.
+    const captureAt = CLI_SRC.indexOf('pairAgentPreexistingDaemonAlive = Boolean(preState?.pid && isProcessAlive(preState.pid));');
+    const ensureAt = CLI_SRC.indexOf('let state = await ensureServer(globalFlags);');
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(ensureAt).toBeGreaterThan(captureAt);
+  });
+});

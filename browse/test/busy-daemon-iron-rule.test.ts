@@ -146,6 +146,44 @@ describe('#2219 iron rule (CLI integration)', () => {
     }
   }, 30_000);
 
+  test('pair-agent over a live headless daemon WITHOUT --force-restart → daemon survives, notice printed, no headed relaunch', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-iron-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    const daemon = await startHealthyDaemon();
+    try {
+      pidChild = spawn('sleep', ['60'], { stdio: 'ignore' });
+      const daemonPid = pidChild.pid!;
+      const stateContent = {
+        pid: daemonPid,
+        port: daemon.port,
+        token: 'iron-rule-token',
+        startedAt: new Date().toISOString(),
+        serverPath: '',
+        mode: 'launched' as const,
+      };
+      fs.writeFileSync(stateFile, JSON.stringify(stateContent, null, 2));
+
+      // Exit code is NOT asserted: the fake daemon answers /pair with
+      // non-JSON so handlePairAgent fails later — the iron rule under test
+      // is everything that happens BEFORE that: no kill, no headed relaunch.
+      const result = await runCli(['pair-agent'], baseEnv(stateFile));
+
+      // The consent notice: live session named, opt-in flag named.
+      expect(result.stderr).toContain('continuing against it');
+      expect(result.stderr).toContain('--force-restart');
+      // No headed relaunch was attempted.
+      const combined = result.stdout + result.stderr;
+      expect(combined).not.toContain('Opening GStack Browser');
+      // THE IRON RULE: the daemon process was not killed.
+      expect(isProcessAlive(daemonPid)).toBe(true);
+      // And the state file was not clobbered.
+      expect(JSON.parse(fs.readFileSync(stateFile, 'utf-8'))).toEqual(stateContent);
+    } finally {
+      await daemon.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test('wedged-alive daemon + plain command → busy report + nonzero exit, NO kill', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-iron-'));
     const stateFile = path.join(tmpDir, 'browse.json');
