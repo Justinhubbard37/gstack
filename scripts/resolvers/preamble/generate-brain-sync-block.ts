@@ -53,8 +53,13 @@ import { quoteSafePath } from '../types';
 // Local config when both scopes define the server). The operand order below
 // (nearest-ancestor project first, user-scope fallback) mirrors that; the
 // pre-wave user-first order mis-resolved whenever the scopes disagreed.
+// The ancestor match accepts BOTH separators: project keys and $PWD are
+// backslash-formed on Windows, so a "/"-only startswith never matched there
+// and project-scoped brains were invisible. `"\\\\"` in this TS source is a
+// jq string containing ONE backslash (TS halves it, jq halves it again) —
+// mirrors the path-boundary handling in the TS scope resolvers.
 const GBRAIN_MCP_ENTRY_JQ =
-  '((.projects // {}) | to_entries | map(select((.key as $k | $cwd == $k or ($cwd | startswith($k + "/"))) and ((try .value.mcpServers.gbrain catch null) != null))) | sort_by(.key | length) | last | .value.mcpServers.gbrain) // .mcpServers.gbrain // empty';
+  '((.projects // {}) | to_entries | map(select((.key as $k | $cwd == $k or ($cwd | startswith($k + "/")) or ($cwd | startswith($k + "\\\\"))) and ((try .value.mcpServers.gbrain catch null) != null))) | sort_by(.key | length) | last | .value.mcpServers.gbrain) // .mcpServers.gbrain // empty';
 
 export function generateBrainSyncBlock(ctx: TemplateContext): string {
   const isBrainHost = ctx.host === 'gbrain' || ctx.host === 'hermes';
