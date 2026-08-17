@@ -167,7 +167,11 @@ lookup_default() {
     question_tuning) echo "false" ;;
     team_mode) echo "false" ;;
     transcript_ingest_mode) echo "off" ;;
-    repo_mode) echo "unknown" ;;
+    # repo_mode: EMPTY is load-bearing — gstack-repo-mode treats any non-empty
+    # answer as a user override and skips its own classification entirely, so
+    # a synthesized "unknown" default turns the classifier into dead code.
+    # Empty + exit 0 = "no override set, go classify".
+    repo_mode) echo "" ;;
     # Unknown key: exit non-zero instead of printing "". The fallback pattern
     # the preambles use,
     #   VAR=$(gstack-config get <key> 2>/dev/null || echo "<default>")

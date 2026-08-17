@@ -123,15 +123,18 @@ describe('gstack-config defaults (gate, free)', () => {
   });
 
   test('a known key whose default is intentionally empty still exits 0', () => {
-    for (const key of ['cross_project_learnings', 'salience_allowlist', 'redact_repo_visibility']) {
+    // repo_mode is in this class BY CONTRACT: gstack-repo-mode treats any
+    // non-empty answer as a user override and skips classification, so a
+    // synthesized "unknown" default would turn the classifier into dead code
+    // (caught live by test/gstack-repo-mode.test.ts during the wave).
+    for (const key of ['cross_project_learnings', 'salience_allowlist', 'redact_repo_visibility', 'repo_mode']) {
       expect({ key, ...get(key) }).toEqual({ key, out: '', code: 0 });
     }
   });
 
-  test('the four keys that regressed resolve to the values their callers assume', () => {
+  test('the regressed keys resolve to the values their callers assume', () => {
     expect(get('question_tuning').out).toBe('false');
     expect(get('team_mode').out).toBe('false');
     expect(get('transcript_ingest_mode').out).toBe('off');
-    expect(get('repo_mode').out).toBe('unknown');
   });
 });
