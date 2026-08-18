@@ -265,7 +265,14 @@ _acquire_lock() {
     fi
     # Stale takeover: atomic rename means exactly one contender wins; the
     # loser loops and re-contends against the winner's fresh mkdir.
-    mtime=$(stat -f %m "$_LOCK_DIR" 2>/dev/null || stat -c %Y "$_LOCK_DIR" 2>/dev/null || echo "")
+    # GNU stat (-c %Y) first: on Linux, BSD-style `stat -f %m` prints a
+    # multi-line FILESYSTEM block to stdout before failing, and the || chain
+    # would capture that garbage alongside the real epoch. BSD stat rejects
+    # -c with no stdout, so macOS falls through cleanly. The numeric guard
+    # below makes any residual garbage inert (no takeover, normal give-up)
+    # instead of an arithmetic abort under set -e.
+    mtime=$(stat -c %Y "$_LOCK_DIR" 2>/dev/null || stat -f %m "$_LOCK_DIR" 2>/dev/null || echo "")
+    case "$mtime" in *[!0-9]*) mtime="" ;; esac
     now=$(date +%s)
     if [ -n "$mtime" ] && [ $(( now - mtime )) -gt "$stale_after_s" ]; then
       stale="$_LOCK_DIR.stale.$$-$RANDOM"
