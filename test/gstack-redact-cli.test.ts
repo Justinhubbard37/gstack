@@ -9,6 +9,13 @@ import * as os from "os";
 
 const BIN = path.resolve(import.meta.dir, "..", "bin", "gstack-redact");
 
+// A synthetic AWS access key for feeding the scanner. Derived by
+// concatenation so the contiguous credential-shaped literal never appears in
+// this file's source — the CI quality gate scans every ADDED diff line with
+// this same engine, and a raw fixture literal here fails the gate it exists
+// to test (#2610 port fallout). The scanner still sees the assembled bytes.
+const FAKE_AWS_KEY = ["AKIA", "1234567890ABCDEF"].join("");
+
 function run(
   args: string[],
   stdin: string,
@@ -28,7 +35,7 @@ describe("gstack-redact exit codes", () => {
     expect(run([], "just some prose").code).toBe(0);
   });
   test("HIGH → 3", () => {
-    expect(run([], "key AKIA1234567890ABCDEF").code).toBe(3);
+    expect(run([], `key ${FAKE_AWS_KEY}`).code).toBe(3);
   });
   test("MEDIUM only → 2", () => {
     expect(run(["--repo-visibility", "public"], "mail bob@corp.io").code).toBe(2);
@@ -37,7 +44,7 @@ describe("gstack-redact exit codes", () => {
 
 describe("gstack-redact --json", () => {
   test("emits valid JSON with findings + counts", () => {
-    const { stdout, code } = run(["--json"], "key AKIA1234567890ABCDEF");
+    const { stdout, code } = run(["--json"], `key ${FAKE_AWS_KEY}`);
     expect(code).toBe(3);
     const parsed = JSON.parse(stdout);
     expect(parsed.findings[0].id).toBe("aws.access_key");
@@ -59,8 +66,8 @@ describe("gstack-redact --allowlist", () => {
   test("allowlisted span is suppressed", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "redact-allow-"));
     const allow = path.join(dir, "allow.txt");
-    fs.writeFileSync(allow, "AKIA1234567890ABCDEF\n");
-    const { code } = run(["--allowlist", allow], "key AKIA1234567890ABCDEF");
+    fs.writeFileSync(allow, FAKE_AWS_KEY + "\n");
+    const { code } = run(["--allowlist", allow], `key ${FAKE_AWS_KEY}`);
     expect(code).toBe(0);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -121,7 +128,7 @@ describe("gstack-redact argv dispatch", () => {
   });
 
   test("--help prints usage and exits 0 without scanning", () => {
-    const { code, stdout } = run(["--help"], "key AKIA1234567890ABCDEF");
+    const { code, stdout } = run(["--help"], `key ${FAKE_AWS_KEY}`);
     expect(code).toBe(0);
     expect(stdout).toContain("STDIN");
     expect(stdout).not.toContain("HIGH=1");
@@ -131,7 +138,7 @@ describe("gstack-redact argv dispatch", () => {
   // invites people to type, so it stays an accepted alias for the default
   // filter mode. Rejecting it would break that muscle memory for no gain.
   test("the 'scan' alias still scans normally", () => {
-    expect(run(["scan"], "key AKIA1234567890ABCDEF").code).toBe(3);
+    expect(run(["scan"], `key ${FAKE_AWS_KEY}`).code).toBe(3);
     expect(run(["scan"], "just prose").code).toBe(0);
   });
 
