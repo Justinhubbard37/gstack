@@ -74,10 +74,19 @@ verified real but needs design input or device access the wave lacked:
   remote-tracking ref on every remote (stale experiment branches inflate the
   allocation) and a failed 3-digit base read flips width to 4. Warned today;
   tighten to origin + width-pin. Effort S.
-- **Stop-hook registration pins the setup-time absolute path** — registering
-  from a dev worktree bakes that path into settings.json; deleting the
-  worktree leaves a dead hook erroring on every session stop until removed.
-  Register the global-install path or re-point on upgrade. Effort S.
+- **setup:1601 CLAUDE_CONFIG_DIR alignment** — the skills installer hardcodes
+  `$HOME/.claude/skills` while settings.json and hook registration honor
+  `CLAUDE_CONFIG_DIR`; users with the override get a split-brain install.
+  Mitigated in v1.68.1 (canonical-root fallback to the home path so hooks
+  still register), but the installer itself should honor the override.
+  **Priority:** P3. Effort S.
+- **Centralize plan_tune_hooks bool parsing + gstack-config key validation** —
+  the `n|no|false|skip|off|0` negative-value set is triplicated
+  (gstack-settings-hook prune-stale, setup heal note, setup PT_DECISION) and
+  gstack-config carries three verbatim copies of the key-validation block
+  (get/has/set). Extract a `gstack-config` bool helper + `validate_key()`;
+  update the locale pin test. Filed via /ship review army (maintainability).
+  **Priority:** P3. Effort S.
 - **Accepted threat-model notes (documented, no action planned):**
   redact-prepush treats content pushed to ANY private remote as already-left
   (accident-only threat model); a parcel-shaped twin within 400 chars can
@@ -2697,6 +2706,21 @@ needs one paid run to validate, so it didn't ride the ship.
 **Effort:** S (human ~2h, CC ~15min + one paid run).
 
 ## Completed
+
+### ✅ DONE (v1.68.1.0): Stop-hook registration pins the setup-time absolute path
+
+**Priority:** P1 (was filed Effort S, scoped to the Stop hook — shipped as the full defect class)
+
+**What:** Registering hooks from a dev worktree baked that worktree's physical
+path into global settings.json; deleting the worktree left dead hooks erroring
+on every AskUserQuestion/session stop. Fixed for ALL gstack hooks, not just
+Stop: canonical-only registration via `_hook_command_path`, a KNOWN_HOOKS
+identity table in `gstack-settings-hook` (survives Claude Code stripping
+`_gstack_source` tags), a `prune-stale [--repoint|--all]` self-healer that
+runs heal-first on every `./setup`, per-item mutation safety, a mutation lock,
+fail-closed parse, and complete uninstall/no-team teardown.
+
+**Completed:** v1.68.1.0 (2026-08-18)
 
 ### ✅ DONE (v1.66.0.0): Free suite exit code is untrustworthy — in-process force-exits mask failures
 

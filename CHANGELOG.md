@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.68.1.0] - 2026-08-18
+
+**Phantom hook errors are dead. Your settings.json now heals itself**
+**on every setup, and no ephemeral path can ever be baked in again.**
+
+If you work in Conductor workspaces or git worktrees, you have probably seen it: `PostToolUse:AskUserQuestion hook error ... No such file or directory` spraying on every question, pointing at a workspace you deleted last week. The cause was a three-part failure. Setup baked the running tree's physical path into your global `~/.claude/settings.json`, the Conductor auto-opt-in overrode the exact flag `bin/dev-setup` passes to prevent that, and the dedupe tag gstack relied on gets stripped by Claude Code itself, so every new workspace appended a fresh dead entry instead of replacing the old one.
+
+All three are fixed at the root. Hook registration is now canonical-only: commands point at the stable `~/.claude/skills/gstack` install or are not registered at all. Ownership is decided by a fixed identity table in `bin/gstack-settings-hook`, per hook item, so it survives tag-stripping and can never claim a hook you wrote yourself. And every `./setup` run now heals first: `gstack-settings-hook prune-stale --repoint` removes dead gstack entries, re-points stale ones, restores stripped tags, and collapses duplicates, printing one line only when it changed something.
+
+### The numbers that matter
+
+Source: the 2026-08-17 incident on a real dev box, replayed byte-for-byte as the `incident facsimile` test in `test/gstack-settings-hook-schema-aware.test.ts`.
+
+| Metric | Before | After | Δ |
+|--------|--------|-------|---|
+| Hook entries in settings.json | 11 (6 dead) | 5, all canonical | −6 dead |
+| Error lines per AskUserQuestion | 4 | 0 | −4 |
+| Hook processes spawned per question that do nothing | 4 | 0 | −4 |
+| Traced code paths under test | — | 53 of 61 (87%) | new |
+
+The healer also fixes damage you could not see: a corrupt settings.json is never overwritten (every mutator now fails closed instead of clobbering it with `{}`), a user-tightened 0600 file keeps its mode across rewrites (settings.json can carry API keys), concurrent setups can no longer rename a half-written temp file into place, and uninstall now cleans hooks BEFORE deleting the install root, which previously made cleanup silently no-op in exactly the case it existed for.
+
+### What this means for you
+
+Run `./setup` (or `/gstack-upgrade`) once and the errors stop, on every machine, with a printed receipt of what was healed and a backup beside the file. New workspaces can never reintroduce them. If you ever want everything gone, `gstack-uninstall` now actually removes every gstack hook, including the ones an older version orphaned.
+
+### Itemized changes
+
+### Added
+- `gstack-settings-hook prune-stale [--repoint <root>] [--all]`: self-healing for hook registrations. Dead gstack entries pruned, stale paths re-pointed at the stable install, stripped `_gstack_source` tags restored from the identity table, exact duplicates and within-entry twins collapsed. Runs automatically at the start of every `./setup`; `--all` is the complete teardown sweep used by uninstall and `--no-team`.
+- `gstack-config has <key>`: key-presence check through the same state-dir resolution as `get` (which returns defaults for absent keys), so consent logic can tell a recorded decision from a default.
+- KNOWN_HOOKS identity table covering all six gstack hooks (plan-tune trio, timeline Stop, session update, verify-gate), shared by registration dedupe and the healer so the two can never drift.
+- A mutation lock around every settings.json write: mkdir-based with an owner token, ownership-checked release, and atomic stale-lock takeover. Backups get unique names and rotate (10 kept); `rollback` validates its pointer and restores atomically.
+
+### Changed
+- Hook registration is canonical-only. Setup never writes a running-tree path into global settings; if the stable install is missing a hook, it skips with a visible log line instead. The Conductor auto-opt-in for AskUserQuestion reliability hooks now respects explicit decisions (flag, env, or a recorded config key) and fires only on the true silent fall-through.
+- `add-event` is the single quoting authority: registered commands are normalized once (whitespace and shell metacharacters escaped), so a spaced or `$`-bearing install path produces a working hook from the first registration. Windows gets the required `bash ` prefix on all hooks, not just SessionStart, and MSYS-form paths no longer read as dead to the healer.
+- All settings.json mutators are per-item: a hook you co-located in the same entry as a gstack hook survives every gstack operation, including uninstall, and gstack never tags an entry that contains your items.
+- Teardown paths (`gstack-uninstall`, `./setup --no-team`) run hook cleanup before any deletion, sweep untagged strays by identity, and keep stderr attached so a skipped cleanup is loud, never silent.
+
+### Fixed
+- Deleted Conductor workspaces and worktrees no longer leave dead hooks erroring on every AskUserQuestion, session start, and stop event.
+- A corrupt settings.json is preserved and reported (exit 3) instead of being replaced with an empty object by the next hook operation.
+- settings.json file mode is preserved across rewrites; fresh files are created 0600.
+- Liveness checks treat only provable absence as dead, so an unmounted volume or permission blip cannot prune a working hook.
+- A vacuous test in the banner-tripwire check executed its script through JSON-as-shell-quoting, silently littering a `2nelsen` artifact in the repo root on every suite run while asserting nothing; it now passes the script as argv and asserts both branches.
+
+### For contributors
+- 60+ new or updated test cases across 8 files, including the incident facsimile, a two-writer concurrency smoke, an uninstall test that runs the installed copy from inside the root it deletes, held-lock teardown visibility, quoting round-trips, and static tripwires pinning canonical-only registration, heal-first ordering, matcher-literal parity, and the shared-prelude call sites.
+- The review pipeline for this release (five specialists plus red team plus two Codex passes) contributed 14 verified hardening fixes; rejected findings are documented in the PR.
+
 ## [1.67.1.0] - 2026-08-16
 
 **We read every line of external-contributor code from the last two months.**
