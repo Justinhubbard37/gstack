@@ -190,6 +190,11 @@ SKILL.md files are **generated** from `.tmpl` templates. To update docs:
 2. Run `bun run gen:skill-docs` (or `bun run build` which does it automatically)
 3. Commit both the `.tmpl` and generated `.md` files
 
+Generation uses each host's `defaultModel` (`claude` for existing hosts, `gpt`
+for Codex) unless `--model` is explicit. Codex installs additionally read the
+top-level model from `${CODEX_HOME:-~/.codex}/config.toml`; rerun
+`./setup --host codex` after changing that model.
+
 To add a new browse command: add it to `browse/src/commands.ts` and rebuild.
 To add a snapshot flag: add it to `SNAPSHOT_FLAGS` in `browse/src/snapshot.ts` and rebuild.
 

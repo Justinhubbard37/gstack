@@ -122,6 +122,13 @@ Or target a specific agent with `./setup --host <name>`:
 | Hermes | `--host hermes` | `~/.hermes/skills/gstack-*/` |
 | GBrain (mod) | `--host gbrain` | `~/.gbrain/skills/gstack-*/` |
 
+For Codex, setup reads the top-level `model` from
+`${CODEX_HOME:-~/.codex}/config.toml` and generates the matching behavioral
+profile. `gpt-5.6-sol` automatically receives bounded-scope instructions that
+finish the requested lake without expanding into adjacent cleanup or speculative
+hardening. Override detection with `./setup --host codex --model <id>`. After
+changing your Codex model, rerun `./setup --host codex` to regenerate the skills.
+
 **Want to add support for another agent?** See [docs/ADDING_A_HOST.md](docs/ADDING_A_HOST.md).
 It's one TypeScript config file, zero code changes.
 
