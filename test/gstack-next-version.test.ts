@@ -5,7 +5,7 @@
 
 import { test, expect, describe } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -385,18 +385,38 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
   // trustworthy when the PR queue is unreachable. That field is therefore
   // load-bearing prose-to-code coupling: if it silently stopped being emitted,
   // /ship would read undefined, treat the run as fully online, and lose the
-  // "verify no sibling holds it" prompt. Asserted end-to-end with a stub `gh`
-  // that always fails, which is what an expired token or an offline laptop
-  // looks like from here.
+  // "verify no sibling holds it" prompt.
+  //
+  // Both tests run the CLI in a LOCAL FIXTURE repo, never the checkout it
+  // lives in: in the real checkout the git fallback does a live
+  // `ls-remote origin` and reads the real branch census, which made this test
+  // depend on the operator's network — and on a shallow CI clone it fetched
+  // the remote's every branch (the shard-deadline hang fixed alongside this).
+  const NEXTVER = join(import.meta.dir, "..", "bin", "gstack-next-version");
+
+  function fixtureRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-contract-"));
+    Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "init", "-q", "-b", "main"], { cwd: dir });
+    writeFileSync(join(dir, "VERSION"), "1.0.0.0\n");
+    Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { cwd: dir });
+    Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v1.0.0.0 chore: base"], { cwd: dir });
+    return dir;
+  }
+
   test("emits fallback:'git' and still returns a version when gh fails", async () => {
+    // Stub `gh` always fails — what an expired token or an offline laptop
+    // looks like from here. No origin remote → ls-remote fails fast and the
+    // allocation comes from local refs, never the network.
     const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-"));
+    const repo = fixtureRepo();
     writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const proc = Bun.spawnSync(
-      ["bun", "run", "./bin/gstack-next-version", "--base", "main",
+      ["bun", "run", NEXTVER, "--base", "main",
        "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
-      { env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      { cwd: repo, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
     );
     rmSync(stubDir, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
     const out = JSON.parse(new TextDecoder().decode(proc.stdout));
     expect(out.offline).toBe(true);
     expect(out.fallback).toBe("git");
@@ -406,13 +426,27 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
   }, 30000);
 
   test("online runs leave fallback null", async () => {
-    const proc = Bun.spawnSync(
-      ["bun", "run", "./bin/gstack-next-version", "--base", "main",
-       "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
+    // Stub `gh` SUCCEEDS (empty PR queue) — the online path asserted
+    // deterministically instead of only when the operator happens to be
+    // authed. Before this stub the test silently no-opped on CI.
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-ok-"));
+    const repo = fixtureRepo();
+    writeFileSync(
+      join(stubDir, "gh"),
+      '#!/bin/sh\ncase "$1" in\n  pr) echo "[]" ;;\n  repo) echo "testowner" ;;\n  *) exit 0 ;;\nesac\n',
+      { mode: 0o755 },
     );
+    const proc = Bun.spawnSync(
+      ["bun", "run", NEXTVER, "--base", "main",
+       "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
+      { cwd: repo, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+    );
+    rmSync(stubDir, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
     const out = JSON.parse(new TextDecoder().decode(proc.stdout));
-    if (out.offline) return; // no network / no gh auth on this machine: nothing to assert
+    expect(out.offline).toBe(false);
     expect(out.fallback).toBe(null);
+    expect(out.version).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
   }, 30000);
 });
 
@@ -702,6 +736,90 @@ describe("fetchGitClaimed — unfetched live claims (G2: ls-remote advertises SH
       const claims = fetchGitClaimed("main", "VERSION", warnings);
       expect(claims.map((c) => c.version)).toContain("0.1.70.0");
       expect(warnings.join(" ")).not.toContain("UNKNOWN claim");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("MANY unfetched claim branches resolve with ONE batched fetch, not a per-branch crawl", () => {
+    // The per-branch fetch loop this replaces ground a shallow CI clone
+    // against a busy remote for minutes (dozens of sequential network
+    // fetches). The network budget must stay one round trip no matter how
+    // many branches are missing — pinned by counting `git fetch` spawns
+    // through a PATH shim.
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    const oldPath = process.env.PATH;
+    const shimDir = mkdtempSync(join(tmpdir(), "nextver-gitshim-"));
+    try {
+      for (const v of ["0.1.70.0", "0.1.71.0", "0.1.72.0"]) {
+        git(origin, "checkout", "-q", "-b", `late-${v.replace(/\./g, "-")}`);
+        writeFileSync(join(origin, "VERSION"), `${v}\n`);
+        git(origin, "add", "-A");
+        git(origin, "commit", "-qm", `v${v} feat: late claim`);
+        git(origin, "checkout", "-q", "main");
+      }
+
+      const realGit = Bun.which("git");
+      const spawnLog = join(shimDir, "spawns.log");
+      writeFileSync(
+        join(shimDir, "git"),
+        `#!/bin/sh\necho "$@" >> "${spawnLog}"\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 },
+      );
+
+      process.chdir(clone);
+      process.env.PATH = `${shimDir}:${oldPath}`;
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      process.env.PATH = oldPath;
+
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.70.0");
+      expect(versions).toContain("0.1.71.0");
+      expect(versions).toContain("0.1.72.0");
+      expect(warnings.join(" ")).not.toContain("UNKNOWN claim");
+      const fetches = readFileSync(spawnLog, "utf-8")
+        .split("\n")
+        .filter((l) => l.startsWith("fetch "));
+      expect(fetches.length).toBe(1);
+      for (const v of ["0-1-70-0", "0-1-71-0", "0-1-72-0"]) {
+        expect(fetches[0]).toContain(`refs/heads/late-${v}`);
+      }
+    } finally {
+      process.env.PATH = oldPath;
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  test("one unservable ref does not poison the batch — live claims still resolve, the ghost warns", () => {
+    // A dangling sha fails the WHOLE batched transfer, so the still-missing
+    // refs get a bounded per-branch retry: the real claim must come through
+    // and only the ghost surfaces as UNKNOWN.
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      git(origin, "checkout", "-q", "-b", "late-claim");
+      writeFileSync(join(origin, "VERSION"), "0.1.70.0\n");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "v0.1.70.0 feat: late claim");
+      git(origin, "checkout", "-q", "main");
+      writeFileSync(
+        join(origin, ".git", "refs", "heads", "ghost"),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      );
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.version)).toContain("0.1.70.0");
+      const joined = warnings.join(" ");
+      expect(joined).toContain("origin/ghost");
+      expect(joined).toContain("UNKNOWN claim");
+      expect(joined).not.toContain("late-claim");
     } finally {
       process.chdir(cwd);
       rmSync(root, { recursive: true, force: true });
