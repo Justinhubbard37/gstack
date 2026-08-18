@@ -544,57 +544,74 @@ function fetchGitClaimed(
 
   //    Read each candidate's VERSION through extractVersion so a JSON
   //    version-path (#2501) resolves on remote refs too, and the branch's own
-  //    width is preserved in the claim.
-  for (const { branch, sha } of candidates) {
+  //    width is preserved in the claim. Reads are LOCAL-first; branches whose
+  //    advertised tip has no local object are collected and resolved with ONE
+  //    batched shallow fetch below. A per-branch fetch loop here once crawled
+  //    a busy remote for minutes on a shallow CI clone (dozens of sequential
+  //    network fetches, 10s cap each) — the total network budget must be one
+  //    bounded round trip regardless of branch count.
+  const readClaim = (branch: string, sha?: string): "claimed" | "not-a-claim" | "object-missing" => {
     let show = sha ? runCommand("git", ["show", `${sha}:${versionPath}`]) : { ok: false, stdout: "", stderr: "" };
     if (!show.ok) {
       // Live tip not fetched yet (or no sha in the fallback path): best-effort
       // read from the local remote-tracking ref.
       show = runCommand("git", ["show", `refs/remotes/origin/${branch}:${versionPath}`]);
     }
-    if (!show.ok && sha) {
-      // ls-remote advertises SHAs without objects: a branch pushed after our
-      // last fetch has NO local object, so both reads above fail. The old
-      // `continue` here silently dropped a LIVE claim — the exact duplicate-
-      // allocation this fallback exists to prevent. Distinguish "object
-      // missing" from "branch has no VERSION file" before deciding.
-      const haveObject = runCommand("git", ["cat-file", "-e", sha]);
-      if (haveObject.ok) {
-        // Object is local and the path read still failed → the branch simply
-        // carries no version file. Genuinely not a claim; skip quietly.
-        continue;
+    if (!show.ok) {
+      if (!sha) return "not-a-claim";
+      // Distinguish "object missing" from "branch has no VERSION file".
+      return runCommand("git", ["cat-file", "-e", sha]).ok ? "not-a-claim" : "object-missing";
+    }
+    const raw = extractVersion(show.stdout, versionPath);
+    if (!raw || !parseVersion(raw)) return "not-a-claim";
+    claims.push({ pr: 0, branch: `origin/${branch}`, version: raw });
+    return "claimed";
+  };
+
+  const pending: { branch: string; sha?: string }[] = [];
+  for (const { branch, sha } of candidates) {
+    if (readClaim(branch, sha) === "object-missing") pending.push({ branch, sha });
+  }
+  if (pending.length > 0) {
+    // ls-remote advertises SHAs without objects: a branch pushed after our
+    // last fetch has NO local object. The pre-#2545 `continue` silently
+    // dropped a LIVE claim — the exact duplicate-allocation this fallback
+    // exists to prevent. One shallow batched fetch (no prompts, no tags,
+    // bounded) brings every missing tip local in a single round trip.
+    spawnSync(
+      "git",
+      ["fetch", "origin", ...pending.map((p) => `refs/heads/${p.branch}`), "--depth=1", "--no-tags"],
+      { encoding: "utf8", timeout: 15000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+    );
+    // One unservable ref (dangling sha on the server) fails the WHOLE batch
+    // transfer, so refs still missing get a bounded per-branch retry — that
+    // isolates a poisoned ref without reopening the unbounded fetch crawl
+    // (per-branch-only fetching once ground a shallow CI clone against a
+    // busy remote for minutes). Anything past the cap is warned, not fetched.
+    const RETRY_CAP = 8;
+    let retries = 0;
+    for (const { branch, sha } of pending) {
+      let outcome = readClaim(branch, sha);
+      if (outcome === "object-missing" && retries < RETRY_CAP) {
+        retries++;
+        spawnSync(
+          "git",
+          ["fetch", "origin", `refs/heads/${branch}`, "--depth=1", "--no-tags"],
+          { encoding: "utf8", timeout: 5000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+        );
+        outcome = readClaim(branch, sha);
       }
-      // Fetch just this ref shallowly (no prompts, no tags, bounded) and
-      // retry reading VERSION from the now-local object (or FETCH_HEAD).
-      const fetch = spawnSync(
-        "git",
-        ["fetch", "origin", `refs/heads/${branch}`, "--depth=1", "--no-tags"],
-        { encoding: "utf8", timeout: 10000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
-      );
-      if (fetch.status === 0 && !fetch.error) {
-        show = runCommand("git", ["show", `${sha}:${versionPath}`]);
-        if (!show.ok) show = runCommand("git", ["show", `FETCH_HEAD:${versionPath}`]);
-        if (!show.ok && runCommand("git", ["cat-file", "-e", sha]).ok) {
-          // Fetched and the object exists but the path doesn't → no VERSION
-          // file on this branch. Not a claim.
-          continue;
-        }
-      }
-      if (!show.ok) {
-        // STILL unreadable — never skip silently. Surface it as an UNKNOWN
-        // claim so the caller knows the allocation may be unsafe.
+      if (outcome === "object-missing") {
+        // STILL unreadable (fetch failed, retry cap hit, or the tip moved
+        // between ls-remote and fetch) — never skip silently. Surface it as
+        // an UNKNOWN claim so the caller knows the allocation may be unsafe.
         warnings.push(
           `origin/${branch}: VERSION unreadable even after a targeted fetch — ` +
             `counted as an UNKNOWN claim; allocation may collide with this branch. ` +
             `Run \`git fetch origin ${branch}\` and re-run to verify.`,
         );
-        continue;
       }
     }
-    if (!show.ok) continue;
-    const raw = extractVersion(show.stdout, versionPath);
-    if (!raw || !parseVersion(raw)) continue;
-    claims.push({ pr: 0, branch: `origin/${branch}`, version: raw });
   }
 
   // 2. Versions already shipped, read from the base's commit subjects. Catches
