@@ -495,6 +495,120 @@ describe('legacy remove: per-item (regression)', () => {
   });
 });
 
+describe('review-army hardening (specialist findings)', () => {
+  test('legacy remove preserves malformed/foreign entries it never touched', () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        SessionStart: [
+          { comment: 'no hooks array at all' },
+          { hooks: 'not-an-array' },
+          { hooks: [] },
+          { hooks: [{ type: 'command', command: '/x/bin/gstack-session-update' }] },
+        ],
+      },
+    }, null, 2));
+    runIso(['remove', '/x/bin/gstack-session-update']);
+    const s = settings();
+    // Only the entry we emptied is gone; the three malformed/foreign ones stay.
+    expect(s.hooks.SessionStart).toHaveLength(3);
+  });
+
+  test('add-event never tags a mixed entry (old-version ratchet guard)', () => {
+    const canon = mkCanon(tmpDir);
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        PostToolUse: [{
+          matcher: AUQ_MATCHER,
+          _gstack_source: 'plan-tune-cathedral',
+          hooks: [
+            { type: 'command', command: '/Users/me/my-own-hook' },
+            { type: 'command', command: '/dead/wt/hosts/claude/hooks/question-log-hook' },
+          ],
+        }],
+      },
+    }, null, 2));
+    runIso([
+      'add-event', '--event', 'PostToolUse', '--matcher', AUQ_MATCHER,
+      '--command', `${canon}/hosts/claude/hooks/question-log-hook`,
+      '--source', 'plan-tune-cathedral',
+    ]);
+    const s = settings();
+    expect(s.hooks.PostToolUse).toHaveLength(1);
+    const e = s.hooks.PostToolUse[0];
+    expect(e.hooks).toHaveLength(2);
+    expect(e.hooks[0].command).toBe('/Users/me/my-own-hook');
+    // A tag on a mixed entry hands old-version remove-source permission to
+    // destroy the user's item — it must be gone.
+    expect(e._gstack_source).toBeUndefined();
+  });
+
+  test('two dead twins of one hook in ONE entry collapse to a single item after --repoint', () => {
+    const canon = mkCanon(tmpDir);
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        PostToolUse: [{
+          matcher: AUQ_MATCHER,
+          hooks: [
+            { type: 'command', command: '/dead/a/hosts/claude/hooks/question-log-hook' },
+            { type: 'command', command: '/dead/b/hosts/claude/hooks/question-log-hook' },
+          ],
+        }],
+      },
+    }, null, 2));
+    runIso(['prune-stale', '--repoint', canon]);
+    const items = settings().hooks.PostToolUse[0].hooks;
+    expect(items).toHaveLength(1);   // pre-fix: two identical items → hook fires twice per event
+    expect(items[0].command).toBe(`${canon}/hosts/claude/hooks/question-log-hook`);
+  });
+
+  test('a 0600 settings.json keeps its mode across mutations (API keys stay private)', () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({ env: { SECRET: 'x' } }, null, 2));
+    fs.chmodSync(settingsFile, 0o600);
+    runIso(['add-event', '--event', 'Stop', '--command', '/x/hosts/claude/hooks/timeline-stop-hook', '--source', 'gstack-timeline-stop']);
+    const mode = fs.statSync(settingsFile).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  test('a canonical root containing $ is escaped in the registered command', () => {
+    const trickyBase = path.join(tmpDir, 'weird$dir');
+    fs.mkdirSync(trickyBase, { recursive: true });
+    const canon = mkCanon(trickyBase);
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: { Stop: [hookEntry('/dead/wt/hosts/claude/hooks/timeline-stop-hook')] },
+    }, null, 2));
+    runIso(['prune-stale', '--repoint', canon]);
+    const cmd = settings().hooks.Stop[0].hooks[0].command;
+    expect(cmd.startsWith('"')).toBe(true);
+    expect(cmd).toContain('\\$');   // $ neutralized — shell must not expand it at hook-fire time
+    // Idempotent: the escaped command is still recognized as ours.
+    const before = fs.readFileSync(settingsFile, 'utf-8');
+    const r2 = runIso(['prune-stale', '--repoint', canon]);
+    expect(r2.stdout).toMatch(/removed 0 gstack hook entries \(repointed 0\)/);
+    expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(before);
+  });
+
+  test('backups rotate: at most 10 .bak files survive repeated mutations', () => {
+    for (let i = 0; i < 13; i++) {
+      runIso(['add-event', '--event', 'Stop', '--command', `/x/hosts/claude/hooks/timeline-stop-hook-${i}`, '--source', 'gstack-timeline-stop']);
+    }
+    expect(backups().length).toBeLessThanOrEqual(10);
+    // The rollback pointer still resolves to an existing backup.
+    const latest = fs.readFileSync(path.join(tmpDir, 'settings.json.bak-latest'), 'utf-8').trim();
+    expect(fs.existsSync(latest)).toBe(true);
+  });
+
+  test('rollback refuses a pointer that names a non-backup file', () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({ a: 1 }, null, 2));
+    const evil = path.join(tmpDir, 'evil.json');
+    fs.writeFileSync(evil, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: '/evil' }] }] } }));
+    fs.writeFileSync(path.join(tmpDir, 'settings.json.bak-latest'), evil + '\n');
+    const r = runIso(['rollback']);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/refusing/);
+    expect(settings().a).toBe(1);
+  });
+});
+
 describe('ownership negatives', () => {
   test('owned basename+relpath under the WRONG matcher stays foreign (not re-pointed)', () => {
     const canon = mkCanon(tmpDir);

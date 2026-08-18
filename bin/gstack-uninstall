@@ -139,24 +139,24 @@ fi
 SETTINGS_HOOK="$(dirname "$0")/gstack-settings-hook"
 SESSION_UPDATE="$(dirname "$0")/gstack-session-update"
 if [ -x "$SETTINGS_HOOK" ]; then
-  "$SETTINGS_HOOK" remove "$SESSION_UPDATE" 2>/dev/null && REMOVED+=("SessionStart hook") || true
+  "$SETTINGS_HOOK" remove "$SESSION_UPDATE" && REMOVED+=("SessionStart hook") || true
   # Cathedral T8 cleanup: also remove plan-tune PreToolUse + PostToolUse hooks.
-  if "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral 2>/dev/null | grep -q "removed [1-9]"; then
+  if "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral | grep -q "removed [1-9]"; then
     REMOVED+=("plan-tune cathedral hooks")
   fi
   # AskUserQuestion error-fallback hook (registered by setup; previously never
   # torn down).
-  if "$SETTINGS_HOOK" remove-source --source auq-error-fallback 2>/dev/null | grep -q "removed [1-9]"; then
+  if "$SETTINGS_HOOK" remove-source --source auq-error-fallback | grep -q "removed [1-9]"; then
     REMOVED+=("AskUserQuestion error-fallback hook")
   fi
   # Timeline Stop hook (#2553).
-  if "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop 2>/dev/null | grep -q "removed [1-9]"; then
+  if "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop | grep -q "removed [1-9]"; then
     REMOVED+=("timeline Stop hook")
   fi
   # Identity sweep for untagged strays (Claude Code strips _gstack_source
   # tags; pre-v1.67 setups baked worktree paths). Removes every gstack-owned
   # hook item, live or dead — the binaries they point at are being deleted.
-  if "$SETTINGS_HOOK" prune-stale --all 2>/dev/null | grep -q "removed [1-9]"; then
+  if "$SETTINGS_HOOK" prune-stale --all | grep -q "removed [1-9]"; then
     REMOVED+=("stray gstack hook entries")
   fi
 fi

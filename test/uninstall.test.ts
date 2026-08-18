@@ -298,3 +298,54 @@ describe('hook cleanup runs before the install root is deleted', () => {
     }
   });
 });
+
+describe('hook cleanup under lock contention is loud, never silent (review-army)', () => {
+  test('a held foreign lock during uninstall surfaces the give-up warning on stderr', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-uninstall-lock-'));
+    try {
+      const mockHome = path.join(tmp, 'home');
+      const installRoot = path.join(mockHome, '.claude', 'skills', 'gstack');
+      const installBin = path.join(installRoot, 'bin');
+      fs.mkdirSync(installBin, { recursive: true });
+      for (const b of ['gstack-uninstall', 'gstack-settings-hook', 'gstack-session-update', 'gstack-config']) {
+        const dst = path.join(installBin, b);
+        fs.copyFileSync(path.join(ROOT, 'bin', b), dst);
+        fs.chmodSync(dst, 0o755);
+      }
+      const settingsFile = path.join(mockHome, '.claude', 'settings.json');
+      fs.writeFileSync(settingsFile, JSON.stringify({
+        hooks: {
+          Stop: [{
+            _gstack_source: 'gstack-timeline-stop',
+            hooks: [{ type: 'command', command: `${installRoot}/hosts/claude/hooks/timeline-stop-hook` }],
+          }],
+        },
+      }, null, 2));
+      fs.mkdirSync(path.join(mockHome, '.gstack'), { recursive: true });
+      // A fresh foreign lock: pre-fix, every cleanup call silently skipped and
+      // uninstall reported clean while orphaning the hooks forever.
+      fs.mkdirSync(`${settingsFile}.lock`);
+      fs.writeFileSync(path.join(`${settingsFile}.lock`, 'owner'), 'another-live-process');
+
+      const result = spawnSync('bash', [path.join(installBin, 'gstack-uninstall'), '--force', '--keep-state'], {
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HOME: mockHome,
+          GSTACK_SETTINGS_FILE: settingsFile,
+          GSTACK_STATE_ROOT: path.join(mockHome, '.gstack'),
+          GSTACK_SETTINGS_LOCK_TIMEOUT_MS: '300',
+        },
+        cwd: tmp,
+      });
+      const stderr = result.stderr.toString();
+      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+      const cleaned = s.hooks?.Stop === undefined;
+      // Either the sweep still happened, or the user SEES why it didn't.
+      expect(cleaned || /could not acquire lock/.test(stderr)).toBe(true);
+      expect(/could not acquire lock/.test(stderr)).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

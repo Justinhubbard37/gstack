@@ -1896,7 +1896,7 @@ if [ -x "$SETTINGS_HOOK" ]; then
   _HEAL_REMOVED=$(printf '%s' "$_HEAL_OUT" | sed -n 's/^OK: removed \([0-9]*\).*/\1/p')
   _HEAL_REPOINTED=$(printf '%s' "$_HEAL_OUT" | sed -n 's/.*repointed \([0-9]*\).*/\1/p')
   if [ "${_HEAL_REMOVED:-0}" -gt 0 ] 2>/dev/null || [ "${_HEAL_REPOINTED:-0}" -gt 0 ] 2>/dev/null; then
-    log "  healed hook registrations: removed ${_HEAL_REMOVED:-0}, repointed ${_HEAL_REPOINTED:-0} (backup: settings.json.bak.<ts>; undo: $SETTINGS_HOOK rollback)"
+    log "  healed hook registrations: removed ${_HEAL_REMOVED:-0}, repointed ${_HEAL_REPOINTED:-0} (backup: settings.json.bak.<ts>; note: later registrations in this run move the rollback pointer — restore the heal's own .bak file directly if needed)"
   fi
   # Explicit opt-out + live plan-tune hooks is a contradiction worth surfacing:
   # the heal honors the opt-out (dead plan-tune entries pruned, never
@@ -1920,8 +1920,13 @@ fi
 SESSION_UPDATE_CMD="$(_hook_command_path bin/gstack-session-update || true)"
 HOOK_CMD=""
 if [ -n "$SESSION_UPDATE_CMD" ]; then
+  # The registered command is executed by a shell when Claude Code fires the
+  # hook — neutralize shell metacharacters, not just whitespace (mirrors
+  # gsQuoteCmd in gstack-settings-hook).
   case "$SESSION_UPDATE_CMD" in
-    *" "*) SESSION_UPDATE_CMD="\"$SESSION_UPDATE_CMD\"" ;;
+    *[\ \"\$\`\\]*)
+      SESSION_UPDATE_CMD="\"$(printf '%s' "$SESSION_UPDATE_CMD" | sed 's/[\\"$`]/\\&/g')\""
+      ;;
   esac
   if [ "$IS_WINDOWS" -eq 1 ]; then
     HOOK_CMD="bash $SESSION_UPDATE_CMD"
@@ -1937,15 +1942,21 @@ if [ "$TEAM_MODE" -eq 1 ]; then
   # Register SessionStart hook in Claude Code settings (schema-aware: the
   # legacy `add` action's substring dedupe bypasses the KNOWN_HOOKS identity
   # system; add-event re-points stale paths in place instead of appending).
+  # stderr stays attached (zero silent settings mutations — a fail-closed
+  # parse error or lock give-up must reach the user).
   if [ -x "$SETTINGS_HOOK" ] && [ -n "$HOOK_CMD" ]; then
-    "$SETTINGS_HOOK" add-event --event SessionStart --command "$HOOK_CMD" --source gstack-session-update >/dev/null 2>&1 || true
+    "$SETTINGS_HOOK" add-event --event SessionStart --command "$HOOK_CMD" --source gstack-session-update >/dev/null || true
   elif [ -z "$HOOK_CMD" ]; then
     log "  SessionStart hook not registered: bin/gstack-session-update missing at $CANONICAL_GSTACK_ROOT (no stable install)"
   fi
 
   log ""
-  log "Team mode enabled: gstack will auto-update at the start of each Claude Code session."
-  log "  Hook: $HOOK_CMD"
+  if [ -n "$HOOK_CMD" ]; then
+    log "Team mode enabled: gstack will auto-update at the start of each Claude Code session."
+    log "  Hook: $HOOK_CMD"
+  else
+    log "Team mode enabled (auto-update hook pending a stable install — re-run ./setup after installing globally)."
+  fi
   log "  To disable: ./setup --no-team"
   log ""
   log "Bootstrap your repo:"
@@ -2279,11 +2290,14 @@ fi
 # Also tear down plan-tune + timeline hooks on --no-team (matches the existing pattern).
 # Tag-only remove-source misses untagged entries (Claude Code strips
 # _gstack_source), so the identity sweep (prune-stale --all) finishes the job.
+# stderr stays attached on every call: a lock give-up or fail-closed parse
+# error during TEARDOWN must be visible — "the next setup retries" does not
+# apply when the user is turning the hooks off.
 if [ "$NO_TEAM_MODE" -eq 1 ] && [ -x "$SETTINGS_HOOK" ]; then
-  "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral 2>/dev/null || true
-  "$SETTINGS_HOOK" remove-source --source auq-error-fallback 2>/dev/null || true
-  "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop 2>/dev/null || true
-  "$SETTINGS_HOOK" prune-stale --all >/dev/null 2>&1 || true
+  "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral >/dev/null || true
+  "$SETTINGS_HOOK" remove-source --source auq-error-fallback >/dev/null || true
+  "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop >/dev/null || true
+  "$SETTINGS_HOOK" prune-stale --all >/dev/null || true
 fi
 
 # ─── Redact pre-push guard consent (#1946) ───────────────────────────────────

@@ -186,3 +186,31 @@ describe('the defect-class warning is written down where the next author will se
     expect(setupSrc).toMatch(/NEVER register .*SOURCE_GSTACK_DIR.*hook paths/);
   });
 });
+
+describe('matcher-literal drift tripwire (review-army)', () => {
+  test("every --matcher literal in setup equals its KNOWN_HOOKS row's matcher", () => {
+    // gsOwnedRow requires an EXACT matcher match — if setup's registration
+    // matcher drifts from the table row, identity re-pointing/pruning silently
+    // stops recognizing the hook and the phantom-duplicate class returns.
+    const rowMatcher = (name: string) => {
+      const rowStart = hookBinSrc.indexOf(`"${name}":`);
+      expect(rowStart).toBeGreaterThan(-1);
+      const row = hookBinSrc.slice(rowStart, hookBinSrc.indexOf('}', rowStart));
+      return row.match(/matcher: "([^"]*)"/)![1];
+    };
+    const pairs: Array<[string, string]> = [
+      ['question-log-hook', '(AskUserQuestion|mcp__.*__AskUserQuestion)'],
+      ['question-preference-hook', '(AskUserQuestion|mcp__.*__AskUserQuestion)'],
+      ['auq-error-fallback-hook', '(AskUserQuestion|mcp__.*__AskUserQuestion)'],
+    ];
+    for (const [name, expected] of pairs) {
+      expect(rowMatcher(name)).toBe(expected);
+    }
+    // And setup registers those hooks with exactly that matcher literal.
+    const matcherLiterals = [...setupSrc.matchAll(/--matcher '([^']+)'/g)].map((m) => m[1]);
+    expect(matcherLiterals.length).toBeGreaterThanOrEqual(3);
+    for (const lit of matcherLiterals) {
+      expect(lit).toBe('(AskUserQuestion|mcp__.*__AskUserQuestion)');
+    }
+  });
+});
