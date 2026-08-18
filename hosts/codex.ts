@@ -4,6 +4,7 @@ const codex = defineHost({
   name: 'codex',
   displayName: 'OpenAI Codex CLI',
   cliAliases: ['agents'],
+  defaultModel: 'gpt',
 
   localSkillRoot: '.agents/skills/gstack',
   hostSubdir: '.agents',

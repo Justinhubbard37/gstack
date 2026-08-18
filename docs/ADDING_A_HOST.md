@@ -60,6 +60,7 @@ That expands to the full `HostConfig` with these defaults:
 
 - `cliCommand: 'myhost'` (the name; binary for `command -v` detection)
 - `cliAliases: []`
+- `defaultModel: 'claude'` (model overlay used when generation gets no explicit `--model`; codex overrides to `'gpt'`)
 - `globalRoot` / `localSkillRoot`: `.myhost/skills/gstack`, `hostSubdir`: `.myhost`
 - `usesEnvVars: true` (false only for Claude, which uses literal `~` paths)
 - `frontmatter`: allowlist keeping `name` + `description`, no description limit
@@ -173,6 +174,7 @@ Key fields:
 The `validateHostConfig()` function in `scripts/host-config.ts` checks:
 - Name: lowercase alphanumeric with hyphens
 - CLI command: alphanumeric with hyphens/underscores
+- `defaultModel`: must be a known model family from `scripts/models.ts` `ALL_MODEL_NAMES`
 - Paths: safe characters only (alphanumeric, `.`, `/`, `$`, `{}`, `~`, `-`, `_`)
 - No duplicate names, hostSubdirs, or globalRoots across configs
 
