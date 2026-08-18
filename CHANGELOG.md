@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.67.2.0] - 2026-08-18
+
+**Codex installs now match the model you actually run.**
+**gpt-5.6-sol gets a bounded-scope profile that finishes the job, then stops.**
+
+Every gstack skill carries a model-specific behavioral patch. This release makes that patch model-aware for Codex: `./setup --host codex` reads the top-level `model` from `${CODEX_HOME:-~/.codex}/config.toml` and renders the matching profile. The headline is `gpt-5.6-sol`. Sol reads completeness language like "exhaustive" and "Boil the Ocean" as authority to keep going, widening into adjacent cleanup and speculative hardening nobody asked for. Its new profile pins the boundary: the explicit task is the lake, adjacent findings are report-only, investigation stops once the cause is established, and the run terminates on one clean verification pass. Full coverage inside the boundary still applies, and the AskUserQuestion decision-brief format is never trimmed.
+
+Sol is exact-match only. Terra, Luna, dated snapshots, and any suffixed ID deliberately fall back to the generic GPT profile, and the resolver warns when a near-miss like `gpt-5.6-sol-2026-08-01` lands on generic gpt.
+
+### The numbers that matter
+
+Source: the new periodic scope-termination eval (`EVALS=1 EVALS_TIER=periodic bun test test/codex-e2e-sol-scope.test.ts`, result in `~/.gstack/projects/<slug>/evals/`) and the free suite (`bun run test`).
+
+| Metric | Before | After |
+|---|---|---|
+| Codex skill overlay | one fixed profile for every install | matched to `config.toml`, `--model` per-run override |
+| Sol on a planted one-line bug (live eval) | no measurement | fixed in 21 tool calls, 173s, both decoy TODOs byte-identical |
+| Scope check in that eval | not measured | untracked, staged, and unstaged files all counted |
+| Hermetic Codex E2E environment | whole operator `~/.codex` tree copied in | `auth.json` only, `CODEX_HOME` pinned |
+| Kiro skill profile | inherited whatever the shared render held | always the claude profile, rebuilt at install time |
+| Upgrade skill reinstall target | bare `./setup` (claude) for every host | the host it was generated for |
+
+The eval row is the one to internalize: the same investigate skill that tells Claude to boil the ocean drives Sol to fix exactly one function, run the one targeted test, and stop with two tempting decoy TODOs untouched.
+
+### What this means for Codex users
+
+If you run Codex on `gpt-5.6-sol`, rerun `./setup --host codex` once. Your skills keep the full gstack workflow (STOP points, review gates, decision briefs) but stop sprawling into work you did not ask for. Change your Codex model later, rerun setup, and the profile follows. `--model <id>` overrides detection for one run and tells you how to make it stick.
+
+### Itemized changes
+
+#### Added
+- `gpt-5.6-sol` model profile (`model-overlays/gpt-5.6-sol.md`): explicit task boundary, report-only adjacent work, bounded investigation, terminate on verified completion, AskUserQuestion format preserved in full.
+- Codex model detection at setup: new `scripts/resolve-codex-generation-model.ts` reads the top-level `model` from `${CODEX_HOME:-~/.codex}/config.toml`, validates against the model allowlist, treats config values as data (control characters stripped from every surfaced string, absolute-path guard on the config location), and falls back to the generic GPT profile with a warning on unreadable or unsupported configs. `./setup --host codex --model <id>` overrides for that run.
+- Per-host generation defaults: `HostConfig.defaultModel`, validated at generation time. Codex renders the GPT profile when no `--model` is passed; every other host keeps claude. `docs/ADDING_A_HOST.md` documents the new field.
+- Periodic scope-termination E2E (`test/codex-e2e-sol-scope.test.ts`): installs the FULL generated investigate skill, plants a one-line bug beside decoy security and migration TODOs, and asserts the fix lands inside the boundary within 30 tool calls, the decoys stay byte-identical, the regression oracle survives unweakened, and nothing gets committed. Wired into the periodic eval matrix, the paid-shard globs, and diff-based selection (`codex-sol-scope-termination`).
+- Sol-specific Completeness Principle and first-run intro copy: Boil the Ocean within the user's explicit task boundary.
+
+#### Changed
+- Generated upgrade skills reinstall their own host: `./setup --host codex` in Codex renders, `--host kiro` in Kiro copies (rewritten at copy time), bare `./setup` only for Claude.
+- Kiro installs render the claude profile before copying skills, then restore the resolved Codex profile, so Kiro never ships GPT-family behavioral text and live `~/.codex` symlinks stay correct. The Codex skills path honors `$CODEX_HOME`.
+- The hermetic Codex E2E runner copies `auth.json` only. Operator plugins, MCP servers, rules, and skills no longer leak into supposedly hermetic evals. Per-run `model`, TOML config overrides, and `--ignore-user-config` are supported.
+- `setup` resolves the Codex generation model on every run (a read-only TOML lookup), so any install path preserves a Sol user's rendered profile; the codex install summary prints the active profile and its source.
+
+#### For contributors
+- New free-tier coverage: every resolver branch including hostile-config shapes (12 tests), overlay content pins, the explicit `--model` override through the real generation CLI, real-file periodic-tier classification for both codex E2E files, and invalid `defaultModel` validation.
+- Static pins in `test/setup-codex-model.test.ts` hold the load-bearing setup properties: unconditional resolver, quoted `--explicit` argv, fail-closed empty-resolver exit, the Kiro claude-render sandwich, and the `--host kiro` rewrite.
+- The Sol E2E snapshots the exact prior `.agents` render and restores it in `beforeAll`, so the shared tree never stays Sol-flavored for goldens, parallel shards, or symlinked installs. Fixture commits disable gpg signing so the eval runs under any global git config.
+
 ## [1.67.1.0] - 2026-08-16
 
 **We read every line of external-contributor code from the last two months.**

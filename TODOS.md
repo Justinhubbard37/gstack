@@ -771,6 +771,50 @@ Originally listed in the plan's "TODOs surfaced for later" section:
 
 ---
 
+## Codex model profiles: follow-ups (filed v1.67.2.0 via /ship review army)
+
+### P2: Single owner for the Codex render model (persist the resolved profile)
+
+**What:** `./setup` resolves the Codex generation model from config.toml on every
+run, but every OTHER regeneration surface (`bun run build`, direct
+`gen:skill-docs --host codex`, the free suite's tree-mutating shard) renders the
+host default (gpt), silently reverting a Sol user's live symlinked render until
+the next setup. Persist the resolved model (gstack-config key or marker file the
+generator reads when `--model` is absent for codex) so all surfaces agree.
+**Why:** A Sol-using contributor cannot keep both a correct install and a green
+free suite in one tree; CLAUDE.md's "Deploying to the active skill" flow
+(bun run build) downgrades the profile. Cross-model consensus finding
+(Claude adversarial M4, Codex adversarial P2, red team C-70).
+**Priority:** P2. **Effort:** S (human ~half day / CC ~20min).
+
+### P3: Codex periodic CI shards never execute (no codex CLI in Dockerfile.ci)
+
+**What:** `evals-periodic.yml` carries `e2e-codex`, and now `e2e-codex-sol-scope`,
+but the CI image installs only claude-code, so both shards boot, skip everything,
+and report green weekly. Either bake `@openai/codex` + an auth strategy into the
+image, or prune both matrix entries and document codex evals as local-only.
+**Why:** A green all-skip shard reads as coverage that does not exist.
+**Priority:** P3. **Effort:** M (auth strategy is the hard part).
+
+### P3: `--model` override persistence across upgrades
+
+**What:** `./setup --host codex --model <id>` applies to that run only; the
+upgrade flow re-resolves from config.toml. Setup now prints the persistence
+hint (set `model` in config.toml). If users keep tripping on it, persist the
+override in `~/.gstack/config.yaml` and read it between `--explicit` and the
+TOML lookup.
+**Why:** Explicit user choices should survive upgrades or say loudly that they
+will not (the hint covers the second half today).
+**Priority:** P3. **Effort:** S.
+
+### P4: `./setup --host slate` accepted but installs nothing
+
+**What:** `slate` passes the host-arg validation case but sets no INSTALL_* flag,
+so the run configures nothing and exits successfully. Either wire a slate branch
+or reject the value with guidance like openclaw/hermes/gbrain get.
+**Why:** Silent success with zero effect is the worst failure shape.
+**Priority:** P4. **Effort:** S.
+
 ## browse server: terminal-agent teardown follow-ups (filed v1.41 via /plan-eng-review)
 
 ### ✅ DONE (v1.44.0.0): Identity-based terminal-agent kill (replace pkill regex with PID)
