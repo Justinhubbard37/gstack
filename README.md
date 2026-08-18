@@ -261,6 +261,14 @@ a session). Skip it with `./setup --no-team`, remove it with
 `gstack-settings-hook remove-source --source gstack-timeline-stop`;
 `gstack-uninstall` removes it too.
 
+Hook registration is canonical-only: every hook command points at the stable
+`~/.claude/skills/gstack` install, never the tree setup ran from, so deleting
+a worktree or Conductor workspace can't leave dead hooks erroring in your
+sessions. Every `./setup` run also heals first: `gstack-settings-hook
+prune-stale --repoint` removes dead gstack hook entries, re-points stale ones
+at the stable install, and collapses duplicates, printing one line (and
+writing a backup beside the file) only when it changed something.
+
 ### Continuous checkpoint mode (opt-in, local by default)
 
 Set `gstack-config set checkpoint_mode continuous` and skills auto-commit your work as you go with a `WIP:` prefix plus a structured `[gstack-context]` body (decisions, remaining work, failed approaches). Survives crashes and context switches. `/context-restore` reads those commits to reconstruct session state. `/ship` filter-squashes WIP commits before the PR (preserving non-WIP commits) so bisect stays clean. Push is opt-in via `checkpoint_push=true` — default is local-only so you don't trigger CI on every WIP commit.
@@ -388,9 +396,13 @@ rm -rf .gstack .gstack-worktrees .claude/skills/gstack 2>/dev/null
 rm -rf .agents/skills/gstack* .factory/skills/gstack* 2>/dev/null
 ```
 
-Manual removal leaves the gstack Stop hook entry behind in `~/.claude/settings.json`
-(the uninstall script removes it for you). Edit that file and delete the hook whose
-command path ends in `hosts/claude/hooks/timeline-stop-hook`.
+Manual removal leaves gstack's hook entries behind in `~/.claude/settings.json`
+(the uninstall script removes all of them for you, including entries whose
+`_gstack_source` tag was stripped). Edit that file and delete every hook whose
+command path points into `.claude/skills/gstack/`: the SessionStart auto-update
+hook, the AskUserQuestion PreToolUse/PostToolUse hooks, and the Stop hooks
+(session timeline, plus verify-gate if you opted in). Left in place, they error
+on every matching event once the install directory is gone.
 
 ### Clean up CLAUDE.md
 
