@@ -597,6 +597,56 @@ describe('review-army hardening (specialist findings)', () => {
     expect(fs.existsSync(latest)).toBe(true);
   });
 
+  test('tag-stripped verify-gate entry is table-owned: healed by --repoint, swept by --all', () => {
+    // Red-team catch: verify-gate is a README-documented opt-in Stop hook.
+    // Without a KNOWN_HOOKS row, a tag-stripped entry survived uninstall and
+    // errored at the end of EVERY turn after the install root was deleted.
+    const canon = mkCanon(tmpDir);
+    const vg = path.join(canon, 'bin', 'gstack-verify-gate');
+    fs.writeFileSync(vg, '#!/bin/sh\n');
+    fs.chmodSync(vg, 0o755);
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: { Stop: [hookEntry('/dead/install/bin/gstack-verify-gate')] },   // tag STRIPPED
+    }, null, 2));
+    runIso(['prune-stale', '--repoint', canon]);
+    let s = settings();
+    expect(s.hooks.Stop[0].hooks[0].command).toBe(vg);
+    expect(s.hooks.Stop[0]._gstack_source).toBe('verify-gate');
+    const r = runIso(['prune-stale', '--all']);
+    expect(r.stdout).toMatch(/removed 1/);
+    expect(settings().hooks).toBeUndefined();
+  });
+
+  test('a foreign entry that STARTED empty survives prune-stale untouched', () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [] }] },
+    }, null, 2) + '\n');
+    const before = fs.readFileSync(settingsFile, 'utf-8');
+    const r = runIso(['prune-stale', '--repoint', mkCanon(tmpDir, 'c2')]);
+    expect(r.stdout).toMatch(/removed 0 gstack hook entries \(repointed 0\)/);
+    expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(before);
+  });
+
+  test('add-event is the quoting authority: spaced canonical path stored escaped-quoted, healer idempotent', () => {
+    // Red-team catch (empirically verified pre-fix): setup registered raw
+    // paths and the very next heal rewrote them — fresh installs shipped a
+    // form the codebase itself considered wrong.
+    const spacedBase = path.join(tmpDir, 'canon root');
+    fs.mkdirSync(spacedBase, { recursive: true });
+    const canon = mkCanon(spacedBase);
+    runIso([
+      'add-event', '--event', 'PostToolUse', '--matcher', AUQ_MATCHER,
+      '--command', `${canon}/hosts/claude/hooks/question-log-hook`,
+      '--source', 'plan-tune-cathedral', '--timeout', '5',
+    ]);
+    const stored = settings().hooks.PostToolUse[0].hooks[0].command;
+    expect(stored).toBe(`"${canon}/hosts/claude/hooks/question-log-hook"`);
+    const before = fs.readFileSync(settingsFile, 'utf-8');
+    const r = runIso(['prune-stale', '--repoint', canon]);
+    expect(r.stdout).toMatch(/removed 0 gstack hook entries \(repointed 0\)/);
+    expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(before);
+  });
+
   test('rollback refuses a pointer that names a non-backup file', () => {
     fs.writeFileSync(settingsFile, JSON.stringify({ a: 1 }, null, 2));
     const evil = path.join(tmpDir, 'evil.json');

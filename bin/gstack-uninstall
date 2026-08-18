@@ -153,6 +153,10 @@ if [ -x "$SETTINGS_HOOK" ]; then
   if "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop | grep -q "removed [1-9]"; then
     REMOVED+=("timeline Stop hook")
   fi
+  # Verification stop hook (opt-in via README; user-registered, ours to sweep).
+  if "$SETTINGS_HOOK" remove-source --source verify-gate | grep -q "removed [1-9]"; then
+    REMOVED+=("verification Stop hook")
+  fi
   # Identity sweep for untagged strays (Claude Code strips _gstack_source
   # tags; pre-v1.67 setups baked worktree paths). Removes every gstack-owned
   # hook item, live or dead — the binaries they point at are being deleted.

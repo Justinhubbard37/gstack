@@ -81,7 +81,8 @@ var KNOWN_HOOKS = {
   "question-preference-hook": { source: "plan-tune-cathedral", event: "PreToolUse",   matcher: "(AskUserQuestion|mcp__.*__AskUserQuestion)", relpath: "hosts/claude/hooks/question-preference-hook" },
   "auq-error-fallback-hook":  { source: "auq-error-fallback",  event: "PostToolUse",  matcher: "(AskUserQuestion|mcp__.*__AskUserQuestion)", relpath: "hosts/claude/hooks/auq-error-fallback-hook" },
   "timeline-stop-hook":       { source: "gstack-timeline-stop", event: "Stop",        matcher: "", relpath: "hosts/claude/hooks/timeline-stop-hook" },
-  "gstack-session-update":    { source: "gstack-session-update", event: "SessionStart", matcher: "", relpath: "bin/gstack-session-update" }
+  "gstack-session-update":    { source: "gstack-session-update", event: "SessionStart", matcher: "", relpath: "bin/gstack-session-update" },
+  "gstack-verify-gate":       { source: "verify-gate", event: "Stop", matcher: "", relpath: "bin/gstack-verify-gate" }
 };
 function gsHadBashPrefix(c) { return String(c == null ? "" : c).trim().indexOf("bash ") === 0; }
 function gsStripWrap(c) {
@@ -105,9 +106,18 @@ function gsOwnedRow(cmd, event, matcher) {
   if (row.matcher && (matcher || "") !== row.matcher) return null;
   return row;
 }
+function gsWinPath(p) {
+  // Git Bash writes MSYS-form paths (/c/Users/...) into settings.json, but
+  // native bun resolves them drive-relative (C:\c\Users\...) -- translate for
+  // fs calls only; stored commands keep the form the firing shell expects.
+  if (process.platform === "win32" && /^\/[A-Za-z]\//.test(p)) {
+    return p.charAt(1) + ":" + p.slice(2);
+  }
+  return p;
+}
 function gsIsAlive(cmd) {
   var fs = require("fs");
-  var p = gsStripWrap(cmd);
+  var p = gsWinPath(gsStripWrap(cmd));
   if (!p) return false;
   try {
     if (process.platform === "win32") return fs.existsSync(p);
@@ -364,7 +374,12 @@ case "$ACTION" in
       if (!settings.hooks) settings.hooks = {};
       if (!settings.hooks[event]) settings.hooks[event] = [];
 
-      const hookEntry = { type: "command", command: cmd };
+      // add-event is the single quoting authority: normalize the command
+      // through the same round-trip the healer uses so metachar paths are
+      // registered in the escaped-quoted form from the start (a caller-side
+      // quoting step would drift per call site).
+      const cmdNorm = gsQuoteCmd(gsStripWrap(cmd), gsHadBashPrefix(cmd));
+      const hookEntry = { type: "command", command: cmdNorm };
       if (timeoutRaw) {
         const n = Number(timeoutRaw);
         if (Number.isFinite(n) && n > 0) hookEntry.timeout = n;
@@ -379,12 +394,12 @@ case "$ACTION" in
       for (const entry of settings.hooks[event]) {
         if ((entry.matcher || "") !== matcher) continue;
         if (!Array.isArray(entry.hooks)) continue;
-        let idx = entry.hooks.findIndex(h => h && h.command === cmd);
+        let idx = entry.hooks.findIndex(h => h && h.command === cmdNorm);
         if (idx < 0) {
           idx = entry.hooks.findIndex(h => {
             if (!h || !h.command) return false;
             const row = gsOwnedRow(h.command, event, entry.matcher || "");
-            return !!row && gsBaseOf(h.command) === gsBaseOf(cmd);
+            return !!row && gsBaseOf(h.command) === gsBaseOf(cmdNorm);
           });
         }
         if (idx < 0 && entry._gstack_source === source && entry.hooks.length === 1) {
@@ -542,6 +557,14 @@ case "$ACTION" in
             let removedHere = 0;
             const remain = [];
             const seenInEntry = new Set();
+            if (entry.hooks.length === 0) {
+              // Started-empty entries are foreign data we never touched --
+              // preserve them (only a gstack-tagged empty entry is claimable,
+              // and only by the --all sweep).
+              if (all && entry._gstack_source) { removed++; continue; }
+              rebuilt.push(entry);
+              continue;
+            }
             for (const h of entry.hooks) {
               const cmdRaw = h && h.command;
               const row = cmdRaw ? gsOwnedRow(cmdRaw, event, matcher) : null;

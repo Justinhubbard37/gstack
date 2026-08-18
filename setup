@@ -1870,6 +1870,14 @@ SETTINGS_HOOK="$SOURCE_GSTACK_DIR/bin/gstack-settings-hook"
 # WARNING for future code AND migrations (the v1.58.0.0.sh defect class):
 # NEVER register ${SCRIPT_DIR}/$SOURCE_GSTACK_DIR-relative hook paths.
 CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"
+# Split-brain guard: the installer currently hardcodes $HOME/.claude/skills
+# (setup:1601 TODO), so a CLAUDE_CONFIG_DIR override can name a root that was
+# never installed. Fall back to where the install actually lives — both are
+# stable, neither is the running tree, so canonical-only still holds.
+if [ ! -x "$CANONICAL_GSTACK_ROOT/bin/gstack-session-update" ] \
+   && [ -x "$HOME/.claude/skills/gstack/bin/gstack-session-update" ]; then
+  CANONICAL_GSTACK_ROOT="$HOME/.claude/skills/gstack"
+fi
 
 # Echo the canonical path for a hook (repo-relative arg); fails when the hook
 # is not executable at the canonical install — callers must skip + log.
@@ -1920,14 +1928,9 @@ fi
 SESSION_UPDATE_CMD="$(_hook_command_path bin/gstack-session-update || true)"
 HOOK_CMD=""
 if [ -n "$SESSION_UPDATE_CMD" ]; then
-  # The registered command is executed by a shell when Claude Code fires the
-  # hook — neutralize shell metacharacters, not just whitespace (mirrors
-  # gsQuoteCmd in gstack-settings-hook).
-  case "$SESSION_UPDATE_CMD" in
-    *[\ \"\$\`\\]*)
-      SESSION_UPDATE_CMD="\"$(printf '%s' "$SESSION_UPDATE_CMD" | sed 's/[\\"$`]/\\&/g')\""
-      ;;
-  esac
+  # No caller-side quoting: add-event is the single quoting authority — it
+  # normalizes every registered command through the same gsQuoteCmd round-trip
+  # the healer uses, so metachar/space paths cannot drift per call site.
   if [ "$IS_WINDOWS" -eq 1 ]; then
     HOOK_CMD="bash $SESSION_UPDATE_CMD"
   else
@@ -2073,6 +2076,14 @@ fi
 PLAN_TUNE_LOG_HOOK="$(_hook_command_path hosts/claude/hooks/question-log-hook || true)"
 PLAN_TUNE_PREF_HOOK="$(_hook_command_path hosts/claude/hooks/question-preference-hook || true)"
 AUQ_ERROR_FALLBACK_HOOK="$(_hook_command_path hosts/claude/hooks/auq-error-fallback-hook || true)"
+# Windows: extensionless bash shims need the explicit 'bash ' prefix (same
+# rationale as HOOK_CMD above — the OS file-association dialog otherwise).
+# KNOWN_HOOKS identity round-trips the prefix, so healing preserves it.
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  [ -n "$PLAN_TUNE_LOG_HOOK" ] && PLAN_TUNE_LOG_HOOK="bash $PLAN_TUNE_LOG_HOOK"
+  [ -n "$PLAN_TUNE_PREF_HOOK" ] && PLAN_TUNE_PREF_HOOK="bash $PLAN_TUNE_PREF_HOOK"
+  [ -n "$AUQ_ERROR_FALLBACK_HOOK" ] && AUQ_ERROR_FALLBACK_HOOK="bash $AUQ_ERROR_FALLBACK_HOOK"
+fi
 PLAN_TUNE_INSTALL_MARKER="$HOME/.gstack/.plan-tune-hooks-prompted"
 
 # Canonical-only: an ephemeral tree with no stable install gets a visible skip,
@@ -2275,13 +2286,18 @@ fi
 # a session. Idempotent via the (event, source) dedup in gstack-settings-hook;
 # removed by --no-team and gstack-uninstall.
 TIMELINE_STOP_HOOK="$(_hook_command_path hosts/claude/hooks/timeline-stop-hook || true)"
+if [ "$IS_WINDOWS" -eq 1 ] && [ -n "$TIMELINE_STOP_HOOK" ]; then
+  TIMELINE_STOP_HOOK="bash $TIMELINE_STOP_HOOK"
+fi
+# stderr stays attached on both calls below (zero silent settings mutations;
+# the list-sources corrupt-file warning must reach the user too).
 if [ "$NO_TEAM_MODE" -ne 1 ] && [ -x "$SETTINGS_HOOK" ] && [ -n "$TIMELINE_STOP_HOOK" ]; then
-  if ! "$SETTINGS_HOOK" list-sources 2>/dev/null | grep -q "gstack-timeline-stop"; then
+  if ! "$SETTINGS_HOOK" list-sources | grep -q "gstack-timeline-stop"; then
     if "$SETTINGS_HOOK" add-event \
       --event Stop \
       --command "$TIMELINE_STOP_HOOK" \
       --source gstack-timeline-stop \
-      --timeout 5 >/dev/null 2>&1; then
+      --timeout 5 >/dev/null; then
       log "  registered Stop hook: session timeline entries now close even when a skill is interrupted (backup: settings.json.bak.<ts>; remove: $SETTINGS_HOOK remove-source --source gstack-timeline-stop)"
     fi
   fi
