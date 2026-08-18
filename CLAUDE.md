@@ -19,7 +19,7 @@ bun run build        # gen docs + compile binaries
 bun run gen:skill-docs  # regenerate SKILL.md files from templates
 bun run skill:check  # health dashboard for all skills
 bun run dev:skill    # watch mode: auto-regen + validate on change
-bun run eval:list    # list all eval runs from ~/.gstack-dev/evals/
+bun run eval:list    # list all eval runs from ~/.gstack/projects/<slug>/evals/
 bun run eval:compare # compare two eval runs (auto-picks most recent)
 bun run eval:summary # aggregate stats across all eval runs
 bun run slop          # full slop-scan report (all files)
@@ -62,7 +62,8 @@ seeding tripwires in `test/hermetic-skills-seeding.test.ts` /
 `test/pty-skill-seeding-wiring.test.ts`.
 
 E2E tests stream progress in real-time (tool-by-tool via `--output-format stream-json
---verbose`). Results are persisted to `~/.gstack-dev/evals/` with auto-comparison
+--verbose`). Results are persisted to `~/.gstack/projects/<slug>/evals/` (legacy
+fallback `~/.gstack-dev/evals/`) with auto-comparison
 against the previous finalized run (in-flight `_partial` files are never used as
 a baseline, so a run can't compare against itself).
 

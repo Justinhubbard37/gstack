@@ -113,7 +113,7 @@ Or target a specific agent with `./setup --host <name>`:
 
 | Agent | Flag | Skills install to |
 |-------|------|-------------------|
-| OpenAI Codex CLI | `--host codex` | `~/.codex/skills/gstack-*/` |
+| OpenAI Codex CLI | `--host codex` | `${CODEX_HOME:-~/.codex}/skills/gstack-*/` |
 | OpenCode | `--host opencode` | `~/.config/opencode/skills/gstack-*/` |
 | Cursor | `--host cursor` | `~/.cursor/skills/gstack-*/` |
 | Factory Droid | `--host factory` | `~/.factory/skills/gstack-*/` |
@@ -126,8 +126,10 @@ For Codex, setup reads the top-level `model` from
 `${CODEX_HOME:-~/.codex}/config.toml` and generates the matching behavioral
 profile. `gpt-5.6-sol` automatically receives bounded-scope instructions that
 finish the requested lake without expanding into adjacent cleanup or speculative
-hardening. Override detection with `./setup --host codex --model <id>`. After
-changing your Codex model, rerun `./setup --host codex` to regenerate the skills.
+hardening. Override detection with `./setup --host codex --model <id>` — the
+override applies to that run only; set `model` in your Codex `config.toml` to
+make it stick across upgrades. After changing your Codex model, rerun
+`./setup --host codex` to regenerate the skills.
 
 **Want to add support for another agent?** See [docs/ADDING_A_HOST.md](docs/ADDING_A_HOST.md).
 It's one TypeScript config file, zero code changes.
