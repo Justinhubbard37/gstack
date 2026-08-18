@@ -97,7 +97,7 @@ export function generatePreamble(ctx: TemplateContext): string {
     generatePlanModeInfo(ctx),
     generateUpgradeCheck(ctx),
     generateWritingStyleMigration(ctx),
-    generateLakeIntro(),
+    generateLakeIntro(ctx),
     generateTelemetryPrompt(ctx),
     generateProactivePrompt(ctx),
     generateFirstRunGuidance(ctx),
