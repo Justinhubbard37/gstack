@@ -157,6 +157,7 @@ Key fields:
 
 | Field | Purpose |
 |-------|---------|
+| `defaultModel` | Model overlay rendered when generation gets no explicit `--model` (validated against `ALL_MODEL_NAMES` in `scripts/models.ts`) |
 | `frontmatter.mode` | `allowlist` (keep only listed) or `denylist` (strip listed) |
 | `frontmatter.descriptionLimit` | Max chars, `null` for no limit |
 | `frontmatter.descriptionLimitBehavior` | `error` (fail build), `truncate`, `warn` |

@@ -26,8 +26,10 @@ bun run slop          # full slop-scan report (all files)
 bun run slop:diff     # slop findings in files changed on this branch only
 ```
 
-`test:evals` requires `ANTHROPIC_API_KEY`. Codex E2E tests (`test/codex-e2e.test.ts`)
-use Codex's own auth from `~/.codex/` config — no `OPENAI_API_KEY` env var needed.
+`test:evals` requires `ANTHROPIC_API_KEY`. Codex E2E tests (`test/codex-e2e.test.ts`,
+`test/codex-e2e-sol-scope.test.ts`) use Codex's own auth — the hermetic runner copies
+only `auth.json` from `${CODEX_HOME:-~/.codex}` and pins `CODEX_HOME` in the child
+env — no `OPENAI_API_KEY` env var needed.
 
 **Env keys in Conductor workspaces.** The `GSTACK_*` env-shim (v1.39.2.0+,
 `lib/conductor-env-shim.ts`) promotes `GSTACK_ANTHROPIC_API_KEY` /
@@ -194,7 +196,11 @@ SKILL.md files are **generated** from `.tmpl` templates. To update docs:
 Generation uses each host's `defaultModel` (`claude` for existing hosts, `gpt`
 for Codex) unless `--model` is explicit. Codex installs additionally read the
 top-level model from `${CODEX_HOME:-~/.codex}/config.toml`; rerun
-`./setup --host codex` after changing that model.
+`./setup --host codex` after changing that model. Note: `bun run build` and a
+bare `gen:skill-docs --host codex` render the host default (gpt) — if your
+Codex config.toml pins a different model, rerun `./setup --host codex`
+afterwards to restore your profile (single-owner persistence is filed in
+TODOS.md).
 
 To add a new browse command: add it to `browse/src/commands.ts` and rebuild.
 To add a snapshot flag: add it to `SNAPSHOT_FLAGS` in `browse/src/snapshot.ts` and rebuild.

@@ -815,6 +815,8 @@ or reject the value with guidance like openclaw/hermes/gbrain get.
 **Why:** Silent success with zero effect is the worst failure shape.
 **Priority:** P4. **Effort:** S.
 
+---
+
 ## browse server: terminal-agent teardown follow-ups (filed v1.41 via /plan-eng-review)
 
 ### ✅ DONE (v1.44.0.0): Identity-based terminal-agent kill (replace pkill regex with PID)

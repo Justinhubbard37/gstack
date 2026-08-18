@@ -44,7 +44,7 @@ If you run Codex on `gpt-5.6-sol`, rerun `./setup --host codex` once. Your skill
 - `setup` resolves the Codex generation model on every run (a read-only TOML lookup), so any install path preserves a Sol user's rendered profile; the codex install summary prints the active profile and its source.
 
 #### For contributors
-- New free-tier coverage: every resolver branch including hostile-config shapes (12 tests), overlay content pins, the explicit `--model` override through the real generation CLI, real-file periodic-tier classification for both codex E2E files, and invalid `defaultModel` validation.
+- New free-tier coverage: every resolver branch including hostile-config shapes (10 tests), overlay content pins, the explicit `--model` override through the real generation CLI, real-file periodic-tier classification for both codex E2E files, and invalid `defaultModel` validation.
 - Static pins in `test/setup-codex-model.test.ts` hold the load-bearing setup properties: unconditional resolver, quoted `--explicit` argv, fail-closed empty-resolver exit, the Kiro claude-render sandwich, and the `--host kiro` rewrite.
 - The Sol E2E snapshots the exact prior `.agents` render and restores it in `beforeAll`, so the shared tree never stays Sol-flavored for goldens, parallel shards, or symlinked installs. Fixture commits disable gpg signing so the eval runs under any global git config.
 
