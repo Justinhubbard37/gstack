@@ -76,6 +76,19 @@ fi
 # so the dedupe key and the prune predicate cannot drift. The prelude MUST NOT
 # contain single quotes (this assignment is single-quoted).
 _HOOK_JS_PRELUDE='
+// Umbrella fail-closed guard: bun in -e mode swallows uncaught exceptions
+// thrown after a require() call and exits 0 (verified on bun 1.3.13;
+// uncaughtException handlers never fire in -e mode either). Every script body
+// below runs inside gsMain so a runtime throw becomes a LOUD exit 4 instead
+// of a silent success that reports a mutation as clean.
+function gsMain(fn) {
+  try {
+    fn();
+  } catch (e) {
+    process.stderr.write("gstack-settings-hook: internal error (" + (e && e.message) + ") -- refusing to mutate\n");
+    process.exit(4);
+  }
+}
 var KNOWN_HOOKS = {
   "question-log-hook":        { source: "plan-tune-cathedral", event: "PostToolUse",  matcher: "(AskUserQuestion|mcp__.*__AskUserQuestion)", relpath: "hosts/claude/hooks/question-log-hook" },
   "question-preference-hook": { source: "plan-tune-cathedral", event: "PreToolUse",   matcher: "(AskUserQuestion|mcp__.*__AskUserQuestion)", relpath: "hosts/claude/hooks/question-preference-hook" },
@@ -93,13 +106,20 @@ function gsStripWrap(c) {
     // recognized as ours on later passes (identity round-trips).
     s = s.slice(1, -1).replace(/\\([\\"$\x60])/g, "$1");
   }
-  return s.replace(/\\/g, "/");
+  // Separator normalization is Windows-only (a rare-but-legal Unix path
+  // containing a backslash must not be rewritten and mis-stat-ed).
+  if (process.platform === "win32" || /^[A-Za-z]:[\\\/]/.test(s)) {
+    s = s.replace(/\\/g, "/");
+  }
+  return s;
 }
 function gsBaseOf(c) { var p = gsStripWrap(c); return p.split("/").pop(); }
 function gsOwnedRow(cmd, event, matcher) {
   var p = gsStripWrap(cmd);
   var b = p.split("/").pop();
-  var row = KNOWN_HOOKS[b];
+  // hasOwnProperty guard: a foreign hook basename like "toString" or
+  // "constructor" must not resolve to an inherited Object.prototype member.
+  var row = Object.prototype.hasOwnProperty.call(KNOWN_HOOKS, b) ? KNOWN_HOOKS[b] : null;
   if (!row) return null;
   if (p !== row.relpath && p.slice(-(row.relpath.length + 1)) !== "/" + row.relpath) return null;
   if (row.event !== event) return null;
@@ -152,9 +172,17 @@ function gsRotateBackups(settingsPath, keep) {
   try {
     var dir = path.dirname(settingsPath);
     var base = path.basename(settingsPath) + ".bak.";
-    var baks = fs.readdirSync(dir).filter(function (f) { return f.indexOf(base) === 0; }).sort();
+    var baks = fs.readdirSync(dir)
+      .filter(function (f) { return f.indexOf(base) === 0; })
+      .map(function (f) {
+        var full = path.join(dir, f);
+        var m = 0;
+        try { m = fs.statSync(full).mtimeMs; } catch (e3) {}
+        return { full: full, m: m };
+      })
+      .sort(function (a, b) { return a.m - b.m; });
     for (var i = 0; i < baks.length - keep; i++) {
-      try { fs.unlinkSync(path.join(dir, baks[i])); } catch (e2) {}
+      try { fs.unlinkSync(baks[i].full); } catch (e2) {}
     }
   } catch (e) {}
 }
@@ -196,6 +224,13 @@ function gsWriteIfChanged(path, beforeText, settings, existed) {
 '
 
 # ─── Mutation lock ────────────────────────────────────────────────────
+# Accepted tradeoffs (adversarial-reviewed): (1) the lock serializes gstack
+# writers only -- Claude Code rewrites settings.json without honoring it, so a
+# lost update against a live session remains possible (convergent: the next
+# heal repairs); (2) stale takeover is mtime-based -- a holder legitimately
+# slower than the stale window can be stolen from, and a fresh crash stalls
+# callers for the give-up window. PID-aware takeover was considered and
+# deferred (owner file already carries $$ if it becomes worth it).
 _LOCK_DIR="$SETTINGS_FILE.lock"
 _LOCK_TOKEN=""
 
@@ -203,7 +238,8 @@ _release_lock() {
   if [ -n "$_LOCK_TOKEN" ] && [ -d "$_LOCK_DIR" ]; then
     # Ownership-checked: never remove a lock another process re-acquired
     # after a stale takeover.
-    if [ "$(cat "$_LOCK_DIR/owner" 2>/dev/null || true)" = "$_LOCK_TOKEN" ]; then
+    _OWNER_CONTENT="$(cat "$_LOCK_DIR/owner" 2>/dev/null || true)"
+    if [ "$_OWNER_CONTENT" = "$_LOCK_TOKEN" ] || [ -z "$_OWNER_CONTENT" ]; then
       rm -rf "$_LOCK_DIR" 2>/dev/null || true
     fi
   fi
@@ -237,7 +273,7 @@ _acquire_lock() {
       continue
     fi
     if [ "$waited_ms" -ge "$give_up_ms" ]; then
-      echo "gstack-settings-hook: could not acquire lock $_LOCK_DIR -- skipping this mutation (the next setup retries it)" >&2
+      echo "gstack-settings-hook: could not acquire lock $_LOCK_DIR -- skipping this mutation, exit 5 (the next setup retries it)" >&2
       return 1
     fi
     sleep "$(printf '0.%03d' "$poll_ms")"
@@ -261,9 +297,9 @@ case "$ACTION" in
       echo "Usage: gstack-settings-hook add <hook-command>" >&2
       exit 1
     fi
-    _acquire_lock || exit 0
+    _acquire_lock || exit 5
     _mutation_env
-    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" GSTACK_HOOK_CMD="$HOOK_CMD" bun -e "$_HOOK_JS_PRELUDE"'
+    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" GSTACK_HOOK_CMD="$HOOK_CMD" bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const hookCmd = process.env.GSTACK_HOOK_CMD;
       const loaded = gsLoadSettings(settingsPath);
@@ -280,6 +316,7 @@ case "$ACTION" in
         });
       }
       gsWriteIfChanged(settingsPath, before, settings, loaded.existed);
+    });
     '
     ;;
 
@@ -290,9 +327,9 @@ case "$ACTION" in
       exit 1
     fi
     [ -f "$SETTINGS_FILE" ] || exit 1
-    _acquire_lock || exit 0
+    _acquire_lock || exit 5
     _mutation_env
-    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" bun -e "$_HOOK_JS_PRELUDE"'
+    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const loaded = gsLoadSettings(settingsPath);
       const settings = loaded.settings;
@@ -316,6 +353,7 @@ case "$ACTION" in
         if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
       }
       gsWriteIfChanged(settingsPath, before, settings, loaded.existed);
+    });
     '
     ;;
 
@@ -348,7 +386,7 @@ case "$ACTION" in
     if [ "$ACTION" = "diff-event" ]; then
       DIFF_ONLY=1
     else
-      _acquire_lock || exit 0
+      _acquire_lock || exit 5
     fi
     _mutation_env
     GSTACK_SETTINGS_PATH="$SETTINGS_FILE" \
@@ -358,7 +396,7 @@ case "$ACTION" in
     GSTACK_MATCHER="$MATCHER" \
     GSTACK_TIMEOUT="$TIMEOUT" \
     GSTACK_DIFF_ONLY="$DIFF_ONLY" \
-    bun -e "$_HOOK_JS_PRELUDE"'
+    bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const event = process.env.GSTACK_EVENT;
       const cmd = process.env.GSTACK_COMMAND;
@@ -436,6 +474,7 @@ case "$ACTION" in
 
       gsWriteIfChanged(settingsPath, before, settings, loaded.existed);
       console.log("OK: " + event + " hook registered (source: " + source + ")");
+    });
     '
     ;;
 
@@ -453,9 +492,9 @@ case "$ACTION" in
       exit 1
     fi
     [ -f "$SETTINGS_FILE" ] || exit 0
-    _acquire_lock || exit 0
+    _acquire_lock || exit 5
     _mutation_env
-    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" GSTACK_SOURCE="$SOURCE" bun -e "$_HOOK_JS_PRELUDE"'
+    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" GSTACK_SOURCE="$SOURCE" bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const source = process.env.GSTACK_SOURCE;
       const loaded = gsLoadSettings(settingsPath);
@@ -494,6 +533,7 @@ case "$ACTION" in
       if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
       gsWriteIfChanged(settingsPath, before, settings, loaded.existed);
       console.log("OK: removed " + removed + " hook entry/entries tagged source=" + source);
+    });
     '
     ;;
 
@@ -520,26 +560,38 @@ case "$ACTION" in
     # but live ones are never re-pointed (re-activation needs consent; removal
     # of live ones is --no-team/uninstall territory).
     GSTACK_PT_OPTOUT=0
-    _CFG_BIN="$(cd "$(dirname "$0")" && pwd)/gstack-config"
-    if [ -x "$_CFG_BIN" ] && "$_CFG_BIN" has plan_tune_hooks 2>/dev/null; then
-      _PT_VAL=$("$_CFG_BIN" get plan_tune_hooks 2>/dev/null || true)
-      _PT_VAL=$(printf '%s' "$_PT_VAL" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-      case "$_PT_VAL" in
-        n|no|false|skip|off|0) GSTACK_PT_OPTOUT=1 ;;
-      esac
+    # The opt-out lookup is repoint/heal-only — the --all sweep never
+    # re-points, and uninstall must not depend on a sibling gstack-config.
+    if [ -z "$PRUNE_ALL" ]; then
+      _CFG_BIN="$(cd "$(dirname "$0")" && pwd)/gstack-config"
+      if [ -x "$_CFG_BIN" ] && "$_CFG_BIN" has plan_tune_hooks 2>/dev/null; then
+        _PT_VAL=$("$_CFG_BIN" get plan_tune_hooks 2>/dev/null || true)
+        _PT_VAL=$(printf '%s' "$_PT_VAL" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$_PT_VAL" in
+          n|no|false|skip|off|0) GSTACK_PT_OPTOUT=1 ;;
+        esac
+      fi
     fi
-    _acquire_lock || exit 0
+    _acquire_lock || exit 5
     _mutation_env
     GSTACK_SETTINGS_PATH="$SETTINGS_FILE" \
     GSTACK_REPOINT_ROOT="$REPOINT_ROOT" \
     GSTACK_PRUNE_ALL="$PRUNE_ALL" \
     GSTACK_PT_OPTOUT="$GSTACK_PT_OPTOUT" \
-    bun -e "$_HOOK_JS_PRELUDE"'
+    GSTACK_SWEEP_EXCLUDE_SOURCES="${GSTACK_SWEEP_EXCLUDE_SOURCES:-}" \
+    bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const root = (process.env.GSTACK_REPOINT_ROOT || "").replace(/\/+$/, "");
       const all = process.env.GSTACK_PRUNE_ALL === "1";
       const ptOptout = process.env.GSTACK_PT_OPTOUT === "1";
       const PT_SOURCES = { "plan-tune-cathedral": true, "auq-error-fallback": true };
+      // Sources a sweep must leave alone (e.g. `setup --no-team` excludes the
+      // user-registered verify-gate hook: turning team mode off must not
+      // delete an unrelated opt-in whose binary still exists).
+      const sweepExclude = {};
+      (process.env.GSTACK_SWEEP_EXCLUDE_SOURCES || "").split(",").forEach(function (sName) {
+        if (sName.trim()) sweepExclude[sName.trim()] = true;
+      });
 
       const loaded = gsLoadSettings(settingsPath);
       const settings = loaded.settings;
@@ -554,14 +606,13 @@ case "$ACTION" in
             if (!Array.isArray(entry.hooks)) { rebuilt.push(entry); continue; }
             const matcher = entry.matcher || "";
             const wasSingle = entry.hooks.length === 1;
-            let removedHere = 0;
             const remain = [];
             const seenInEntry = new Set();
             if (entry.hooks.length === 0) {
               // Started-empty entries are foreign data we never touched --
               // preserve them (only a gstack-tagged empty entry is claimable,
               // and only by the --all sweep).
-              if (all && entry._gstack_source) { removed++; continue; }
+              if (all && entry._gstack_source && !sweepExclude[entry._gstack_source]) { removed++; continue; }
               rebuilt.push(entry);
               continue;
             }
@@ -573,7 +624,10 @@ case "$ACTION" in
               // command-less items); tags never claim items in multi-item entries.
               const stray = !row && !!cmdRaw && !!entry._gstack_source && wasSingle;
               if (!row && !stray) { remain.push(h); continue; }   // foreign: never touched
-              if (all) { removed++; removedHere++; continue; }
+              if (all) {
+                if ((row && sweepExclude[row.source]) || (!row && entry._gstack_source && sweepExclude[entry._gstack_source])) { remain.push(h); continue; }
+                removed++; continue;
+              }
               if (row && root && !(ptOptout && PT_SOURCES[row.source])) {
                 const target = root + "/" + row.relpath;
                 if (gsIsAlive(target)) {
@@ -582,7 +636,7 @@ case "$ACTION" in
                   // Within-entry twin collapse: two dead copies of the same
                   // hook re-point to the same canonical command -- keeping
                   // both would fire the hook twice per event, forever.
-                  if (seenInEntry.has(newCmd)) { removed++; removedHere++; continue; }
+                  if (seenInEntry.has(newCmd)) { removed++; continue; }
                   seenInEntry.add(newCmd);
                   if (wasSingle) entry._gstack_source = row.source;   // tag restore
                   remain.push(h);
@@ -590,7 +644,7 @@ case "$ACTION" in
                 }
               }
               // No re-point target (or plan-tune opt-out): keep live, prune dead.
-              if (gsIsAlive(cmdRaw)) remain.push(h); else { removed++; removedHere++; }
+              if (gsIsAlive(cmdRaw)) remain.push(h); else { removed++; }
             }
             if (remain.length === 0) continue;   // entry emptied → dropped
             entry.hooks = remain;
@@ -630,6 +684,7 @@ case "$ACTION" in
 
       gsWriteIfChanged(settingsPath, before, settings, loaded.existed);
       console.log("OK: removed " + removed + " gstack hook entries (repointed " + repointed + ")");
+    });
     '
     ;;
 
@@ -650,6 +705,12 @@ case "$ACTION" in
         exit 1
         ;;
     esac
+    case "${LATEST#"$SETTINGS_FILE".bak.}" in
+      */*)
+        echo "rollback: pointer suffix contains a path separator -- refusing" >&2
+        exit 1
+        ;;
+    esac
     if [ ! -f "$LATEST" ]; then
       echo "rollback: pointer references missing backup $LATEST" >&2
       exit 1
@@ -663,7 +724,7 @@ case "$ACTION" in
 
   list-sources)
     [ -f "$SETTINGS_FILE" ] || { echo "(no settings file)"; exit 0; }
-    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" bun -e "$_HOOK_JS_PRELUDE"'
+    GSTACK_SETTINGS_PATH="$SETTINGS_FILE" bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const fs = require("fs");
       let settings = {};
       try { settings = JSON.parse(fs.readFileSync(process.env.GSTACK_SETTINGS_PATH, "utf8")); }
@@ -684,6 +745,7 @@ case "$ACTION" in
         }
       }
       if (!any) console.log("(no gstack-tagged hooks)");
+    });
     '
     ;;
 
