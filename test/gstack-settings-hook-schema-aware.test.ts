@@ -470,6 +470,53 @@ describe('add-event: per-item identity re-point', () => {
   });
 });
 
+describe('legacy remove: per-item (regression)', () => {
+  test('mixed SessionStart entry: user item survives in place, gstack item removed', () => {
+    // REGRESSION pin: the pre-v1.67.2 legacy `remove` dropped the ENTIRE
+    // entry when any item matched gstack-session-update, destroying a user's
+    // co-located hook. The rewrite filters per-item; this is the only test of
+    // that branch (team-mode.test.ts covers single-item entries only).
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        SessionStart: [{
+          hooks: [
+            { type: 'command', command: '/Users/me/my-own-session-hook' },
+            { type: 'command', command: '/old/install/bin/gstack-session-update' },
+          ],
+        }],
+      },
+    }, null, 2));
+    const r = runIso(['remove', '/old/install/bin/gstack-session-update']);
+    expect(r.exitCode).toBe(0);
+    const s = settings();
+    expect(s.hooks.SessionStart).toHaveLength(1);
+    expect(s.hooks.SessionStart[0].hooks).toHaveLength(1);
+    expect(s.hooks.SessionStart[0].hooks[0].command).toBe('/Users/me/my-own-session-hook');
+  });
+});
+
+describe('ownership negatives', () => {
+  test('owned basename+relpath under the WRONG matcher stays foreign (not re-pointed)', () => {
+    const canon = mkCanon(tmpDir);
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        PostToolUse: [hookEntry('/dead/wt/hosts/claude/hooks/question-log-hook', 'Bash')],
+      },
+    }, null, 2));
+    const before = fs.readFileSync(settingsFile, 'utf-8');
+    const r = runIso(['prune-stale', '--repoint', canon]);
+    expect(r.stdout).toMatch(/removed 0 gstack hook entries \(repointed 0\)/);
+    expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(before);
+  });
+
+  test('prune-stale on an absent settings file exits 0 with removed 0', () => {
+    const r = runIso(['prune-stale', '--repoint', '/nonexistent-root']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/removed 0 gstack hook entries \(repointed 0\)/);
+    expect(fs.existsSync(settingsFile)).toBe(false);
+  });
+});
+
 describe('remove-source: per-item', () => {
   test('mixed tagged entry: gstack item removed, user item survives, tag dropped', () => {
     fs.writeFileSync(settingsFile, JSON.stringify({
