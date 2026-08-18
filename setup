@@ -2161,18 +2161,22 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
   fi
 
   _install_plan_tune_hooks() {
+    # Returns non-zero if ANY registration was skipped (lock contention or a
+    # fail-closed settings error) so callers log honestly instead of claiming
+    # success for a mutation that never happened.
+    local _pt_install_rc=0
     "$SETTINGS_HOOK" add-event \
       --event PostToolUse \
       --matcher '(AskUserQuestion|mcp__.*__AskUserQuestion)' \
       --command "$PLAN_TUNE_LOG_HOOK" \
       --source plan-tune-cathedral \
-      --timeout 5
+      --timeout 5 || _pt_install_rc=1
     "$SETTINGS_HOOK" add-event \
       --event PreToolUse \
       --matcher '(AskUserQuestion|mcp__.*__AskUserQuestion)' \
       --command "$PLAN_TUNE_PREF_HOOK" \
       --source plan-tune-cathedral \
-      --timeout 5
+      --timeout 5 || _pt_install_rc=1
     # AskUserQuestion-failure prose-fallback reliability hook (OV3:B). Fires only when
     # an AskUserQuestion call returns an error/missing result; inert on success and
     # inert if the platform doesn't invoke PostToolUse on tool errors. MUST use its
@@ -2186,8 +2190,9 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
         --matcher '(AskUserQuestion|mcp__.*__AskUserQuestion)' \
         --command "$AUQ_ERROR_FALLBACK_HOOK" \
         --source auq-error-fallback \
-        --timeout 5
+        --timeout 5 || _pt_install_rc=1
     fi
+    return $_pt_install_rc
   }
 
   if [ "$ALREADY_INSTALLED" -eq 1 ]; then
@@ -2195,13 +2200,17 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
     log "Plan-tune hooks already installed. Run \`$SETTINGS_HOOK list-sources\` to inspect."
   elif [ "$PT_DECISION" = "yes" ]; then
     # Explicit opt-in (flag / env / config) or Conductor implicit opt-in. Non-interactive.
-    _install_plan_tune_hooks
-    log ""
-    if [ "${_PT_CONDUCTOR_AUTO:-0}" -eq 1 ]; then
-      log "AskUserQuestion reliability hooks installed (Conductor detected): decisions"
-      log "render as a prose brief instead of the flaky AskUserQuestion tool. Inspect with /plan-tune."
+    if _install_plan_tune_hooks; then
+      log ""
+      if [ "${_PT_CONDUCTOR_AUTO:-0}" -eq 1 ]; then
+        log "AskUserQuestion reliability hooks installed (Conductor detected): decisions"
+        log "render as a prose brief instead of the flaky AskUserQuestion tool. Inspect with /plan-tune."
+      else
+        log "Plan-tune hooks installed. Run /plan-tune anytime to inspect."
+      fi
     else
-      log "Plan-tune hooks installed. Run /plan-tune anytime to inspect."
+      log ""
+      log "  warning: some AskUserQuestion hooks were NOT registered (settings lock contention or a settings error above) — re-run ./setup to complete."
     fi
     touch "$PLAN_TUNE_INSTALL_MARKER"
   elif [ "$PT_DECISION" = "no" ]; then
@@ -2246,9 +2255,13 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
     read -t "$_PT_PROMPT_TIMEOUT" -r PLAN_TUNE_INSTALL_REPLY </dev/tty 2>/dev/null || PLAN_TUNE_INSTALL_REPLY=""
     case "$PLAN_TUNE_INSTALL_REPLY" in
       y|Y)
-        _install_plan_tune_hooks
-        log ""
-        log "Plan-tune hooks installed. Run /plan-tune anytime to inspect."
+        if _install_plan_tune_hooks; then
+          log ""
+          log "Plan-tune hooks installed. Run /plan-tune anytime to inspect."
+        else
+          log ""
+          log "  warning: some AskUserQuestion hooks were NOT registered (settings lock contention or a settings error above) — re-run ./setup to complete."
+        fi
         touch "$PLAN_TUNE_INSTALL_MARKER"
         ;;
       n|N)
@@ -2313,7 +2326,10 @@ if [ "$NO_TEAM_MODE" -eq 1 ] && [ -x "$SETTINGS_HOOK" ]; then
   "$SETTINGS_HOOK" remove-source --source plan-tune-cathedral >/dev/null || true
   "$SETTINGS_HOOK" remove-source --source auq-error-fallback >/dev/null || true
   "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop >/dev/null || true
-  "$SETTINGS_HOOK" prune-stale --all >/dev/null || true
+  # verify-gate is a user-registered opt-in unrelated to team mode -- turning
+  # team mode off must not delete it (uninstall still sweeps it, correctly,
+  # because there the binary itself is being removed).
+  GSTACK_SWEEP_EXCLUDE_SOURCES="verify-gate" "$SETTINGS_HOOK" prune-stale --all >/dev/null || true
 fi
 
 # ─── Redact pre-push guard consent (#1946) ───────────────────────────────────
