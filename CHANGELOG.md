@@ -1,5 +1,138 @@
 # Changelog
 
+## [1.68.0.0] - 2026-08-17
+
+**The next tracker wave: 16 verified fixes in, 90 stale PRs and 21 issues out.**
+**Six community contributors credited, one queue race killed for good.**
+
+This release lands the full next-wave queue: six community PRs ported with
+authorship intact, ten fixes of our own, and the six adversarial-review
+residuals the last wave deferred. The headline internals: the brain-sync
+queue moved to a per-record spool directory, so the enqueue/drain race class
+is structurally gone, not narrowed. The session-update lock records the
+process that actually holds it, heartbeats while it works, and expires on a
+hard TTL, so concurrent updaters can no longer trample a live install. And a
+live bug caught during this wave's own review, a stray `~/.git` directory
+silently misfiling decisions and learnings into the wrong project store, is
+fixed with a self-healing cache and a ten-case parity suite.
+
+### The numbers that matter
+
+Source: this branch vs main (`git diff main...HEAD --stat`), the wave's
+coverage audit, and the tracker close-out run on 2026-08-17.
+
+| Metric | Value |
+|---|---|
+| Fixes landed (issues closed by this release) | 16 |
+| Community PRs ported with credit | 6 (6 contributors) |
+| Open PRs closed with receipts | 90 |
+| Stale issues closed with version pointers | 21 |
+| Diff | 133 files, +6,276 / −649 |
+| New/extended test files | 31 (coverage audit: 96% of changed surfaces at behavior+edge+error depth) |
+| Review rounds absorbed pre-merge | 3 (specialist army, then two cross-model adversarial passes) |
+
+The tracker numbers are the striking ones: 111 stale items left the queue in
+one day, each with a receipt naming the release that covered it. Contributors
+whose fixes were absorbed months ago now have closure with credit instead of
+an open PR going quiet.
+
+### What this means for you
+
+If a skill ever told you the brain queue was empty while records sat in it,
+or `--probe` promised thousands of pages that `--bulk` then refused, or a
+second Claude session stomped your gstack update mid-pull, those classes are
+closed and each one is pinned by a regression test. Update with
+`/gstack-upgrade`, which itself now fast-forwards first and never discards
+unpushed work without telling you exactly what it would delete.
+
+### Itemized changes
+
+#### Added
+- `/scrape` and `/skillify` now carry the untrusted-content processing rules,
+  single-sourced with the browse reference so the wording can never drift.
+  Re-derived from PR #2612. Contributed by @Lockyer228 (#2441).
+- `$B cdp` allows `Emulation.setCPUThrottlingRate` and
+  `Network.emulateNetworkConditions` for real perf measurement on simulated
+  low-end clients. Overrides persist until cleared; the justifications say so.
+  Contributed by @henbima (#2602).
+- Transcript ingest honors the per-remote trust store: `deny` and `read-only`
+  remotes are skipped with per-tier counts, a corrupted store aborts before
+  any write, and the policy lookup is one batched subprocess for the whole
+  corpus (#2392).
+- The gbrain source worktree advances on the daily sync, so brains stop
+  serving stale pages between setups. The unattended path refuses dirty
+  worktrees and never force-removes (#2516).
+- `gstack-gbrain-repo-policy get --batch`: one spawn classifies every remote.
+
+#### Changed
+- **Behavior change:** `gstack-config get <unknown-key>` now exits 1 with
+  empty output, so `|| echo fallback` callers finally fire. Keys whose empty
+  value is meaningful (`cross_project_learnings`, `salience_allowlist`,
+  `user_slug_at_*`, `redact_repo_visibility`, `repo_mode`) still return empty
+  with exit 0. Scripts that relied on unknown keys silently returning empty
+  with exit 0 must add a fallback. Contributed by @benjaminberes-bp (#2611).
+- The brain-sync queue is a maildir-style spool (`.brain-queue.d/`, one file
+  per record, atomic rename). Writer and drainer never share an inode; the
+  drain deletes only records classification proves were staged or dropped,
+  so a classifier crash or a malformed pulled privacy map retains everything
+  instead of discarding it. Legacy queues migrate on the next drain.
+- `--probe` in memory-ingest counts through the same attribution and policy
+  gates as `--bulk`, with a bounded 256KB read per transcript, so its numbers
+  are the numbers. Re-derived from PR #2612. Contributed by @Lockyer228 (#2394).
+- `/gstack-upgrade` fast-forwards with autostash first; the destructive
+  fallback runs only on a provably-clean tree with no unpushed commits, or
+  after an explicit confirmation listing exactly what would be discarded (#2517).
+- Skill completion always reviews the session for durable learnings and says
+  so explicitly when there are none. Re-derived from PR #2612. Contributed by
+  @Lockyer228 (#2402).
+- `/codex` documents the measured session-overhead reality: resume does not
+  amortize the prelude, so prefer one call per skill (#2387).
+- MCP scope resolution is project-first everywhere, matching Claude Code's
+  verified precedence, and one project's remote gbrain registration no longer
+  reclassifies every other project on the machine.
+
+#### Fixed
+- plan-tune refuses `never-ask` on one-way question ids at write time and
+  reports previously-stored inert preferences in `--stats`. Contributed by
+  @szsunyuan (#2488).
+- A typo'd `gstack-redact` subcommand exits 1 with usage instead of silently
+  scanning stdin (or hanging on a terminal). Contributed by @kinoko-studio.
+- One ambiguous ref no longer kills the whole annotated screenshot: exact
+  matches stay exact, ambiguous refs fall back to first-match and are counted
+  visibly in the output. Contributed by @namtrok.
+- `gstack-version-bump repair` refuses to write a fabricated `0.0.0.0` into
+  package.json when VERSION is missing or empty, while a genuine `0.0.0.0`
+  file still repairs. Re-derived from PR #2612. Contributed by @Lockyer228 (#2600).
+- The session-update lock records the live holder (not the exited parent),
+  heartbeats during long pulls and setups, expires on a hard TTL so a
+  recycled PID cannot wedge it, and reclaims atomically with an
+  ownership-checked cleanup (#2613).
+- `gstack-slug` resolves the canonical owner-repo slug even when a stray
+  marker directory sits above the repo; the poisoned-cache shape self-heals,
+  legitimate sticky identities are preserved, and the native Windows fallback
+  agrees with the shell implementation on every pinned fixture.
+- `/review` checklist paths resolve from the installed skill root, so review
+  runs work in every target repo, not just gstack's own checkout (#2518).
+- next-version's offline fallback queries live remote refs without mutating
+  local state, fetches unreadable claims before giving up, and never silently
+  reissues a sibling branch's version.
+- Setup-registered hooks prefer the global install path and re-point stale
+  absolute paths on re-run; duplicate registrations collapse to one; a
+  corrupt settings.json is refused loudly instead of being replaced.
+- Windows: every `Bun.spawn` in browse carries `windowsHide` with a census
+  tripwire, and project-scoped brains resolve on backslash paths.
+
+#### For contributors
+- 90 absorbed or superseded PRs and 21 fixed issues were closed with receipt
+  comments pointing at the releases that covered them; ported PRs close with
+  porting-commit receipts when this release merges.
+- The parity-suite skeleton ceilings absorbed this wave's preamble growth
+  with measured notes; the referenced-path scanner self-check re-anchored to
+  the installed-root form.
+- New follow-ups filed in TODOS.md: skillify structural isolation, slug store
+  migration for pre-fix data, deny retroactivity for already-ingested pages,
+  and the slug heal-probe cache sentinel.
+
 ## [1.67.1.0] - 2026-08-16
 
 **We read every line of external-contributor code from the last two months.**
