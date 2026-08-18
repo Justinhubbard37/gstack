@@ -949,27 +949,18 @@ describe('mutation lock', () => {
     expect(fs.existsSync(lockDir)).toBe(false);   // released after the mutation
   });
 
-  test('fresh foreign lock: mutation skipped with a warning, file untouched', () => {
+  test('fresh foreign lock: mutation skipped loudly (exit 5), file untouched', () => {
     fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }, null, 2) + '\n');
     const before = fs.readFileSync(settingsFile, 'utf-8');
     const lockDir = `${settingsFile}.lock`;
     fs.mkdirSync(lockDir);
     fs.writeFileSync(path.join(lockDir, 'owner'), 'another-live-process');
-    // Capture stderr explicitly: on a zero exit, execSync passes stderr
-    // through to the parent instead of returning it.
-    const cmd = [SETTINGS_HOOK, 'add-event', '--event', 'Stop', '--command', '/x', '--source', 's']
-      .map((s) => `'${s}'`).join(' ');
-    const out = execSync(`${cmd} 2>&1`, {
-      env: {
-        ...process.env,
-        GSTACK_SETTINGS_FILE: settingsFile,
-        GSTACK_STATE_ROOT: tmpDir,
-        GSTACK_SETTINGS_LOCK_TIMEOUT_MS: '300',
-      },
-      encoding: 'utf-8',
-      timeout: 15000,
-    });
-    expect(out).toMatch(/could not acquire lock/);
+    const r = runIso(
+      ['add-event', '--event', 'Stop', '--command', '/x', '--source', 's'],
+      { GSTACK_SETTINGS_LOCK_TIMEOUT_MS: '300' },
+    );
+    expect(r.exitCode).toBe(5);                   // loud give-up, not silent skip
+    expect(r.stderr).toMatch(/could not acquire lock/);
     expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(before);
     expect(fs.existsSync(lockDir)).toBe(true);    // foreign lock NOT stolen
   });
@@ -987,5 +978,90 @@ describe('mutation lock', () => {
     const s = settings();   // throws if the file is corrupt
     expect(s.hooks.PreToolUse).toHaveLength(1);
     expect(s.hooks.PostToolUse).toHaveLength(1);
+  });
+});
+
+describe('gstack-settings-hook adversarial hardening', () => {
+  let tmpDir: string;
+  let settingsFile: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-settings-adv-'));
+    settingsFile = path.join(tmpDir, 'settings.json');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function runAdv(args: string[], extraEnv: Record<string, string> = {}) {
+    try {
+      const stdout = execSync([SETTINGS_HOOK, ...args].map((s) => `'${s}'`).join(' '), {
+        env: {
+          ...process.env,
+          GSTACK_SETTINGS_FILE: settingsFile,
+          GSTACK_STATE_ROOT: tmpDir,
+          ...extraEnv,
+        },
+        encoding: 'utf-8',
+        timeout: 15000,
+      });
+      return { stdout, stderr: '', exitCode: 0 };
+    } catch (e: any) {
+      return { stdout: e.stdout || '', stderr: e.stderr || '', exitCode: e.status ?? 1 };
+    }
+  }
+
+  const advSettings = (): any => JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+
+  test('wrong-shape hooks value fails LOUD (exit 4), file untouched', () => {
+    // bun -e swallows uncaught exceptions after a require() and exits 0
+    // (verified on bun 1.3.13) -- without the gsMain umbrella this exact
+    // input produced a silent exit-0 no-op that reported clean.
+    const raw = JSON.stringify({ hooks: { Stop: { bogus: 'shape' } } }, null, 2) + '\n';
+    fs.writeFileSync(settingsFile, raw);
+    const r = runAdv(['prune-stale', '--all']);
+    expect(r.exitCode).toBe(4);
+    expect(r.stderr).toMatch(/internal error/);
+    expect(r.stderr).toMatch(/refusing to mutate/);
+    expect(fs.readFileSync(settingsFile, 'utf-8')).toBe(raw);
+  });
+
+  test('foreign hook whose basename collides with Object.prototype survives --all', () => {
+    // KNOWN_HOOKS["toString"] returns an inherited member without the
+    // hasOwnProperty guard -- pre-fix, this threw mid-scan and turned the
+    // sweep into a silent no-op.
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        Stop: [
+          { hooks: [{ type: 'command', command: '/usr/local/bin/toString' }] },
+          { _gstack_source: 'gstack-timeline-stop', hooks: [{ type: 'command', command: '/x/hosts/claude/hooks/timeline-stop-hook' }] },
+        ],
+      },
+    }, null, 2) + '\n');
+    const r = runAdv(['prune-stale', '--all']);
+    expect(r.exitCode).toBe(0);
+    const s = advSettings();
+    expect(s.hooks.Stop).toHaveLength(1);   // gstack entry swept...
+    expect(s.hooks.Stop[0].hooks[0].command).toBe('/usr/local/bin/toString');  // ...foreign one kept
+  });
+
+  test('GSTACK_SWEEP_EXCLUDE_SOURCES preserves verify-gate during an --all sweep', () => {
+    // `setup --no-team` sweeps team hooks but must not delete the
+    // user-registered verify-gate opt-in whose binary still exists.
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        Stop: [
+          { _gstack_source: 'verify-gate', hooks: [{ type: 'command', command: '/x/bin/gstack-verify-gate' }] },
+          { _gstack_source: 'gstack-timeline-stop', hooks: [{ type: 'command', command: '/x/hosts/claude/hooks/timeline-stop-hook' }] },
+        ],
+      },
+    }, null, 2) + '\n');
+    const r = runAdv(['prune-stale', '--all'], { GSTACK_SWEEP_EXCLUDE_SOURCES: 'verify-gate' });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/removed 1 /);
+    const s = advSettings();
+    expect(s.hooks.Stop).toHaveLength(1);
+    expect(s.hooks.Stop[0]._gstack_source).toBe('verify-gate');
   });
 });
