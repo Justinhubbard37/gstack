@@ -100,6 +100,8 @@ jobs:
             file: test/skill-routing-e2e.test.ts
           - name: e2e-codex
             file: test/codex-e2e.test.ts
+          - name: e2e-codex-sol-scope
+            file: test/codex-e2e-sol-scope.test.ts
           - name: e2e-gemini
             file: test/gemini-e2e.test.ts
     steps:

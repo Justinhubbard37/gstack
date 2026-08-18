@@ -2094,6 +2094,36 @@ describe('Codex generation (--host codex)', () => {
     const codexContent = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
     expect(codexContent).not.toContain('Codex design voice');
   });
+
+  // ─── Explicit --model override wins over the host default ────
+  // Without --model the codex host renders its defaultModel (gpt) — pinned by
+  // the golden test. This pins the OTHER direction through the real CLI:
+  // `./setup --host codex --model <id>` depends on it. Runs last in this
+  // describe and restores the host-default render before finishing.
+  test('explicit --model overrides the codex host default', () => {
+    try {
+      const override = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--model', 'claude'], {
+        cwd: ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(override.exitCode).toBe(0);
+      const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
+      expect(content).toContain('Model-Specific Behavioral Patch (claude)');
+      expect(content).toContain('MODEL_OVERLAY: claude');
+    } finally {
+      // Restore the host-default render — later tests and the host-config
+      // golden read this tree.
+      const restore = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex'], {
+        cwd: ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(restore.exitCode).toBe(0);
+    }
+    const restored = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
+    expect(restored).toContain('Model-Specific Behavioral Patch (gpt)');
+  });
 });
 
 // ─── Factory generation tests ────────────────────────────────

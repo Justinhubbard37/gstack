@@ -10,6 +10,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const ROOT = path.resolve(import.meta.dir, '..');
 import {
   PAID_TEST_GLOBS,
   classifyPaidTestFile,
@@ -32,6 +36,7 @@ describe('paid test enumeration', () => {
     expect(isPaidTestFile('test/skill-e2e-qa-workflow.test.ts')).toBe(true);
     expect(isPaidTestFile('test/skill-llm-eval.test.ts')).toBe(true);
     expect(isPaidTestFile('test/codex-e2e.test.ts')).toBe(true);
+    expect(isPaidTestFile('test/codex-e2e-sol-scope.test.ts')).toBe(true);
     expect(isPaidTestFile('test/skill-e2e-triage-audit.test.ts')).toBe(true);
     // Outside the globs: no dash, extra suffix, or a free test.
     // 'test/skill-e2e.test.ts' is the DELETED pre-split monolith's name,
@@ -46,7 +51,7 @@ describe('paid test enumeration', () => {
     const files = collectPaidTestFiles();
     expect(files.length).toBeGreaterThan(0);
     expect(files.every(isPaidTestFile)).toBe(true);
-    expect(PAID_TEST_GLOBS.length).toBe(5);
+    expect(PAID_TEST_GLOBS.length).toBe(6);
 
     const shards = planPaidShards(files);
     expect(shards.flat().sort()).toEqual([...files].sort());
@@ -86,6 +91,17 @@ describe('tier classification', () => {
     expect(classifyPaidTestFile(noGuard, 'gate').included).toBe(true);
     expect(classifyPaidTestFile(noGuard, 'periodic').included).toBe(true);
     expect(classifyPaidTestFile('', 'gate').included).toBe(true);
+  });
+
+  test('the REAL external-CLI test files classify as periodic-only', () => {
+    // Synthetic guard shapes above can drift from the actual files — the
+    // inert-demotion defect class. Pin the real sources: a guard-shape edit
+    // in either file that silently runs it in gate fails here.
+    for (const file of ['test/codex-e2e.test.ts', 'test/codex-e2e-sol-scope.test.ts']) {
+      const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      expect(classifyPaidTestFile(source, 'gate').included, `${file} leaked into gate tier`).toBe(false);
+      expect(classifyPaidTestFile(source, 'periodic').included, `${file} dropped from periodic tier`).toBe(true);
+    }
   });
 });
 

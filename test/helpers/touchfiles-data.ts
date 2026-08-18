@@ -269,6 +269,9 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'codex-discover-skill':  ['codex/**', '.agents/skills/**', 'test/helpers/codex-session-runner.ts', 'lib/worktree.ts'],
   'codex-review-findings': ['review/**', '.agents/skills/gstack-review/**', 'codex/**', 'test/helpers/codex-session-runner.ts', 'lib/worktree.ts'],
 
+  // GPT-5.6 Sol scope-termination E2E (Codex CLI, full generated investigate skill)
+  'codex-sol-scope-termination': ['model-overlays/gpt-5.6-sol.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts', 'scripts/resolvers/preamble/**', 'investigate/**', 'test/helpers/codex-session-runner.ts', 'test/codex-e2e-sol-scope.test.ts'],
+
   // Gemini E2E — smoke test only (Gemini gets lost in worktrees on complex tasks)
   'gemini-smoke':  ['.agents/skills/**', 'test/helpers/gemini-session-runner.ts', 'lib/worktree.ts'],
 
@@ -666,6 +669,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   // Multi-AI — periodic (require external CLIs)
   'codex-discover-skill': 'periodic',
   'codex-review-findings': 'periodic',
+  'codex-sol-scope-termination': 'periodic',
   'gemini-smoke': 'periodic',
 
   // Design — gate for cheap functional, periodic for Opus/quality
