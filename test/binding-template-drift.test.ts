@@ -68,21 +68,47 @@ describe('content-binding template drift', () => {
 
     // Functional: execute the template's tripwire block against a 0-banner
     // original and a 1-banner outgoing body — the ABORT branch must fire.
+    //
+    // Pass the script as an ARGV element (spawnSync array form), never by
+    // interpolating JSON.stringify into a shell line: JSON escaping is not
+    // shell escaping. Inside shell double quotes a JSON "\n" stays a literal
+    // backslash-n, which collapsed this multi-line script onto one line where
+    // `then\n` became the command word `thenn` and `>&2\nelse\n` became the
+    // redirect `>&2nelsen` — silently littering a `2nelsen` file (containing
+    // "bash: thenn: command not found") in the repo root on every suite run,
+    // while the old not-contains assertion passed vacuously because ALL
+    // output had been redirected into that file.
     const block = body.match(/_ORIG_BANNERS=\$\(grep[\s\S]*?fi\n/);
     expect(block).not.toBeNull();
     const fs = require('fs');
     const os = require('os');
     const path = require('path');
-    const { execSync } = require('child_process');
+    const { spawnSync } = require('child_process');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-banner-'));
     try {
-      fs.writeFileSync(path.join(dir, 'orig.md'), 'clean body\n');
-      fs.writeFileSync(path.join(dir, 'new.md'), 'body with UNTRUSTED TRACKER CONTENT banner leak\n');
-      const script = block![0]
-        .replaceAll('/tmp/gstack-pr-body-orig-$$.md', path.join(dir, 'orig.md'))
-        .replaceAll('/tmp/gstack-pr-body-$$.md', path.join(dir, 'new.md'));
-      const out = execSync(`bash -c ${JSON.stringify(script + '; true')}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
-      expect(out).not.toContain('banner tripwire clean');
+      const scriptFor = (origContent: string, newContent: string) => {
+        fs.writeFileSync(path.join(dir, 'orig.md'), origContent);
+        fs.writeFileSync(path.join(dir, 'new.md'), newContent);
+        return block![0]
+          .replaceAll('/tmp/gstack-pr-body-orig-$$.md', path.join(dir, 'orig.md'))
+          .replaceAll('/tmp/gstack-pr-body-$$.md', path.join(dir, 'new.md'));
+      };
+
+      // Banner leaked into the outgoing body → the ABORT branch fires, loudly.
+      const abort = spawnSync('bash', ['-c', scriptFor(
+        'clean body\n',
+        'body with UNTRUSTED TRACKER CONTENT banner leak\n',
+      )], { encoding: 'utf-8' });
+      expect(abort.stderr).toContain('ABORT: envelope banner leaked');
+      expect(abort.stdout).not.toContain('banner tripwire clean');
+
+      // No banner delta → the clean branch fires.
+      const clean = spawnSync('bash', ['-c', scriptFor(
+        'clean body\n',
+        'also clean body\n',
+      )], { encoding: 'utf-8' });
+      expect(clean.stdout).toContain('banner tripwire clean');
+      expect(clean.stderr).not.toContain('ABORT');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
