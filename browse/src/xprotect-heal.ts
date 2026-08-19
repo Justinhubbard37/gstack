@@ -167,6 +167,7 @@ export function findGstackInstallRoot(
 
 function defaultRunXattr(target: string): number | null {
   const res = Bun.spawnSync(['xattr', '-dr', 'com.apple.quarantine', target], {
+    windowsHide: true,
     stdout: 'pipe',
     stderr: 'pipe',
     timeout: 10_000,

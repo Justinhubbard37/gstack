@@ -35,6 +35,25 @@ happens after you say yes.
 - **Repos under a `deny` trust policy** (set in `/setup-gbrain` Step 6)
   are skipped — neither code nor transcripts from those repos ingest.
 
+## Per-remote trust policy (deny / read-only)
+
+Transcript ingest respects the same per-remote trust store as code import
+(`~/.gstack/gbrain-repo-policy.json`, managed by
+`gstack-gbrain-repo-policy`). Each transcript's git remote is checked
+against the store before anything is written:
+
+- **deny** — the transcript is skipped (reported as `skipped (policy deny)`).
+- **read-only** — skipped too: read-only means "search allowed, page
+  writes never", and transcript ingest writes pages (reported as
+  `skipped (policy read-only)`).
+- **read-write, or no entry** — ingests normally.
+- **Corrupted or unreadable store** — ingestion aborts before any writes
+  rather than bypassing a set policy. Inspect the store with
+  `gstack-gbrain-repo-policy list`; re-run `/setup-gbrain` if it's corrupt.
+
+Artifacts (learnings, plans, retros, etc.) are never policy-filtered — the
+policy is keyed by git remote, which artifacts don't have.
+
 ## What gets scanned for secrets
 
 The cross-machine secret boundary is `gstack-brain-sync` (the git push

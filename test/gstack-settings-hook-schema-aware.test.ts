@@ -220,6 +220,77 @@ describe('add-event', () => {
 });
 
 // ----------------------------------------------------------------------
+// ensure-event: duplicate (event, source) collapse
+// ----------------------------------------------------------------------
+
+describe('ensure-event collapses duplicate (event, source) entries', () => {
+  test('two same-source entries from the old matcher-keyed dedup collapse to ONE updated entry', () => {
+    // Pre-existing installs can carry two entries with the same
+    // (event, _gstack_source) — the old dedup keyed on the matcher too, so a
+    // matcher change pushed a second registration. `.find()` updated only the
+    // first and left the stale twin running forever.
+    const { spawnSync } = require('child_process');
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        PostToolUse: [
+          { _gstack_source: 'plan-tune-cathedral', matcher: 'OldMatcherA', hooks: [{ type: 'command', command: '/old-a', timeout: 5 }] },
+          { matcher: 'Bash', hooks: [{ type: 'command', command: '/user-own-hook' }] },
+          { _gstack_source: 'plan-tune-cathedral', matcher: 'OldMatcherB', hooks: [{ type: 'command', command: '/old-b', timeout: 5 }] },
+        ],
+      },
+    }, null, 2));
+
+    const r = spawnSync('bash', [
+      SETTINGS_HOOK, 'ensure-event',
+      '--event', 'PostToolUse',
+      '--matcher', 'NewMatcher',
+      '--command', '/canonical',
+      '--source', 'plan-tune-cathedral',
+      '--timeout', '5',
+    ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
+
+    expect(r.status).toBe(0);
+    // The collapse is reported on stderr, never silent.
+    expect(r.stderr).toContain('collapsed 1 duplicate');
+    const s = settings();
+    const mine = s.hooks.PostToolUse.filter((e: any) => e._gstack_source === 'plan-tune-cathedral');
+    expect(mine).toHaveLength(1); // ONE canonical entry — the stale twin is gone
+    expect(mine[0].matcher).toBe('NewMatcher');
+    expect(mine[0].hooks[0].command).toBe('/canonical');
+    // Unrelated user hook untouched.
+    const bash = s.hooks.PostToolUse.find((e: any) => e.matcher === 'Bash');
+    expect(bash.hooks[0].command).toBe('/user-own-hook');
+    expect(s.hooks.PostToolUse).toHaveLength(2);
+  });
+
+  test('no duplicates → no collapse message, single entry updated as before', () => {
+    const { spawnSync } = require('child_process');
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      hooks: {
+        PostToolUse: [
+          { _gstack_source: 'plan-tune-cathedral', matcher: 'OldMatcher', hooks: [{ type: 'command', command: '/old', timeout: 5 }] },
+        ],
+      },
+    }, null, 2));
+
+    const r = spawnSync('bash', [
+      SETTINGS_HOOK, 'ensure-event',
+      '--event', 'PostToolUse',
+      '--matcher', 'NewMatcher',
+      '--command', '/new',
+      '--source', 'plan-tune-cathedral',
+      '--timeout', '5',
+    ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('collapsed');
+    const s = settings();
+    expect(s.hooks.PostToolUse).toHaveLength(1);
+    expect(s.hooks.PostToolUse[0].hooks[0].command).toBe('/new');
+  });
+});
+
+// ----------------------------------------------------------------------
 // remove-source
 // ----------------------------------------------------------------------
 

@@ -2131,6 +2131,14 @@ if [ -x "$DETECT_BIN" ]; then
   fi
 fi
 
+# Hook path resolution is CANONICAL-ONLY via the resolver defined near
+# CANONICAL_GSTACK_ROOT above (_hook_command_path): a hook command registered into
+# ~/.claude/settings.json must survive deletion of the directory setup ran
+# from, and no heuristic can enumerate every ephemeral tree (manual worktrees,
+# temp clones, CI checkouts) — so there is deliberately NO fallback to
+# $SOURCE_GSTACK_DIR here. A missing canonical hook means "skip registration
+# with a log line", never "bake the running tree's path".
+
 # 11. Plan-tune cathedral hook install (T8).
 #
 # Registers PostToolUse (deterministic AUQ capture) + PreToolUse (preference
@@ -2139,7 +2147,9 @@ fi
 # per D4 + Codex: never mutate settings.json silently.
 #
 # Idempotent via _gstack_source tag = 'plan-tune-cathedral'. If both hooks
-# already registered under that tag, the install is a no-op (no prompt).
+# already registered under that tag, the install skips the consent prompt and
+# only refreshes the registered command paths in place (ensure-event is a
+# no-op when they already match).
 PLAN_TUNE_LOG_HOOK="$(_hook_command_path hosts/claude/hooks/question-log-hook || true)"
 PLAN_TUNE_PREF_HOOK="$(_hook_command_path hosts/claude/hooks/question-preference-hook || true)"
 AUQ_ERROR_FALLBACK_HOOK="$(_hook_command_path hosts/claude/hooks/auq-error-fallback-hook || true)"
@@ -2228,17 +2238,20 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
   fi
 
   _install_plan_tune_hooks() {
+    # ensure-event (not add-event): registers when missing, RE-POINTS a stale
+    # command path in place when the registration differs, and is a true no-op
+    # (no write, no backup churn) when it already matches.
     # Returns non-zero if ANY registration was skipped (lock contention or a
     # fail-closed settings error) so callers log honestly instead of claiming
     # success for a mutation that never happened.
     local _pt_install_rc=0
-    "$SETTINGS_HOOK" add-event \
+    "$SETTINGS_HOOK" ensure-event \
       --event PostToolUse \
       --matcher '(AskUserQuestion|mcp__.*__AskUserQuestion)' \
       --command "$PLAN_TUNE_LOG_HOOK" \
       --source plan-tune-cathedral \
       --timeout 5 || _pt_install_rc=1
-    "$SETTINGS_HOOK" add-event \
+    "$SETTINGS_HOOK" ensure-event \
       --event PreToolUse \
       --matcher '(AskUserQuestion|mcp__.*__AskUserQuestion)' \
       --command "$PLAN_TUNE_PREF_HOOK" \
@@ -2252,7 +2265,7 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
     # question-log capture hook (same event+matcher). A distinct source = a second
     # PostToolUse entry; both run in parallel.
     if [ -n "$AUQ_ERROR_FALLBACK_HOOK" ]; then
-      "$SETTINGS_HOOK" add-event \
+      "$SETTINGS_HOOK" ensure-event \
         --event PostToolUse \
         --matcher '(AskUserQuestion|mcp__.*__AskUserQuestion)' \
         --command "$AUQ_ERROR_FALLBACK_HOOK" \
@@ -2263,6 +2276,15 @@ if [ "$NO_TEAM_MODE" -ne 1 ] \
   }
 
   if [ "$ALREADY_INSTALLED" -eq 1 ]; then
+    # Consent already recorded — no prompt. But a registration from an earlier
+    # setup may carry a stale absolute path (a since-deleted dev worktree);
+    # ensure-event re-points it in place and no-ops when everything matches.
+    # Non-fatal to setup, but never silent: the hardened settings-hook refuses
+    # to rewrite a corrupt settings.json (exit 1), and swallowing that refusal
+    # left users with stale hooks and no signal.
+    if ! _PT_ENSURE_ERR=$(_install_plan_tune_hooks 2>&1 >/dev/null); then
+      log "  warning: settings hook update failed: $(printf '%s\n' "$_PT_ENSURE_ERR" | head -1) — run $SETTINGS_HOOK manually"
+    fi
     log ""
     log "Plan-tune hooks already installed. Run \`$SETTINGS_HOOK list-sources\` to inspect."
   elif [ "$PT_DECISION" = "yes" ]; then
@@ -2363,23 +2385,41 @@ fi
 # unenforceable — interrupted sessions leaked started > completed forever.
 # Register a Stop-event hook that closes dangling entries. FAIL-OPEN contract
 # (F5): the hook always exits 0 and repairs best-effort — it can never block
-# a session. Idempotent via the (event, source) dedup in gstack-settings-hook;
-# removed by --no-team and gstack-uninstall.
+# a session. Removed by --no-team and gstack-uninstall.
+#
+# The command path is canonical-only (see _hook_command_path): a dev-worktree
+# setup used to bake its own absolute dir into settings.json, so deleting the
+# worktree left a dead hook erroring on every session stop — and the old
+# presence-only dedup (list-sources | grep) never re-pointed it on a re-run.
+# ensure-event registers when missing, replaces a stale path in place (one
+# atomic write — never zero or two registrations), and no-ops when the
+# registration already matches.
 TIMELINE_STOP_HOOK="$(_hook_command_path hosts/claude/hooks/timeline-stop-hook || true)"
 if [ "$IS_WINDOWS" -eq 1 ] && [ -n "$TIMELINE_STOP_HOOK" ]; then
   TIMELINE_STOP_HOOK="bash $TIMELINE_STOP_HOOK"
 fi
-# stderr stays attached on both calls below (zero silent settings mutations;
-# the list-sources corrupt-file warning must reach the user too).
 if [ "$NO_TEAM_MODE" -ne 1 ] && [ -x "$SETTINGS_HOOK" ] && [ -n "$TIMELINE_STOP_HOOK" ]; then
-  if ! "$SETTINGS_HOOK" list-sources | grep -q "gstack-timeline-stop"; then
-    if "$SETTINGS_HOOK" add-event \
-      --event Stop \
-      --command "$TIMELINE_STOP_HOOK" \
-      --source gstack-timeline-stop \
-      --timeout 5 >/dev/null; then
-      log "  registered Stop hook: session timeline entries now close even when a skill is interrupted (backup: settings.json.bak.<ts>; remove: $SETTINGS_HOOK remove-source --source gstack-timeline-stop)"
-    fi
+  if _TL_ENSURE_OUT=$("$SETTINGS_HOOK" ensure-event \
+    --event Stop \
+    --command "$TIMELINE_STOP_HOOK" \
+    --source gstack-timeline-stop \
+    --timeout 5 2>&1); then
+    case "$_TL_ENSURE_OUT" in
+      *unchanged*)
+        : # already registered with the canonical command — quiet no-op
+        ;;
+      *re-pointed*)
+        log "  re-pointed Stop hook to $TIMELINE_STOP_HOOK (previous registration held a stale path)"
+        ;;
+      *)
+        log "  registered Stop hook: session timeline entries now close even when a skill is interrupted (backup: settings.json.bak.<ts>; remove: $SETTINGS_HOOK remove-source --source gstack-timeline-stop)"
+        ;;
+    esac
+  else
+    # Non-fatal to setup, but never silent: the hardened settings-hook refuses
+    # to mutate a corrupt settings.json (exit 3) or under a held lock (exit 5),
+    # and swallowing that refusal left the Stop hook unregistered with no signal.
+    log "  warning: settings hook update failed: $(printf '%s\n' "$_TL_ENSURE_OUT" | head -1) — run $SETTINGS_HOOK manually"
   fi
 fi
 

@@ -1164,7 +1164,13 @@ untrusted). Untrusted methods (data-exfil-shaped, e.g.
 ```bash
 $B cdp Page.getLayoutMetrics
 $B cdp Network.enable
-$B cdp Accessibility.getFullAXTree --json '{"max_depth":5}'
+$B cdp Accessibility.getFullAXTree '{"depth":5}'
+
+# Perf measurement on a simulated low-end client (overrides persist on the
+# tab until you clear them — callers own restoration):
+$B cdp Emulation.setCPUThrottlingRate '{"rate":4}'   # clear: '{"rate":1}'
+$B cdp Network.emulateNetworkConditions '{"offline":false,"latency":150,"downloadThroughput":195000,"uploadThroughput":97500}'
+# clear: '{"offline":false,"latency":0,"downloadThroughput":-1,"uploadThroughput":-1}'
 ```
 
 To discover allowed methods: read `browse/src/cdp-allowlist.ts`.

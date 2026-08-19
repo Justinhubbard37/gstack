@@ -13,6 +13,7 @@
 #   2. Schema-aware (plan-tune cathedral T3):
 #        gstack-settings-hook add-event --event <name — see the validator in add-event> \
 #          --command <cmd> --source <tag> [--matcher <regex>] [--timeout <s>]
+#        gstack-settings-hook ensure-event --event ... --command ... --source ... [--matcher ...] [--timeout <s>]
 #        gstack-settings-hook remove-source --source <tag>
 #        gstack-settings-hook diff-event   --event ... --command ... --source ... [--matcher ...]
 #        gstack-settings-hook rollback     # restore latest backup (single-step undo)
@@ -22,6 +23,15 @@
 #        gstack-settings-hook prune-stale                     # prune dead gstack hook items
 #        gstack-settings-hook prune-stale --repoint <root>    # re-point gstack items at <root>, prune still-dead
 #        gstack-settings-hook prune-stale --all               # remove ALL gstack hook items (uninstall sweep)
+#
+# ensure-event is the update-in-place verb: same flags as add-event, but keyed
+# on (event, source) — any entry carrying our source tag for the event is THE
+# registration to compare/update, so a matcher change re-points in place
+# instead of pushing a second entry, and duplicate same-source twins from the
+# old matcher-keyed dedup collapse to one (reported on stderr). Identical
+# payload → no write, no backup ("unchanged"); a re-run of ./setup stays a
+# true no-op. This heals a stale absolute hook path (e.g. a deleted dev
+# worktree) baked into settings.json by an earlier setup.
 #
 # Ownership model (KNOWN_HOOKS identity table): a hook ITEM is gstack-owned iff
 # its command basename + relpath suffix + event (+ matcher where the table row
@@ -55,6 +65,7 @@ Usage:
   gstack-settings-hook add <hook-command>             # legacy SessionStart add
   gstack-settings-hook remove <hook-command>          # legacy SessionStart remove
   gstack-settings-hook add-event --event <name> --command <cmd> --source <tag> [--matcher <re>] [--timeout <s>]
+  gstack-settings-hook ensure-event --event <name> --command <cmd> --source <tag> [--matcher <re>] [--timeout <s>]
   gstack-settings-hook remove-source --source <tag>
   gstack-settings-hook diff-event --event <name> --command <cmd> --source <tag> [--matcher <re>] [--timeout <s>]
   gstack-settings-hook prune-stale [--repoint <root>] [--all]
@@ -263,6 +274,15 @@ _acquire_lock() {
       trap 'exit 143' TERM
       return 0
     fi
+    # mkdir failed but no lock dir exists: NOT contention (unwritable parent,
+    # read-only fs, missing directory) -- waiting cannot help, so give up
+    # loudly now instead of spinning out the full timeout. (Tiny race: a
+    # contender could acquire+release between our mkdir and this check; that
+    # transient reads as an environment failure and the next run converges.)
+    if [ ! -e "$_LOCK_DIR" ]; then
+      echo "gstack-settings-hook: cannot create lock $_LOCK_DIR (unwritable parent?) -- skipping this mutation, exit 5" >&2
+      return 1
+    fi
     # Stale takeover: atomic rename means exactly one contender wins; the
     # loser loops and re-contends against the winner's fresh mkdir.
     # GNU stat (-c %Y) first: on Linux, BSD-style `stat -f %m` prints a
@@ -364,7 +384,7 @@ case "$ACTION" in
     '
     ;;
 
-  add-event|diff-event)
+  add-event|diff-event|ensure-event)
     EVENT=""
     COMMAND=""
     SOURCE=""
@@ -382,7 +402,7 @@ case "$ACTION" in
       esac
     done
     if [ -z "$EVENT" ] || [ -z "$COMMAND" ] || [ -z "$SOURCE" ]; then
-      echo "add-event/diff-event require --event, --command, --source" >&2
+      echo "add-event/ensure-event/diff-event require --event, --command, --source" >&2
       exit 1
     fi
     case "$EVENT" in
@@ -390,9 +410,11 @@ case "$ACTION" in
       *) echo "invalid --event '$EVENT'; must be one of SessionStart|PreToolUse|PostToolUse|UserPromptSubmit|Stop|Notification" >&2; exit 1 ;;
     esac
     DIFF_ONLY=""
+    ENSURE=""
     if [ "$ACTION" = "diff-event" ]; then
       DIFF_ONLY=1
     else
+      [ "$ACTION" = "ensure-event" ] && ENSURE=1
       _acquire_lock || exit 5
     fi
     _mutation_env
@@ -403,6 +425,7 @@ case "$ACTION" in
     GSTACK_MATCHER="$MATCHER" \
     GSTACK_TIMEOUT="$TIMEOUT" \
     GSTACK_DIFF_ONLY="$DIFF_ONLY" \
+    GSTACK_ENSURE="$ENSURE" \
     bun -e "$_HOOK_JS_PRELUDE"'gsMain(function () {
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const event = process.env.GSTACK_EVENT;
@@ -411,6 +434,7 @@ case "$ACTION" in
       const matcher = process.env.GSTACK_MATCHER || "";
       const timeoutRaw = process.env.GSTACK_TIMEOUT || "";
       const diffOnly = process.env.GSTACK_DIFF_ONLY === "1";
+      const ensure = process.env.GSTACK_ENSURE === "1";
 
       const loaded = gsLoadSettings(settingsPath);
       const settings = loaded.settings;
@@ -430,15 +454,20 @@ case "$ACTION" in
         if (Number.isFinite(n) && n > 0) hookEntry.timeout = n;
       }
 
-      // Re-point in place, item-level. Claude Code strips the unknown
-      // _gstack_source key when it rewrites settings.json, so source-based
-      // dedupe degrades; a same-event+matcher entry containing a table-owned
-      // item with our basename is OUR registration under a stale path.
-      // Foreign sibling items in the same entry are never clobbered.
-      let placed = false;
-      for (const entry of settings.hooks[event]) {
-        if ((entry.matcher || "") !== matcher) continue;
-        if (!Array.isArray(entry.hooks)) continue;
+      // Identity is item-level and two-layer:
+      //  - a same-event entry carrying OUR source tag is ours even under a
+      //    DIFFERENT matcher (a matcher change must re-point in place, never
+      //    push a second registration -- the old matcher-keyed dedupe
+      //    duplicated the entry on every matcher change), and
+      //  - a same-matcher entry containing our exact command or a table-owned
+      //    item with our basename is OUR registration under a stale path
+      //    (Claude Code strips _gstack_source on its own rewrites, so
+      //    tag-based dedupe degrades).
+      // A tag never claims foreign items: in a multi-item entry only the
+      // identified item is touched; entries where no item can be identified
+      // as ours are left alone entirely.
+      const ourItemIdx = (entry) => {
+        if (!Array.isArray(entry.hooks)) return -1;
         let idx = entry.hooks.findIndex(h => h && h.command === cmdNorm);
         if (idx < 0) {
           idx = entry.hooks.findIndex(h => {
@@ -447,21 +476,56 @@ case "$ACTION" in
             return !!row && gsBaseOf(h.command) === gsBaseOf(cmdNorm);
           });
         }
-        if (idx < 0 && entry._gstack_source === source && entry.hooks.length === 1) {
-          idx = 0;
-        }
-        if (idx >= 0) {
-          entry.hooks[idx] = hookEntry;
+        if (idx < 0 && entry._gstack_source === source && entry.hooks.length === 1 && entry.hooks[0] && entry.hooks[0].command) idx = 0;
+        return idx;
+      };
+      const cands = [];
+      for (const entry of settings.hooks[event]) {
+        const idx = ourItemIdx(entry);
+        if (idx < 0) continue;
+        if (entry._gstack_source === source || (entry.matcher || "") === matcher) cands.push({ entry: entry, idx: idx });
+      }
+
+      let placed = false;
+      let collapsed = 0;
+      if (cands.length > 0) {
+        const primary = cands[0];
+        if ((primary.entry.matcher || "") === matcher) {
+          primary.entry.hooks[primary.idx] = hookEntry;
           // Mixed-version ratchet guard: tag ONLY single-item entries (the
           // item we just placed). Old gstack versions in sibling worktrees do
           // entry-level ownership (remove-source deletes the whole tagged
           // entry; add-event clobbers entry.hooks wholesale) -- a tag on a
           // mixed entry hands them permission to destroy the user items in it.
-          if (entry.hooks.length === 1) entry._gstack_source = source;
-          else delete entry._gstack_source;
+          if (primary.entry.hooks.length === 1) primary.entry._gstack_source = source;
+          else delete primary.entry._gstack_source;
           placed = true;
-          break;
+        } else if (primary.entry.hooks.length === 1) {
+          // Tagged single-item entry under a stale matcher: the entry is
+          // exclusively ours, so re-point payload AND matcher in place.
+          primary.entry.hooks = [hookEntry];
+          primary.entry._gstack_source = source;
+          if (matcher) primary.entry.matcher = matcher;
+          else delete primary.entry.matcher;
+          placed = true;
+        } else {
+          // Our item sits in a MIXED entry under a different matcher: the
+          // entry-level matcher also governs the foreign siblings, so pull
+          // our item out and register separately below.
+          primary.entry.hooks.splice(primary.idx, 1);
+          delete primary.entry._gstack_source;
         }
+        // Duplicate registrations (e.g. same-source twins from the old
+        // matcher-keyed dedupe): remove OUR item from every other candidate.
+        for (let i = 1; i < cands.length; i++) {
+          cands[i].entry.hooks.splice(cands[i].idx, 1);
+          delete cands[i].entry._gstack_source;
+          collapsed++;
+        }
+        // Drop only entries WE emptied; started-empty foreign entries are
+        // never candidates, so they are preserved verbatim.
+        settings.hooks[event] = settings.hooks[event].filter(e =>
+          !(Array.isArray(e.hooks) && e.hooks.length === 0 && cands.some(c => c.entry === e)));
       }
       if (!placed) {
         const newEntry = { _gstack_source: source, hooks: [hookEntry] };
@@ -479,8 +543,22 @@ case "$ACTION" in
         process.exit(0);
       }
 
+      if (ensure && before === after) {
+        // Registered payload already matches the canonical one -- no write,
+        // no backup, no churn. Re-running ./setup stays a true no-op.
+        console.log("OK: " + event + " hook unchanged (source: " + source + ")");
+        process.exit(0);
+      }
+
       gsWriteIfChanged(settingsPath, before, settings, loaded.existed);
-      console.log("OK: " + event + " hook registered (source: " + source + ")");
+      if (collapsed > 0) {
+        console.error("collapsed " + collapsed + " duplicate (event, source) hook entr" + (collapsed === 1 ? "y" : "ies") + " for " + event + " (source: " + source + ")");
+      }
+      if (ensure && cands.length > 0) {
+        console.log("OK: " + event + " hook re-pointed (source: " + source + ")");
+      } else {
+        console.log("OK: " + event + " hook registered (source: " + source + ")");
+      }
     });
     '
     ;;

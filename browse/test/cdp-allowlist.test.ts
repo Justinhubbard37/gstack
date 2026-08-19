@@ -82,6 +82,23 @@ describe('CDP allowlist (T2: deny-default)', () => {
     expect(e!.output).toBe('trusted');
   });
 
+  it('CPU + network throttling are allowed, tab-scoped, trusted (#2602)', () => {
+    // Perf-measurement emulation (PR #2602 by @henbima): both constrain the
+    // tab's timing/traffic, read nothing, and return empty results — same
+    // posture argument as setEmulatedMedia (#2419) and setDeviceMetricsOverride.
+    for (const method of ['Emulation.setCPUThrottlingRate', 'Network.emulateNetworkConditions']) {
+      expect(isCdpMethodAllowed(method)).toBe(true);
+      const e = lookupCdpMethod(method);
+      expect(e).not.toBeNull();
+      expect(e!.scope).toBe('tab');
+      expect(e!.output).toBe('trusted');
+      // Like setEmulatedMedia, both overrides persist on the tab until
+      // cleared (rate: 1 / offline: false + defaults) — the justification
+      // must say so, since callers own restoration.
+      expect(e!.justification).toContain('persists on the tab until cleared');
+    }
+  });
+
   it('untrusted-output methods cover the read-everything-attacker-controlled cases', () => {
     // Anything that reads attacker-controlled strings (DOM/AX/CSS selectors)
     // should be tagged untrusted so the envelope wraps the result.

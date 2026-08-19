@@ -82,3 +82,71 @@ export function repoPolicyTier(url: string | null, env: NodeJS.ProcessEnv = proc
   if (tier === "unset") return { tier: "none" };
   return { tier: "none", error: "unreadable" }; // unexpected output — a read failure, not a tier
 }
+
+/**
+ * Bulk trust-tier lookup via `gstack-gbrain-repo-policy get --batch` — ONE
+ * spawn total for the whole url list (memory-ingest checks every distinct
+ * transcript remote in a run; per-url spawns would fork N bash+jq processes).
+ *
+ * The deduped url list goes to the script's stdin, one per line; the script
+ * answers one tier per line in input order (`none` where single `get` says
+ * `unset`). Fast paths mirror repoPolicyTier: no store on disk → every url
+ * is `{ tier: "none" }` with no subprocess.
+ *
+ * Failure classification matches repoPolicyTier (spawn ENOENT →
+ * `spawn-failed`, everything else → `unreadable`), applied to EVERY url: a
+ * malformed, incomplete, or timed-out batch (wrong line count, unknown tier
+ * token, non-zero exit) maps every url to `{ tier: "none", error:
+ * "unreadable" }`. POLARITY IS STILL THE CALLER'S — this client only reads
+ * and classifies.
+ */
+export function repoPolicyTierBatch(
+  urls: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Map<string, RepoPolicyResult> {
+  const out = new Map<string, RepoPolicyResult>();
+  const distinct = [...new Set(urls)];
+  if (distinct.length === 0) return out;
+  if (!hasRepoPolicyStore(env)) {
+    for (const u of distinct) out.set(u, { tier: "none" });
+    return out;
+  }
+  const allWithError = (error: "unreadable" | "spawn-failed"): Map<string, RepoPolicyResult> => {
+    for (const u of distinct) out.set(u, { tier: "none", error });
+    return out;
+  };
+  // Same win32 bash-wrapping as repoPolicyTier: the script is
+  // `#!/usr/bin/env bash`, which win32 can't exec directly.
+  const [cmd, args]: [string, string[]] =
+    process.platform === "win32"
+      ? ["bash", [POLICY_SCRIPT, "get", "--batch"]]
+      : [POLICY_SCRIPT, ["get", "--batch"]];
+  const res = spawnSync(cmd, args, {
+    encoding: "utf-8",
+    timeout: 10_000,
+    input: distinct.join("\n") + "\n",
+    env: { ...env } as NodeJS.ProcessEnv,
+  });
+  if (res.error) {
+    const code = (res.error as NodeJS.ErrnoException).code;
+    return allWithError(code === "ENOENT" ? "spawn-failed" : "unreadable");
+  }
+  if (res.status !== 0) return allWithError("unreadable");
+  const lines = (res.stdout || "").replace(/\n$/, "").split("\n");
+  if (lines.length !== distinct.length) return allWithError("unreadable");
+  const parsed: RepoPolicyResult[] = [];
+  for (const raw of lines) {
+    const tier = raw.trim();
+    if (tier === "deny" || tier === "read-only" || tier === "read-write") {
+      parsed.push({ tier });
+    } else if (tier === "none") {
+      parsed.push({ tier: "none" });
+    } else {
+      // Unknown token anywhere poisons the whole batch — a partially-garbled
+      // response can't be trusted line-by-line (the ordering itself may be off).
+      return allWithError("unreadable");
+    }
+  }
+  for (let i = 0; i < distinct.length; i++) out.set(distinct[i], parsed[i]);
+  return out;
+}

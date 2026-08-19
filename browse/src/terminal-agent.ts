@@ -347,6 +347,7 @@ function spawnClaude(cols: number, rows: number, onData: (chunk: Buffer) => void
   const tabHint = buildTabAwarenessHint(stateDir);
 
   const proc = (Bun as any).spawn([claudePath, '--append-system-prompt', tabHint], {
+    windowsHide: true,
     terminal: {
       rows,
       cols,

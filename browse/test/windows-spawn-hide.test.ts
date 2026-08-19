@@ -127,4 +127,31 @@ describe('windowsHide on Windows-reachable spawns (#1835)', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  test('SWEEP: every Bun.spawn call in src/ passes windowsHide (#2575 residual)', () => {
+    // Bun.spawn sites are structurally outside the child_process sweep above.
+    // Native Bun hides consoles by default and the Node polyfill
+    // (bun-polyfill.cjs) defaults windowsHide !== false since #2523/#2539 —
+    // this census exists so an explicit flag documents the intent at every
+    // site AND catches a regression if either default ever flips. Exemptions
+    // carry reasons, same contract as the child_process sweep.
+    const EXEMPT: Array<{ file: string; needle: string; reason: string }> = [];
+
+    const srcDir = path.join(import.meta.dir, '../src');
+    const offenders: string[] = [];
+    for (const file of fs.readdirSync(srcDir).filter((f) => f.endsWith('.ts'))) {
+      const raw = fs.readFileSync(path.join(srcDir, file), 'utf-8');
+      const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const re = /(?:\(Bun as any\)|Bun)\.spawn(?:Sync)?\(/g;
+      for (const m of code.matchAll(re)) {
+        const slice = code.slice(m.index!, m.index! + 900);
+        const exempt = EXEMPT.some((e) => e.file === file && slice.includes(e.needle));
+        if (exempt) continue;
+        if (!/windowsHide:\s*true/.test(slice)) {
+          offenders.push(`${file}: ${slice.split('\n')[0].slice(0, 100)}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });

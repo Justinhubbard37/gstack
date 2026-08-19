@@ -5,7 +5,7 @@
 
 import { test, expect, describe } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -385,19 +385,54 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
   // trustworthy when the PR queue is unreachable. That field is therefore
   // load-bearing prose-to-code coupling: if it silently stopped being emitted,
   // /ship would read undefined, treat the run as fully online, and lose the
-  // "verify no sibling holds it" prompt. Asserted end-to-end with a stub `gh`
-  // that always fails, which is what an expired token or an offline laptop
-  // looks like from here.
+  // "verify no sibling holds it" prompt.
+  //
+  // Both tests run the CLI in a LOCAL FIXTURE repo, never the checkout it
+  // lives in: in the real checkout the git fallback does a live
+  // `ls-remote origin` and reads the real branch census, which made this test
+  // depend on the operator's network — and on a shallow CI clone it fetched
+  // the remote's every branch (the shard-deadline hang fixed alongside this).
+  const NEXTVER = join(import.meta.dir, "..", "bin", "gstack-next-version");
+
+  function fixtureRepo(): { root: string; work: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-contract-"));
+    // detectHost() sniffs "github.com" in the origin URL STRING before any
+    // gh/glab auth probe — a bare origin at a path containing github.com
+    // pins host:"github" identically on every machine (an auth-probe
+    // fallthrough once made this test pass via glab locally and read
+    // host:"unknown" on CI) while keeping ls-remote/fetch fully local.
+    const bare = join(root, "github.com", "origin.git");
+    mkdirSync(bare, { recursive: true });
+    Bun.spawnSync(["git", "init", "-q", "--bare", "-b", "main", bare]);
+    const work = join(root, "work");
+    mkdirSync(work);
+    const git = (...args: string[]) =>
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: work });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(work, "VERSION"), "1.0.0.0\n");
+    git("add", "-A");
+    git("commit", "-qm", "v1.0.0.0 chore: base");
+    git("remote", "add", "origin", bare);
+    git("push", "-q", "origin", "main");
+    return { root, work };
+  }
+
   test("emits fallback:'git' and still returns a version when gh fails", async () => {
+    // Stub `gh` always fails — what an expired token or an offline laptop
+    // looks like from here. No origin remote → ls-remote fails fast and the
+    // allocation comes from local refs, never the network.
     const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-"));
+    const { root, work } = fixtureRepo();
     writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const proc = Bun.spawnSync(
-      ["bun", "run", "./bin/gstack-next-version", "--base", "main",
+      ["bun", "run", NEXTVER, "--base", "main",
        "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
-      { env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
     );
     rmSync(stubDir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
     const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+    expect(out.host).toBe("github"); // pinned by the fixture's URL sniff, not auth probes
     expect(out.offline).toBe(true);
     expect(out.fallback).toBe("git");
     // The whole point: degraded queue view, NOT a degraded allocation.
@@ -406,13 +441,28 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
   }, 30000);
 
   test("online runs leave fallback null", async () => {
-    const proc = Bun.spawnSync(
-      ["bun", "run", "./bin/gstack-next-version", "--base", "main",
-       "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
+    // Stub `gh` SUCCEEDS (empty PR queue) — the online path asserted
+    // deterministically instead of only when the operator happens to be
+    // authed. Before this stub the test silently no-opped on CI.
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-ok-"));
+    const { root, work } = fixtureRepo();
+    writeFileSync(
+      join(stubDir, "gh"),
+      '#!/bin/sh\ncase "$1" in\n  pr) echo "[]" ;;\n  repo) echo "testowner" ;;\n  *) exit 0 ;;\nesac\n',
+      { mode: 0o755 },
     );
+    const proc = Bun.spawnSync(
+      ["bun", "run", NEXTVER, "--base", "main",
+       "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
+      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+    );
+    rmSync(stubDir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
     const out = JSON.parse(new TextDecoder().decode(proc.stdout));
-    if (out.offline) return; // no network / no gh auth on this machine: nothing to assert
+    expect(out.host).toBe("github"); // pinned by the fixture's URL sniff, not auth probes
+    expect(out.offline).toBe(false);
     expect(out.fallback).toBe(null);
+    expect(out.version).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
   }, 30000);
 });
 
@@ -540,6 +590,343 @@ describe("fetchGitClaimed (offline allocation — the anti-duplicate fallback, #
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("fetchGitClaimed — non-mutating live remote query (ls-remote first)", () => {
+  // The degraded git-fallback used to count EVERY remote-tracking ref on EVERY
+  // remote: branches deleted on origin (stale local refs) and an unrelated
+  // `upstream` remote's branches all inflated the claim set, pushing the
+  // allocation past the real queue. `git ls-remote --heads origin` returns the
+  // remote's LIVE branch list with zero local mutation — a path/file remote
+  // answers it offline, which is exactly what these fixtures use.
+  function git(cwd: string, ...args: string[]) {
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+  }
+
+  // Local origin with: main (0.1.66.0), sibling (0.1.67.0, live claim), and
+  // dead (0.1.98.0) — deleted on origin AFTER the clone, so the clone keeps a
+  // stale refs/remotes/origin/dead. Plus a second remote's stale claim ref.
+  function liveFixture(): { root: string; clone: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-lsremote-"));
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "VERSION"), "0.1.66.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.66.0 chore: base");
+    git(origin, "checkout", "-q", "-b", "sibling");
+    writeFileSync(join(origin, "VERSION"), "0.1.67.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+    git(origin, "checkout", "-q", "-b", "dead");
+    writeFileSync(join(origin, "VERSION"), "0.1.98.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.98.0 feat: deleted later");
+    git(origin, "checkout", "-q", "main");
+    const clone = join(root, "clone");
+    git(root, "clone", "-q", origin, clone);
+    // Deleted on the REMOTE after the clone — the stale local ref survives.
+    git(origin, "branch", "-qD", "dead");
+    // A second remote carrying a stale claim branch: must never be counted.
+    git(clone, "checkout", "-q", "-b", "tmp-upstream");
+    writeFileSync(join(clone, "VERSION"), "0.1.99.0\n");
+    git(clone, "add", "-A");
+    git(clone, "commit", "-qm", "v0.1.99.0 upstream stale claim");
+    const upSha = new TextDecoder().decode(git(clone, "rev-parse", "HEAD").stdout).trim();
+    git(clone, "checkout", "-q", "main");
+    git(clone, "branch", "-qD", "tmp-upstream");
+    git(clone, "update-ref", "refs/remotes/upstream/stale", upSha);
+    return { root, clone };
+  }
+
+  test("live path: only branches that exist on origin RIGHT NOW are claims", () => {
+    const { root, clone } = liveFixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0"); // live sibling claim
+      expect(versions).not.toContain("0.1.98.0"); // deleted on origin — stale local ref ignored
+      expect(versions).not.toContain("0.1.99.0"); // second remote's refs are not our queue
+      // The live path emits no staleness warning.
+      expect(warnings.join(" ")).not.toContain("ls-remote");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("zero local mutation: the stale remote-tracking ref survives the query", () => {
+    // ls-remote reads the remote without fetch/prune — an allocator run must
+    // never rewrite local refs as a side effect.
+    const { root, clone } = liveFixture();
+    const cwd = process.cwd();
+    try {
+      process.chdir(clone);
+      fetchGitClaimed("main", "VERSION", []);
+      const ref = git(clone, "rev-parse", "--verify", "-q", "refs/remotes/origin/dead");
+      expect(ref.exitCode).toBe(0);
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fallback: ls-remote failure uses LOCAL refs/remotes/origin only, with a staleness warning", () => {
+    // No origin remote configured at all — ls-remote must fail, and the
+    // fallback must scan refs/remotes/origin ONLY (never other remotes).
+    const dir = mkdtempSync(join(tmpdir(), "nextver-lsfallback-"));
+    const cwd = process.cwd();
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+      const sibSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "-b", "stale2");
+      writeFileSync(join(dir, "VERSION"), "0.1.99.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.99.0 upstream stale claim");
+      const upSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sibSha);
+      git(dir, "update-ref", "refs/remotes/upstream/stale", upSha);
+
+      process.chdir(dir);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0"); // origin's local snapshot still counts
+      expect(versions).not.toContain("0.1.99.0"); // upstream remote is ignored
+      expect(warnings.join(" ")).toContain("stale local refs/remotes/origin");
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fetchGitClaimed — unfetched live claims (G2: ls-remote advertises SHAs without objects)", () => {
+  // `git ls-remote` lists a branch's tip sha without transferring objects, so
+  // a branch pushed AFTER the last local fetch has no local object and both
+  // VERSION reads fail. The old `continue` silently dropped that LIVE claim —
+  // the exact duplicate-allocation this fallback exists to prevent.
+  function git(cwd: string, ...args: string[]) {
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+  }
+
+  function cloneFixture(): { root: string; origin: string; clone: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-unfetched-"));
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "VERSION"), "0.1.66.0\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "v0.1.66.0 chore: base");
+    const clone = join(root, "clone");
+    git(root, "clone", "-q", origin, clone);
+    return { root, origin, clone };
+  }
+
+  test("a claim branch pushed after the last local fetch is read via a targeted fetch", () => {
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      // The claim lands on origin AFTER the clone — its objects are absent
+      // locally, so `git show <sha>:VERSION` and the remote-tracking read
+      // both fail until the targeted fetch runs.
+      git(origin, "checkout", "-q", "-b", "late-claim");
+      writeFileSync(join(origin, "VERSION"), "0.1.70.0\n");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "v0.1.70.0 feat: late claim");
+      git(origin, "checkout", "-q", "main");
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.version)).toContain("0.1.70.0");
+      expect(warnings.join(" ")).not.toContain("UNKNOWN claim");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("MANY unfetched claim branches resolve with ONE batched fetch, not a per-branch crawl", () => {
+    // The per-branch fetch loop this replaces ground a shallow CI clone
+    // against a busy remote for minutes (dozens of sequential network
+    // fetches). The network budget must stay one round trip no matter how
+    // many branches are missing — pinned by counting `git fetch` spawns
+    // through a PATH shim.
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    const oldPath = process.env.PATH;
+    const shimDir = mkdtempSync(join(tmpdir(), "nextver-gitshim-"));
+    try {
+      for (const v of ["0.1.70.0", "0.1.71.0", "0.1.72.0"]) {
+        git(origin, "checkout", "-q", "-b", `late-${v.replace(/\./g, "-")}`);
+        writeFileSync(join(origin, "VERSION"), `${v}\n`);
+        git(origin, "add", "-A");
+        git(origin, "commit", "-qm", `v${v} feat: late claim`);
+        git(origin, "checkout", "-q", "main");
+      }
+
+      const realGit = Bun.which("git");
+      const spawnLog = join(shimDir, "spawns.log");
+      writeFileSync(
+        join(shimDir, "git"),
+        `#!/bin/sh\necho "$@" >> "${spawnLog}"\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 },
+      );
+
+      process.chdir(clone);
+      process.env.PATH = `${shimDir}:${oldPath}`;
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      process.env.PATH = oldPath;
+
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.70.0");
+      expect(versions).toContain("0.1.71.0");
+      expect(versions).toContain("0.1.72.0");
+      expect(warnings.join(" ")).not.toContain("UNKNOWN claim");
+      const fetches = readFileSync(spawnLog, "utf-8")
+        .split("\n")
+        .filter((l) => l.startsWith("fetch "));
+      expect(fetches.length).toBe(1);
+      for (const v of ["0-1-70-0", "0-1-71-0", "0-1-72-0"]) {
+        expect(fetches[0]).toContain(`refs/heads/late-${v}`);
+      }
+    } finally {
+      process.env.PATH = oldPath;
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  test("one unservable ref does not poison the batch — live claims still resolve, the ghost warns", () => {
+    // A dangling sha fails the WHOLE batched transfer, so the still-missing
+    // refs get a bounded per-branch retry: the real claim must come through
+    // and only the ghost surfaces as UNKNOWN.
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      git(origin, "checkout", "-q", "-b", "late-claim");
+      writeFileSync(join(origin, "VERSION"), "0.1.70.0\n");
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "v0.1.70.0 feat: late claim");
+      git(origin, "checkout", "-q", "main");
+      writeFileSync(
+        join(origin, ".git", "refs", "heads", "ghost"),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      );
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.version)).toContain("0.1.70.0");
+      const joined = warnings.join(" ");
+      expect(joined).toContain("origin/ghost");
+      expect(joined).toContain("UNKNOWN claim");
+      expect(joined).not.toContain("late-claim");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a claim STILL unreadable after the fetch surfaces as an UNKNOWN-claim warning, never silence", () => {
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      // A ref origin advertises but cannot serve: dangling sha written
+      // straight into refs/. ls-remote lists it; every local read fails, the
+      // targeted fetch fails ("not our ref"), and the object never appears.
+      writeFileSync(
+        join(origin, ".git", "refs", "heads", "ghost"),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      );
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.branch)).not.toContain("origin/ghost");
+      const joined = warnings.join(" ");
+      expect(joined).toContain("origin/ghost");
+      expect(joined).toContain("UNKNOWN claim");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a live branch that simply carries no VERSION file is not a claim and not an UNKNOWN warning", () => {
+    const { root, origin, clone } = cloneFixture();
+    const cwd = process.cwd();
+    try {
+      // Branch exists BEFORE the clone (objects local), VERSION deleted on it:
+      // the read fails because the PATH is absent, not the object. Old
+      // semantics (skip quietly) must hold — no phantom UNKNOWN noise.
+      git(origin, "checkout", "-q", "-b", "docs-only");
+      git(origin, "rm", "-q", "VERSION");
+      git(origin, "commit", "-qm", "docs: no version file");
+      git(origin, "checkout", "-q", "main");
+      git(clone, "fetch", "-q", "origin");
+
+      process.chdir(clone);
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      expect(claims.map((c) => c.branch)).not.toContain("origin/docs-only");
+      expect(warnings.join(" ")).not.toContain("docs-only");
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("width pinned on failed base read (3-digit repos)", () => {
+  // readBaseVersion used to return a literal "0.0.0.0" when origin/<base> was
+  // unreadable — a 4-digit string, which flipped versionWidth() to 4 and
+  // handed a 3-digit repo a 4-digit slot its tooling can't read back (#2501's
+  // width class, resurfacing through the failure path). The zero base is now
+  // shaped by the LOCAL version file's width.
+  const SCRIPT = join(import.meta.dir, "..", "bin", "gstack-next-version");
+
+  test("a 3-digit repo keeps 3-digit allocation when origin/<base> is unreadable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-width3-"));
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-width3-stub-"));
+    try {
+      // gh/glab stubs fail → host unknown → git fallback; no origin remote →
+      // the base read fails too, which is the path under test.
+      writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      writeFileSync(join(stubDir, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir });
+      writeFileSync(join(dir, "VERSION"), "0.99.2\n");
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { cwd: dir });
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+
+      const proc = Bun.spawnSync(
+        ["bun", "run", SCRIPT, "--base", "main", "--bump", "patch", "--workspace-root", "null"],
+        { cwd: dir, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      );
+      const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+      // Zero base at the repo's OWN width — never "0.0.0.0" in a 3-digit repo.
+      expect(out.base_version).toBe("0.0.0");
+      expect(out.version).toBe("0.0.1"); // 3-digit allocation, not 0.0.1.0
+      expect(out.warnings.join(" ")).not.toContain("0.0.0.0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe("integration (smoke)", () => {

@@ -754,7 +754,7 @@ export async function handleWriteCommand(
       const code = generatePickerCode();
       const pickerUrl = `http://127.0.0.1:${port}/cookie-picker?code=${code}`;
       try {
-        Bun.spawn(['open', pickerUrl], { stdout: 'ignore', stderr: 'ignore' });
+        Bun.spawn(['open', pickerUrl], { stdout: 'ignore', stderr: 'ignore', windowsHide: true });
       } catch (err: any) {
         // open may fail on non-macOS or if 'open' binary is missing — URL is in the message below
         if (err?.code !== 'ENOENT' && !err?.message?.includes('spawn')) throw err;

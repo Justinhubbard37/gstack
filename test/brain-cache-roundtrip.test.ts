@@ -166,7 +166,12 @@ describe('brain-cache endpoint detection', () => {
     expect(outer).not.toBe('local');
   });
 
-  test('detectEndpointHash still prefers user scope over project scope (#2499)', async () => {
+  test('detectEndpointHash prefers project-local scope over user scope (#2392 wave)', async () => {
+    // Empirically verified against claude 2.1.233 with hermetic fixtures:
+    // `claude mcp get gbrain` reports "Scope: Local config" when both scopes
+    // define the server — project-local WINS. The old pin here encoded the
+    // opposite (user-first) assumption, which mis-hashed endpoints whenever
+    // the two scopes disagreed.
     const mod = await importCache();
     const cj = join(TMP_HOME, 'claude.json');
     writeFileSync(cj, JSON.stringify({
@@ -175,14 +180,14 @@ describe('brain-cache endpoint detection', () => {
         '/w/repo': { mcpServers: { gbrain: { url: 'https://proj.example/mcp' } } },
       },
     }));
-    const userScoped = mod.detectEndpointHash(cj, '/w/repo');
-    // Same file minus the user-scope entry → different hash proves user scope won.
+    const conflictHash = mod.detectEndpointHash(cj, '/w/repo');
+    // Same file minus the USER entry → identical hash proves project scope won.
     writeFileSync(cj, JSON.stringify({
       projects: {
         '/w/repo': { mcpServers: { gbrain: { url: 'https://proj.example/mcp' } } },
       },
     }));
-    expect(mod.detectEndpointHash(cj, '/w/repo')).not.toBe(userScoped);
+    expect(mod.detectEndpointHash(cj, '/w/repo')).toBe(conflictHash);
   });
 });
 

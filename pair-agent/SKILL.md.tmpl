@@ -107,6 +107,31 @@ Options:
 
 ## Step 4: Execute pairing
 
+**Live-daemon consent (one-way door).** Pairing can relaunch the browser
+daemon; a relaunch KILLS the running headless daemon — open tabs, cookies,
+and logged-in sessions die with it. The CLI honors the iron rule (only an
+explicit `--force-restart` may kill a live daemon), so check first:
+
+```bash
+$B status 2>/dev/null | head -5
+```
+
+If a daemon is running, ask via AskUserQuestion (one-way door — lost
+tabs/cookies/logins cannot be recovered):
+
+> "A headless browser daemon is live (tabs and logins may be active). Pairing
+> headed requires relaunching it — everything in the current daemon is lost.
+>
+> RECOMMENDATION: Choose B unless the remote agent specifically needs a
+> visible browser window; pairing works against the existing daemon."
+
+Options:
+- A) Relaunch (pass `--force-restart`; current tabs/cookies/logins are lost)
+- B) Keep the live daemon (recommended — pair against it as-is)
+
+Only pass `--force-restart` to the commands below after an explicit A. Never
+default to A on a vague reply — this is a destructive confirmation.
+
 ### If same machine (option A):
 
 Run pair-agent with --local flag:

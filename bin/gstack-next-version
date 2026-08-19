@@ -147,19 +147,36 @@ function detectHost(): "github" | "gitlab" | "unknown" {
   return "unknown";
 }
 
-function readBaseVersion(base: string, versionPath: string, warnings: string[]): string {
+// When the base-version read fails we assume a zero base — but a literal
+// "0.0.0.0" is 4-digit, which flips versionWidth() to 4 and hands a 3-digit
+// repo a 4-digit slot (the exact width class of bug #2501 fixed in parsing).
+// The LOCAL version file at versionPath knows the repo's own width; shape the
+// zero from it. No local file either → keep the 4-digit default.
+function zeroBaseAtLocalWidth(versionPath: string, repoRoot: string): string {
+  try {
+    const local = extractVersion(readFileSync(join(repoRoot, versionPath), "utf8"), versionPath);
+    if (local && parseVersion(local) && versionWidth(local) === 3) return "0.0.0";
+  } catch {
+    // unreadable/absent local version file — 4-digit default below
+  }
+  return "0.0.0.0";
+}
+
+function readBaseVersion(base: string, versionPath: string, repoRoot: string, warnings: string[]): string {
   // git fetch is best-effort; we tolerate failure and fall back to whatever
   // origin/<base> currently points at.
   runCommand("git", ["fetch", "origin", base, "--quiet"], 10000);
   const r = runCommand("git", ["show", `origin/${base}:${versionPath}`]);
   if (!r.ok) {
-    warnings.push(`could not read ${versionPath} at origin/${base}; assuming 0.0.0.0`);
-    return "0.0.0.0";
+    const assumed = zeroBaseAtLocalWidth(versionPath, repoRoot);
+    warnings.push(`could not read ${versionPath} at origin/${base}; assuming ${assumed}`);
+    return assumed;
   }
   const v = extractVersion(r.stdout, versionPath);
   if (!v) {
-    warnings.push(`${versionPath} at origin/${base} has no readable version; assuming 0.0.0.0`);
-    return "0.0.0.0";
+    const assumed = zeroBaseAtLocalWidth(versionPath, repoRoot);
+    warnings.push(`${versionPath} at origin/${base} has no readable version; assuming ${assumed}`);
+    return assumed;
   }
   return v;
 }
@@ -460,40 +477,141 @@ function autoDetectExcludePR(): number | null {
 // v0.1.57.0. Auditing that repo's history found FOUR such pairs going back
 // three weeks, so the silent fallback had been mis-allocating for a while.
 //
-// Git already knows what the API was asked for. Remote-tracking refs carry
-// each branch's VERSION file, and the base's own history records every version
-// already shipped. Neither needs a token, a network round-trip, or a working
-// `gh`. So "offline" degrades the QUEUE VIEW (no PR numbers, no draft status)
-// without degrading the ALLOCATION.
+// Git already knows what the API was asked for. `git ls-remote --heads origin`
+// returns the remote's LIVE branch list with zero local mutation (no fetch, no
+// ref updates), each branch's VERSION file is readable from the local object
+// store, and the base's own history records every version already shipped.
+// None of it needs a token or a working `gh`. So "offline" degrades the QUEUE
+// VIEW (no PR numbers, no draft status) without degrading the ALLOCATION.
 function fetchGitClaimed(
   base: string,
   versionPath: string,
   warnings: string[],
 ): ClaimedPR[] {
   const claims: ClaimedPR[] = [];
+  const baseShort = base.replace(/^origin\//, "");
 
-  // 1. Every remote-tracking branch's VERSION file. These are the open PRs'
-  //    branches, whether or not the API can be reached to enumerate them.
-  //    Read through extractVersion so a JSON version-path (#2501) resolves on
-  //    remote refs too, and the branch's own width is preserved in the claim.
-  const refs = runCommand("git", [
-    "for-each-ref",
-    "--format=%(refname:short)",
-    "refs/remotes",
-  ]);
-  if (refs.ok) {
-    const baseShort = base.replace(/^origin\//, "");
-    for (const ref of refs.stdout.split("\n").map((r) => r.trim()).filter(Boolean)) {
-      if (ref.endsWith("/HEAD")) continue;
-      if (ref === base || ref.replace(/^origin\//, "") === baseShort) continue;
-      const show = runCommand("git", ["show", `${ref}:${versionPath}`]);
-      if (!show.ok) continue;
-      const raw = extractVersion(show.stdout, versionPath);
-      if (!raw || !parseVersion(raw)) continue;
-      claims.push({ pr: 0, branch: ref, version: raw });
+  // 1. The version-claim branches. FIRST try `git ls-remote --heads origin`:
+  //    fresh remote data, zero local mutation. This scopes claims to branches
+  //    that actually EXIST on origin right now — the previous implementation
+  //    counted every remote-tracking ref on EVERY remote, so stale local refs
+  //    (deleted PR branches, an unrelated `upstream` remote) inflated the
+  //    claim set and pushed the allocation further than the real queue.
+  //    GIT_TERMINAL_PROMPT=0 + a 5s timeout keep a dead/credential-prompting
+  //    remote from hanging the allocator.
+  const lsRemote = spawnSync("git", ["ls-remote", "--heads", "origin"], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  const lsOk = lsRemote.status === 0 && !lsRemote.error;
+
+  // Each candidate carries the LIVE tip sha when it came from ls-remote, so
+  // the VERSION read prefers the fresh commit (present locally after any
+  // prior fetch/clone) and only falls back to the local remote-tracking ref.
+  const candidates: { branch: string; sha?: string }[] = [];
+  if (lsOk) {
+    for (const line of (lsRemote.stdout ?? "").split("\n")) {
+      const m = line.trim().match(/^([0-9a-f]{40,64})\trefs\/heads\/(.+)$/);
+      if (!m) continue;
+      if (m[2] === baseShort) continue;
+      candidates.push({ branch: m[2], sha: m[1] });
     }
   } else {
-    warnings.push("git for-each-ref failed; branch claims unavailable");
+    // Degraded twice over: no host API AND no reachable remote. Fall back to
+    // the LOCAL refs/remotes/origin snapshot ONLY (never other remotes — an
+    // `upstream` remote's branches are not claims against OUR queue).
+    warnings.push(
+      "git ls-remote origin failed; using stale local refs/remotes/origin — " +
+        "branches deleted on the remote may still be counted as claims (run `git fetch --prune origin` to refresh)",
+    );
+    const refs = runCommand("git", [
+      "for-each-ref",
+      "--format=%(refname:short)",
+      "refs/remotes/origin",
+    ]);
+    if (refs.ok) {
+      for (const ref of refs.stdout.split("\n").map((r) => r.trim()).filter(Boolean)) {
+        if (ref.endsWith("/HEAD")) continue;
+        const branch = ref.replace(/^origin\//, "");
+        if (branch === baseShort) continue;
+        candidates.push({ branch });
+      }
+    } else {
+      warnings.push("git for-each-ref failed; branch claims unavailable");
+    }
+  }
+
+  //    Read each candidate's VERSION through extractVersion so a JSON
+  //    version-path (#2501) resolves on remote refs too, and the branch's own
+  //    width is preserved in the claim. Reads are LOCAL-first; branches whose
+  //    advertised tip has no local object are collected and resolved with ONE
+  //    batched shallow fetch below. A per-branch fetch loop here once crawled
+  //    a busy remote for minutes on a shallow CI clone (dozens of sequential
+  //    network fetches, 10s cap each) — the total network budget must be one
+  //    bounded round trip regardless of branch count.
+  const readClaim = (branch: string, sha?: string): "claimed" | "not-a-claim" | "object-missing" => {
+    let show = sha ? runCommand("git", ["show", `${sha}:${versionPath}`]) : { ok: false, stdout: "", stderr: "" };
+    if (!show.ok) {
+      // Live tip not fetched yet (or no sha in the fallback path): best-effort
+      // read from the local remote-tracking ref.
+      show = runCommand("git", ["show", `refs/remotes/origin/${branch}:${versionPath}`]);
+    }
+    if (!show.ok) {
+      if (!sha) return "not-a-claim";
+      // Distinguish "object missing" from "branch has no VERSION file".
+      return runCommand("git", ["cat-file", "-e", sha]).ok ? "not-a-claim" : "object-missing";
+    }
+    const raw = extractVersion(show.stdout, versionPath);
+    if (!raw || !parseVersion(raw)) return "not-a-claim";
+    claims.push({ pr: 0, branch: `origin/${branch}`, version: raw });
+    return "claimed";
+  };
+
+  const pending: { branch: string; sha?: string }[] = [];
+  for (const { branch, sha } of candidates) {
+    if (readClaim(branch, sha) === "object-missing") pending.push({ branch, sha });
+  }
+  if (pending.length > 0) {
+    // ls-remote advertises SHAs without objects: a branch pushed after our
+    // last fetch has NO local object. The pre-#2545 `continue` silently
+    // dropped a LIVE claim — the exact duplicate-allocation this fallback
+    // exists to prevent. One shallow batched fetch (no prompts, no tags,
+    // bounded) brings every missing tip local in a single round trip.
+    spawnSync(
+      "git",
+      ["fetch", "origin", ...pending.map((p) => `refs/heads/${p.branch}`), "--depth=1", "--no-tags"],
+      { encoding: "utf8", timeout: 15000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+    );
+    // One unservable ref (dangling sha on the server) fails the WHOLE batch
+    // transfer, so refs still missing get a bounded per-branch retry — that
+    // isolates a poisoned ref without reopening the unbounded fetch crawl
+    // (per-branch-only fetching once ground a shallow CI clone against a
+    // busy remote for minutes). Anything past the cap is warned, not fetched.
+    const RETRY_CAP = 8;
+    let retries = 0;
+    for (const { branch, sha } of pending) {
+      let outcome = readClaim(branch, sha);
+      if (outcome === "object-missing" && retries < RETRY_CAP) {
+        retries++;
+        spawnSync(
+          "git",
+          ["fetch", "origin", `refs/heads/${branch}`, "--depth=1", "--no-tags"],
+          { encoding: "utf8", timeout: 5000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+        );
+        outcome = readClaim(branch, sha);
+      }
+      if (outcome === "object-missing") {
+        // STILL unreadable (fetch failed, retry cap hit, or the tip moved
+        // between ls-remote and fetch) — never skip silently. Surface it as
+        // an UNKNOWN claim so the caller knows the allocation may be unsafe.
+        warnings.push(
+          `origin/${branch}: VERSION unreadable even after a targeted fetch — ` +
+            `counted as an UNKNOWN claim; allocation may collide with this branch. ` +
+            `Run \`git fetch origin ${branch}\` and re-run to verify.`,
+        );
+      }
+    }
   }
 
   // 2. Versions already shipped, read from the base's commit subjects. Catches
@@ -534,8 +652,9 @@ async function main() {
   }
   const warnings: string[] = [];
   const host = detectHost();
-  const versionPath = resolveVersionPath(args.versionPath, repoToplevel());
-  const baseVersion = args.current || readBaseVersion(args.base, versionPath, warnings);
+  const repoRoot = repoToplevel();
+  const versionPath = resolveVersionPath(args.versionPath, repoRoot);
+  const baseVersion = args.current || readBaseVersion(args.base, versionPath, repoRoot, warnings);
   const baseParsed = parseVersion(baseVersion);
   if (!baseParsed) {
     console.error(`Error: could not parse base version '${baseVersion}'`);

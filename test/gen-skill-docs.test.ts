@@ -1958,12 +1958,14 @@ describe('Codex generation (--host codex)', () => {
 
   // ─── Path rewriting regression tests ─────────────────────────
 
-  test('sidecar paths point to .agents/skills/gstack/review/ (not gstack-review/)', () => {
-    // Regression: gen-skill-docs rewrote .claude/skills/review → .agents/skills/gstack-review
-    // but setup puts sidecars under .agents/skills/gstack/review/. Must match setup layout.
+  test('sidecar paths resolve through $GSTACK_ROOT (not gstack-review/)', () => {
+    // #2518: templates now anchor sidecars at the installed skill root
+    // (~/.claude/skills/gstack/review/...), which the codex path rewrite turns
+    // into $GSTACK_ROOT/review/... — resolved by the preamble against the
+    // repo-local .agents root or the global install. The old repo-relative
+    // form (.claude/skills/review/) only resolved inside gstack's own checkout.
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-review', 'SKILL.md'), 'utf-8');
-    // Correct: references to sidecar files use gstack/review/ path
-    expect(content).toContain('.agents/skills/gstack/review/checklist.md');
+    expect(content).toContain('$GSTACK_ROOT/review/checklist.md');
     // design-checklist.md is now referenced via Review Army specialist (Claude only, stripped for Codex)
     // Wrong: must NOT reference gstack-review/checklist.md (file doesn't exist there)
     expect(content).not.toContain('.agents/skills/gstack-review/checklist.md');
@@ -1981,7 +1983,7 @@ describe('Codex generation (--host codex)', () => {
   test('greptile-triage sidecar path is correct', () => {
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-review', 'SKILL.md'), 'utf-8');
     if (content.includes('greptile-triage')) {
-      expect(content).toContain('.agents/skills/gstack/review/greptile-triage.md');
+      expect(content).toContain('$GSTACK_ROOT/review/greptile-triage.md');
       expect(content).not.toContain('.agents/skills/gstack-review/greptile-triage');
     }
   });
@@ -2023,10 +2025,12 @@ describe('Codex generation (--host codex)', () => {
 
   // ─── Claude output regression guard ─────────────────────────
 
-  test('Claude output unchanged: review skill still uses .claude/skills/ paths', () => {
-    // Codex changes must NOT affect Claude output
+  test('Claude output uses installed-root review paths (#2518)', () => {
+    // Codex changes must NOT affect Claude output; the Claude form is the
+    // installed-root anchor, not the old repo-relative path that only
+    // resolved inside gstack's own checkout.
     const content = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
-    expect(content).toContain('.claude/skills/review/checklist.md');
+    expect(content).toContain('~/.claude/skills/gstack/review/checklist.md');
     expect(content).toContain('~/.claude/skills/gstack');
     // Must NOT contain Codex HOST paths. `~/.codex/sessions/` is exempt: the
     // timeout-wrapper guidance documents the Codex CLI's own rollout-log

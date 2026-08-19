@@ -207,12 +207,14 @@ describe('two-class referenced-paths (ENG-OV7)', () => {
   });
 
   test('the referenced-path scan actually sees the review checklist refs (self-check)', () => {
-    // Guard against the extraction regex silently rotting: the review skill is
-    // KNOWN to carry alias-relative refs; if the scanner stops seeing them the
-    // class-1 assertion is vacuous.
-    const class1 = collectRefs().filter((r) => r.skillName !== 'gstack');
-    expect(class1.length).toBeGreaterThan(0);
-    expect(class1.some((r) => r.skillName === 'review' && r.rel === 'checklist.md')).toBe(true);
+    // Guard against the extraction regex silently rotting: the review skill's
+    // checklist refs are KNOWN to exist. Since #2518 they anchor at the
+    // installed gstack root (class 2: gstack/review/checklist.md), not the
+    // alias-relative form — if the scanner stops seeing them, the class-2
+    // assertion is vacuous.
+    const refs = collectRefs();
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.some((r) => r.skillName === 'gstack' && r.rel === 'review/checklist.md')).toBe(true);
   });
 
   test('KNOWN_BROKEN_CLASS2 entries are still actually broken (ratchet)', () => {

@@ -577,3 +577,182 @@ describe('path containment: pins and flags cannot escape the repo', () => {
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'frontend', 'package.json'), 'utf-8')).version).toBe('1.1.0');
   });
 });
+
+describe('#2600: repair must not write fabricated 0.0.0.0 when VERSION is missing', () => {
+  // Per-test dirs: the tests assert both "VERSION absent" and "VERSION
+  // present" states, so a shared dir made them order-dependent (test 1's
+  // absence assertion only held because test 2 hadn't run yet).
+  const dirs: string[] = [];
+  const makeDir = (): string => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-'));
+    dirs.push(d);
+    return d;
+  };
+  afterAll(() => {
+    for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* noop */ } }
+  });
+
+  test('repair fails with exit 2 when VERSION file does not exist', () => {
+    const dir = makeDir();
+    // Set up: package.json exists with version 0.1.0.0, but no VERSION file
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.1.0.0' }, null, 2) + '\n');
+    // VERSION file deliberately absent
+    expect(fs.existsSync(path.join(dir, 'VERSION'))).toBe(false);
+
+    let code = 0;
+    let stderr = '';
+    try {
+      execFileSync('bun', [BIN, 'repair'], { cwd: dir, stdio: 'pipe' });
+    } catch (e: any) {
+      code = e.status;
+      stderr = (e.stderr || '').toString();
+    }
+
+    // Should fail, not succeed
+    expect(code).toBe(2);
+    expect(stderr).toContain('VERSION file not found');
+    // package.json must NOT be modified
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.1.0.0');
+  });
+
+  test('repair works normally when VERSION file exists', () => {
+    const dir = makeDir();
+    // Set up: both VERSION and package.json exist, with drift
+    fs.writeFileSync(path.join(dir, 'VERSION'), '2.0.0.0\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.9.0' }, null, 2) + '\n');
+
+    const out = execFileSync('bun', [BIN, 'repair'], { cwd: dir }).toString();
+    const result = JSON.parse(out);
+
+    expect(result.repaired).toBe('2.0.0.0');
+    expect(result.packageJsonVersion).toBe('2.0.0');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('2.0.0');
+  });
+
+  test('repair refuses to propagate a fabricated version when VERSION file is empty (#2600)', () => {
+    const dir = makeDir();
+    // VERSION exists but is empty — readVersionFile folds this into DEFAULT ("0.0.0.0").
+    // Without the `current === DEFAULT` guard, this would write 0.0.0 into package.json.
+    fs.writeFileSync(path.join(dir, 'VERSION'), '');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.5.0' }, null, 2) + '\n');
+
+    let code = 0;
+    let stderr = '';
+    try {
+      execFileSync('bun', [BIN, 'repair'], { cwd: dir, stdio: 'pipe' });
+    } catch (e: any) {
+      code = e.status;
+      stderr = (e.stderr || '').toString();
+    }
+
+    expect(code).toBe(2);
+    expect(stderr).toContain('empty or contains no parsable version');
+    // package.json must NOT be modified
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.5.0');
+  });
+
+  test('repair proceeds when VERSION genuinely reads 0.0.0.0 (a real file, not the sentinel)', () => {
+    // current === DEFAULT is ambiguous: it is BOTH the missing/unparseable
+    // sentinel AND a legitimate literal "0.0.0.0" in a brand-new repo. The
+    // guard now disambiguates on the raw bytes — a real 0.0.0.0 repairs
+    // package.json to the npm-valid 0.0.0.
+    const dir = makeDir();
+    fs.writeFileSync(path.join(dir, 'VERSION'), '0.0.0.0\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.5.0' }, null, 2) + '\n');
+
+    const out = execFileSync('bun', [BIN, 'repair'], { cwd: dir }).toString();
+    const result = JSON.parse(out);
+    expect(result.repaired).toBe('0.0.0.0');
+    expect(result.packageJsonVersion).toBe('0.0.0');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.0.0');
+  });
+
+  test('repair still rejects whitespace-only VERSION content (sentinel path, not a real version)', () => {
+    const dir = makeDir();
+    fs.writeFileSync(path.join(dir, 'VERSION'), '   \n\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.5.0' }, null, 2) + '\n');
+
+    let code = 0;
+    try { execFileSync('bun', [BIN, 'repair'], { cwd: dir, stdio: 'pipe' }); }
+    catch (e: any) { code = e.status; }
+    expect(code).toBe(2);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).version).toBe('0.5.0');
+  });
+
+  test('repair reproduces the exact issue scenario: VERSION in root, package.json in app/ (#2600)', () => {
+    // The exact layout from the issue: VERSION at repo root, package.json in app/
+    // Running repair from app/ cwd with no VERSION there used to write 0.0.0.0 into app/package.json.
+    const rootDir = makeDir();
+
+    fs.mkdirSync(path.join(rootDir, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, 'VERSION'), '0.2.0.0\n');
+    fs.writeFileSync(path.join(rootDir, 'app', 'package.json'), JSON.stringify({ name: 'x', version: '0.1.0.0' }, null, 2) + '\n');
+
+    // Run from app/ — no VERSION in cwd, readVersionFile would fold to 0.0.0.0
+    let code = 0;
+    let stderr = '';
+    try {
+      execFileSync('bun', [BIN, 'repair'], { cwd: path.join(rootDir, 'app'), stdio: 'pipe' });
+    } catch (e: any) {
+      code = e.status;
+      stderr = (e.stderr || '').toString();
+    }
+
+    expect(code).toBe(2);
+    expect(stderr).toContain('VERSION file not found');
+    // app/package.json must NOT be modified
+    expect(JSON.parse(fs.readFileSync(path.join(rootDir, 'app', 'package.json'), 'utf-8')).version).toBe('0.1.0.0');
+  });
+});
+
+describe('#2600: classify must surface versionFileExists=false when VERSION is missing', () => {
+  // Per-test dirs: one test asserts VERSION absent, the other creates it — a
+  // shared dir made them order-dependent. Each test builds its own repo.
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* noop */ } }
+  });
+
+  /** Minimal git repo (no VERSION committed) so classify can resolve base. */
+  function makeRepoDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-2600-classify-'));
+    dirs.push(dir);
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    // Commit with no VERSION file
+    fs.writeFileSync(path.join(dir, 'README.md'), 'test\n');
+    git('add', '-A'); git('commit', '-q', '-m', 'base');
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+    fs.mkdirSync(path.join(dir, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git', 'refs', 'remotes', 'origin', 'main'), head + '\n');
+    return dir;
+  }
+
+  test('classify reports versionFileExists=false when VERSION is absent', () => {
+    const dir = makeRepoDir();
+    // No package.json: pkgExists=false, pkgAgrees=true, current===base → FRESH.
+    // (A package.json with a non-zero version would cause DRIFT_UNEXPECTED.)
+
+    const out = execFileSync('bun', [BIN, 'classify', '--base', 'main'], { cwd: dir }).toString();
+    const result = JSON.parse(out);
+
+    expect(result.versionFileExists).toBe(false);
+    expect(result.currentVersion).toBe('0.0.0.0'); // fabricated default
+    expect(result.state).toBe('FRESH'); // base also reads 0.0.0.0, no pkg drift
+  });
+
+  test('classify reports versionFileExists=true when VERSION is present', () => {
+    const dir = makeRepoDir();
+    // Create VERSION AND sync package.json so pkgAgrees=true → ALREADY_BUMPED.
+    fs.writeFileSync(path.join(dir, 'VERSION'), '0.2.0.0\n');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '0.2.0.0' }, null, 2) + '\n');
+
+    const out = execFileSync('bun', [BIN, 'classify', '--base', 'main'], { cwd: dir }).toString();
+    const result = JSON.parse(out);
+
+    expect(result.versionFileExists).toBe(true);
+    expect(result.currentVersion).toBe('0.2.0.0');
+    expect(result.state).toBe('ALREADY_BUMPED'); // base is 0.0.0.0, current is 0.2.0.0, pkg in sync
+  });
+});

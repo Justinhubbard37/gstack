@@ -629,6 +629,14 @@ elif [ "$_CODEX_EXIT" != "0" ]; then
 fi
 ```
 
+**Session-cost reality (#2387, measured):** every `codex exec` call — resumed
+or fresh — pays Codex's ~21K-token session prelude (its skill catalogue +
+instructions); `resume` does NOT amortize it (a measured resume came in
+slightly ABOVE a fresh call). Resume buys conversational continuity, never
+token savings. So: prefer ONE codex call per skill where the workflow allows,
+batch questions into that call, and reach for resume only when the follow-up
+genuinely needs the prior session's context.
+
 For a **resumed session** (user chose "Continue"):
 ```bash
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }

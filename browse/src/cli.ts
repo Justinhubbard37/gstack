@@ -159,6 +159,22 @@ export async function isServerHealthy(port: number, timeoutMs = 2000): Promise<b
   }
 }
 
+/** Best-effort tab count via GET /health (no auth, bounded). Returns null
+ * when the daemon doesn't answer in time or predates the `tabs` field —
+ * callers degrade to a countless phrasing, never block on this. */
+async function fetchDaemonTabCount(port: number, timeoutMs = 2000): Promise<number | null> {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!resp.ok) return null;
+    const health = await resp.json() as any;
+    return typeof health.tabs === 'number' ? health.tabs : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Process Management ─────────────────────────────────────────
 async function killServer(pid: number): Promise<void> {
   if (!isProcessAlive(pid)) return;
@@ -212,6 +228,7 @@ function cleanupLegacyState(): void {
         if (data.pid && isProcessAlive(data.pid)) {
           // Verify this is actually a browse server before killing
           const check = Bun.spawnSync(['ps', '-p', String(data.pid), '-o', 'command='], {
+      windowsHide: true,
             stdout: 'pipe', stderr: 'pipe', timeout: 2000,
           });
           const cmd = check.stdout.toString().trim();
@@ -1630,6 +1647,19 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     commandArgs.push(stdin.trim());
   }
 
+  // #2219 IRON RULE (pair-agent leg): capture whether a LIVE daemon predates
+  // this invocation BEFORE ensureServer() can start a fresh one. pair-agent's
+  // headed switch below replaces the daemon via `connect --force-restart` —
+  // a kill that loses tabs/cookies/logins — so a PRE-EXISTING live daemon may
+  // only be replaced with the user's explicit --force-restart consent. A
+  // daemon that ensureServer just booted for this invocation holds no session
+  // state, so replacing it kills nothing the user had.
+  let pairAgentPreexistingDaemonAlive = false;
+  if (command === 'pair-agent') {
+    const preState = readState();
+    pairAgentPreexistingDaemonAlive = Boolean(preState?.pid && isProcessAlive(preState.pid));
+  }
+
   let state = await ensureServer(globalFlags);
 
   // ─── Pair-Agent (post-server, pre-dispatch) ──────────────
@@ -1637,27 +1667,42 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     // Ensure headed mode — the user should see the browser window
     // when sharing it with another agent. Feels safer, more impressive.
     if (state.mode !== 'headed' && !hasFlag(commandArgs, '--headless')) {
-      console.log('[browse] Opening GStack Browser so you can see what the remote agent does...');
-      // In compiled binaries, process.argv[1] is /$bunfs/... (virtual).
-      // Use process.execPath which is the real binary on disk.
-      const browseBin = process.execPath;
-      // --force-restart: the headed switch is this command's explicit purpose
-      // (the user asked to SEE the shared browser), and connect's #2219 guard
-      // would otherwise refuse to replace the healthy headless daemon.
-      const connectProc = Bun.spawn([browseBin, 'connect', '--force-restart'], {
-        cwd: process.cwd(),
-        stdio: ['ignore', 'inherit', 'inherit'],
-        // Disable parent-PID monitoring: pair-agent needs the server to outlive
-        // the connect subprocess. Setting to 0 tells the server not to self-terminate.
-        env: { ...process.env, BROWSE_PARENT_PID: '0' },
-      });
-      await connectProc.exited;
-      // Re-read state after headed mode switch
-      const newState = readState();
-      if (newState && await isServerHealthy(newState.port)) {
-        state = newState as ServerState;
+      if (pairAgentPreexistingDaemonAlive && !globalFlags.forceRestart) {
+        // #2219 IRON RULE: only an explicit --force-restart may kill a live
+        // daemon. The headed switch is nice-to-have; the user's open tabs,
+        // cookies, and logins are not. Continue against the live headless
+        // daemon and tell the user how to opt into the headed relaunch.
+        const tabCount = await fetchDaemonTabCount(state.port);
+        const tabsPhrase = tabCount === null
+          ? 'open tabs'
+          : `${tabCount} tab${tabCount === 1 ? '' : 's'}`;
+        console.warn(`[browse] Live headless daemon has ${tabsPhrase}; continuing against it — pass --force-restart to relaunch headed, losing tabs/cookies.`);
       } else {
-        console.warn('[browse] Could not switch to headed mode. Continuing headless.');
+        console.log('[browse] Opening GStack Browser so you can see what the remote agent does...');
+        // In compiled binaries, process.argv[1] is /$bunfs/... (virtual).
+        // Use process.execPath which is the real binary on disk.
+        const browseBin = process.execPath;
+        // --force-restart: reaching this branch means either no live daemon
+        // predated this invocation (nothing of the user's dies) or the user
+        // explicitly passed --force-restart to pair-agent (consent given).
+        // connect's #2219 guard would otherwise refuse to replace the
+        // healthy headless daemon ensureServer just returned.
+        const connectProc = Bun.spawn([browseBin, 'connect', '--force-restart'], {
+          windowsHide: true,
+          cwd: process.cwd(),
+          stdio: ['ignore', 'inherit', 'inherit'],
+          // Disable parent-PID monitoring: pair-agent needs the server to outlive
+          // the connect subprocess. Setting to 0 tells the server not to self-terminate.
+          env: { ...process.env, BROWSE_PARENT_PID: '0' },
+        });
+        await connectProc.exited;
+        // Re-read state after headed mode switch
+        const newState = readState();
+        if (newState && await isServerHealthy(newState.port)) {
+          state = newState as ServerState;
+        } else {
+          console.warn('[browse] Could not switch to headed mode. Continuing headless.');
+        }
       }
     }
     await handlePairAgent(state, commandArgs);
