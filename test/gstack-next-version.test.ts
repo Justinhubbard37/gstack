@@ -394,13 +394,27 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
   // the remote's every branch (the shard-deadline hang fixed alongside this).
   const NEXTVER = join(import.meta.dir, "..", "bin", "gstack-next-version");
 
-  function fixtureRepo(): string {
-    const dir = mkdtempSync(join(tmpdir(), "nextver-contract-"));
-    Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "init", "-q", "-b", "main"], { cwd: dir });
-    writeFileSync(join(dir, "VERSION"), "1.0.0.0\n");
-    Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { cwd: dir });
-    Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v1.0.0.0 chore: base"], { cwd: dir });
-    return dir;
+  function fixtureRepo(): { root: string; work: string } {
+    const root = mkdtempSync(join(tmpdir(), "nextver-contract-"));
+    // detectHost() sniffs "github.com" in the origin URL STRING before any
+    // gh/glab auth probe — a bare origin at a path containing github.com
+    // pins host:"github" identically on every machine (an auth-probe
+    // fallthrough once made this test pass via glab locally and read
+    // host:"unknown" on CI) while keeping ls-remote/fetch fully local.
+    const bare = join(root, "github.com", "origin.git");
+    mkdirSync(bare, { recursive: true });
+    Bun.spawnSync(["git", "init", "-q", "--bare", "-b", "main", bare]);
+    const work = join(root, "work");
+    mkdirSync(work);
+    const git = (...args: string[]) =>
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: work });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(work, "VERSION"), "1.0.0.0\n");
+    git("add", "-A");
+    git("commit", "-qm", "v1.0.0.0 chore: base");
+    git("remote", "add", "origin", bare);
+    git("push", "-q", "origin", "main");
+    return { root, work };
   }
 
   test("emits fallback:'git' and still returns a version when gh fails", async () => {
@@ -408,16 +422,17 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
     // looks like from here. No origin remote → ls-remote fails fast and the
     // allocation comes from local refs, never the network.
     const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-"));
-    const repo = fixtureRepo();
+    const { root, work } = fixtureRepo();
     writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const proc = Bun.spawnSync(
       ["bun", "run", NEXTVER, "--base", "main",
        "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
-      { cwd: repo, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
     );
     rmSync(stubDir, { recursive: true, force: true });
-    rmSync(repo, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
     const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+    expect(out.host).toBe("github"); // pinned by the fixture's URL sniff, not auth probes
     expect(out.offline).toBe(true);
     expect(out.fallback).toBe("git");
     // The whole point: degraded queue view, NOT a degraded allocation.
@@ -430,7 +445,7 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
     // deterministically instead of only when the operator happens to be
     // authed. Before this stub the test silently no-opped on CI.
     const stubDir = mkdtempSync(join(tmpdir(), "nextver-stubgh-ok-"));
-    const repo = fixtureRepo();
+    const { root, work } = fixtureRepo();
     writeFileSync(
       join(stubDir, "gh"),
       '#!/bin/sh\ncase "$1" in\n  pr) echo "[]" ;;\n  repo) echo "testowner" ;;\n  *) exit 0 ;;\nesac\n',
@@ -439,11 +454,12 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
     const proc = Bun.spawnSync(
       ["bun", "run", NEXTVER, "--base", "main",
        "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
-      { cwd: repo, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
     );
     rmSync(stubDir, { recursive: true, force: true });
-    rmSync(repo, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
     const out = JSON.parse(new TextDecoder().decode(proc.stdout));
+    expect(out.host).toBe("github"); // pinned by the fixture's URL sniff, not auth probes
     expect(out.offline).toBe(false);
     expect(out.fallback).toBe(null);
     expect(out.version).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
