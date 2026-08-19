@@ -14,6 +14,9 @@
  *                                              platform-detect, uninstall
  */
 
+import type { Model } from './models';
+import { validateModel } from './models';
+
 export interface HostConfig {
   /** Unique host identifier (e.g., 'opencode'). Must match filename in hosts/. */
   name: string;
@@ -23,6 +26,9 @@ export interface HostConfig {
   cliCommand: string;
   /** Alternative binary names (e.g., ['droid'] for factory). */
   cliAliases?: string[];
+
+  /** Model overlay used when generation does not receive an explicit --model. */
+  defaultModel: Model;
 
   // --- Path Configuration ---
   /** Global install path relative to $HOME (e.g., '.config/opencode/skills/gstack'). */
@@ -118,6 +124,10 @@ export function validateHostConfig(config: HostConfig, validResolverNames?: Read
         errors.push(`cliAlias '${alias}' contains invalid characters`);
       }
     }
+  }
+  const modelError = validateModel(config.defaultModel);
+  if (modelError) {
+    errors.push(`defaultModel ${modelError}`);
   }
   if (!PATH_REGEX.test(config.globalRoot)) {
     errors.push(`globalRoot '${config.globalRoot}' contains invalid characters`);

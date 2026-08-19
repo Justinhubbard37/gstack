@@ -415,7 +415,7 @@ The `parseNDJSON()` function is pure — no I/O, no side effects — making it i
 
 **Machine-readable diagnostics:** Each test result includes `exit_reason` (success, timeout, error_max_turns, error_api, exit_code_N), `timeout_at_turn`, and `last_tool_call`. This enables `jq` queries like:
 ```bash
-jq '.tests[] | select(.exit_reason == "timeout") | .last_tool_call' ~/.gstack-dev/evals/_partial-e2e.json
+jq '.tests[] | select(.exit_reason == "timeout") | .last_tool_call' ~/.gstack/projects/<slug>/evals/_partial-e2e.json
 ```
 
 ### Eval persistence (`test/helpers/eval-store.ts`)
@@ -425,7 +425,7 @@ The `EvalCollector` accumulates test results and writes them in two ways:
 1. **Incremental:** `savePartial()` writes `_partial-e2e.json` after each test (atomic: write `.tmp`, `fs.renameSync`). Survives kills.
 2. **Final:** `finalize()` writes a timestamped eval file (e.g. `e2e-20260314-143022.json`). The partial file is never cleaned up — it persists alongside the final file for observability.
 
-`eval:compare` diffs two eval runs. `eval:summary` aggregates stats across all runs in `~/.gstack-dev/evals/`. Both are shard-aware (v1.63.0.0): the sharded paid runner (`scripts/test-paid-shards.ts`, run via `test:gate:sharded` / `test:periodic:sharded` — the `eval:bg:gate` / `eval:bg:periodic` scripts now point at these) gives each shard's collector its own directory at `<evalDir>/shards/<slug>/` through the `GSTACK_EVAL_DIR` env var (honored by the `EvalCollector` constructor), and `eval:list` / `eval:compare` / `eval:summary` scan one level of `shards/<slug>/` subdirectories. Baseline lookups exclude `_partial` accumulators (`isPartialEval` / `findLatestFinalizedRun` in `eval-store.ts`), so auto-comparison never uses the current run's own partial file as its baseline.
+`eval:compare` diffs two eval runs. `eval:summary` aggregates stats across all runs in `~/.gstack/projects/<slug>/evals/` (legacy fallback `~/.gstack-dev/evals/`). Both are shard-aware (v1.63.0.0): the sharded paid runner (`scripts/test-paid-shards.ts`, run via `test:gate:sharded` / `test:periodic:sharded` — the `eval:bg:gate` / `eval:bg:periodic` scripts now point at these) gives each shard's collector its own directory at `<evalDir>/shards/<slug>/` through the `GSTACK_EVAL_DIR` env var (honored by the `EvalCollector` constructor), and `eval:list` / `eval:compare` / `eval:summary` scan one level of `shards/<slug>/` subdirectories. Baseline lookups exclude `_partial` accumulators (`isPartialEval` / `findLatestFinalizedRun` in `eval-store.ts`), so auto-comparison never uses the current run's own partial file as its baseline.
 
 ### Test tiers
 

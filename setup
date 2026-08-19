@@ -12,6 +12,7 @@ Usage: ./setup [options]
 Options:
   --host <name>     Install for a specific host (claude, codex, kiro, factory,
                     opencode, openclaw, hermes, gbrain, auto). Default: claude.
+  --model <id>      Codex model profile override. Otherwise reads Codex config.
   --prefix          Install skills with the gstack- prefix (e.g. /gstack-review).
   --no-prefix       Install skills with short names (e.g. /review). Default.
   --team            Switch to team mode (per-repo gstack with auto-update).
@@ -22,6 +23,7 @@ Options:
 Examples:
   ./setup                          # solo install for Claude Code
   ./setup --host codex             # install for OpenAI Codex CLI
+  ./setup --host codex --model gpt-5.6-sol
   ./setup --team                   # team mode for a shared repo
   ./setup --no-prefix              # use short slash-command names
 
@@ -52,7 +54,7 @@ INSTALL_GSTACK_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_GSTACK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 INSTALL_SKILLS_DIR="$(dirname "$INSTALL_GSTACK_DIR")"
 BROWSE_BIN="$SOURCE_GSTACK_DIR/browse/dist/browse"
-CODEX_SKILLS="$HOME/.codex/skills"
+CODEX_SKILLS="${CODEX_HOME:-$HOME/.codex}/skills"
 CODEX_GSTACK="$CODEX_SKILLS/gstack"
 FACTORY_SKILLS="$HOME/.factory/skills"
 FACTORY_GSTACK="$FACTORY_SKILLS/gstack"
@@ -171,10 +173,14 @@ SKILL_PREFIX_FLAG=0
 TEAM_MODE=0
 NO_TEAM_MODE=0
 PLAN_TUNE_HOOKS_MODE=""   # "" = resolve from env/config/prompt; "yes"/"no" = explicit
+MODEL_OVERRIDE=""
+MODEL_OVERRIDE_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) [ -z "$2" ] && echo "Missing value for --host (expected claude, codex, kiro, factory, opencode, cursor, slate, openclaw, hermes, gbrain, or auto)" >&2 && exit 1; HOST="$2"; shift 2 ;;
     --host=*) HOST="${1#--host=}"; shift ;;
+    --model) [ -z "$2" ] && echo "Missing value for --model" >&2 && exit 1; MODEL_OVERRIDE="$2"; MODEL_OVERRIDE_SET=1; shift 2 ;;
+    --model=*) MODEL_OVERRIDE="${1#--model=}"; MODEL_OVERRIDE_SET=1; shift ;;
     --local) LOCAL_INSTALL=1; shift ;;
     --prefix)    SKILL_PREFIX=1; SKILL_PREFIX_FLAG=1; shift ;;
     --no-prefix) SKILL_PREFIX=0; SKILL_PREFIX_FLAG=1; shift ;;
@@ -315,6 +321,11 @@ elif [ "$HOST" = "opencode" ]; then
   INSTALL_OPENCODE=1
 elif [ "$HOST" = "cursor" ]; then
   INSTALL_CURSOR=1
+fi
+
+if [ "$MODEL_OVERRIDE_SET" -eq 1 ] && [ "$INSTALL_CODEX" -eq 0 ]; then
+  echo "Error: --model is supported only when Codex is selected (--host codex or --host auto with Codex installed)." >&2
+  exit 1
 fi
 
 migrate_direct_codex_install() {
@@ -534,6 +545,31 @@ cleanup_copied_bun() {
 prepare_bun_for_windows_compile
 trap cleanup_copied_bun EXIT
 
+# Resolve the model overlay used for generated Codex skills. Setup auto-detects
+# only Codex because it has one canonical TOML config surface; direct generator
+# calls remain deterministic and use the host default unless --model is explicit.
+# The resolver runs on EVERY setup, not just codex installs: step 1b regenerates
+# .agents/ unconditionally, and existing ~/.codex/skills symlinks point into it —
+# a plain `./setup` on a Sol user's machine must not clobber their profile with
+# the hardcoded fallback. The resolver is a read-only TOML lookup that falls
+# back to gpt when no Codex config exists.
+CODEX_GENERATION_MODEL="gpt"
+CODEX_GENERATION_MODEL_SOURCE="default (gpt)"
+_CODEX_MODEL_ARGS=(run scripts/resolve-codex-generation-model.ts)
+if [ "$MODEL_OVERRIDE_SET" -eq 1 ]; then
+  _CODEX_MODEL_ARGS+=(--explicit "$MODEL_OVERRIDE")
+fi
+_CODEX_MODEL_OUTPUT="$(cd "$SOURCE_GSTACK_DIR" && bun_cmd "${_CODEX_MODEL_ARGS[@]}")"
+IFS=$'\t' read -r CODEX_GENERATION_MODEL CODEX_GENERATION_MODEL_SOURCE <<< "$_CODEX_MODEL_OUTPUT"
+if [ -z "$CODEX_GENERATION_MODEL" ]; then
+  echo "gstack setup failed: Codex model resolver returned no model" >&2
+  exit 1
+fi
+if [ "$INSTALL_CODEX" -eq 1 ] || [ "$CODEX_GENERATION_MODEL" != "gpt" ]; then
+  log "Codex skill profile: $CODEX_GENERATION_MODEL"
+  log "Source: $CODEX_GENERATION_MODEL_SOURCE"
+fi
+
 # 1. Build browse binary if needed (smart rebuild: stale sources, package.json, lock)
 NEEDS_BUILD=0
 if [ ! -x "$BROWSE_BIN" ]; then
@@ -632,18 +668,19 @@ fi
 
 # 1b. Generate .agents/ Codex skill docs — always regenerate to prevent stale descriptions.
 # .agents/ is no longer committed — generated at setup time from .tmpl templates.
-# bun run build already does this, but we need it when NEEDS_BUILD=0 (binary is fresh).
+# bun run build generates the host-default artifact. Always render Codex again
+# with the resolved user profile so a build cannot overwrite a Sol-specific render.
 # Always regenerate: generation is fast (<2s) and mtime-based staleness checks are fragile
 # (miss stale files when timestamps match after clone/checkout/upgrade).
 AGENTS_DIR="$SOURCE_GSTACK_DIR/.agents/skills"
 NEEDS_AGENTS_GEN=1
 
-if [ "$NEEDS_AGENTS_GEN" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
+if [ "$NEEDS_AGENTS_GEN" -eq 1 ]; then
   log "Generating .agents/ skill docs..."
   (
     cd "$SOURCE_GSTACK_DIR"
     bun_cmd install --frozen-lockfile 2>/dev/null || bun_cmd install
-    bun_cmd run gen:skill-docs --host codex
+    bun_cmd run gen:skill-docs --host codex --model "$CODEX_GENERATION_MODEL"
   )
 fi
 
@@ -1038,11 +1075,11 @@ link_codex_skill_dirs() {
 
   if [ ! -d "$agents_dir" ]; then
     echo "  Generating .agents/ skill docs..."
-    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host codex )
+    ( cd "$gstack_dir" && bun_cmd run gen:skill-docs --host codex --model "$CODEX_GENERATION_MODEL" )
   fi
 
   if [ ! -d "$agents_dir" ]; then
-    echo "  warning: .agents/skills/ generation failed — run 'bun run gen:skill-docs --host codex' manually" >&2
+    echo "  warning: .agents/skills/ generation failed — run 'bun run gen:skill-docs --host codex --model $CODEX_GENERATION_MODEL' manually" >&2
     return 1
   fi
 
@@ -1686,6 +1723,12 @@ if [ "$INSTALL_CODEX" -eq 1 ]; then
   log "gstack ready (codex)."
   log "  browse: $BROWSE_BIN"
   log "  codex skills: $CODEX_SKILLS"
+  log "  model profile: $CODEX_GENERATION_MODEL ($CODEX_GENERATION_MODEL_SOURCE)"
+  log "  model changes: rerun ./setup --host codex"
+  if [ "$MODEL_OVERRIDE_SET" -eq 1 ]; then
+    log "  note: --model applies to this run only. To persist across upgrades,"
+    log "  set model = \"$MODEL_OVERRIDE\" in \${CODEX_HOME:-~/.codex}/config.toml."
+  fi
 fi
 
 # 6. Install for Kiro CLI (copy from .agents/skills, rewrite paths)
@@ -1693,6 +1736,15 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
   KIRO_SKILLS="$HOME/.kiro/skills"
   AGENTS_DIR="$SOURCE_GSTACK_DIR/.agents/skills"
   mkdir -p "$KIRO_SKILLS"
+
+  # Kiro builds from the codex-shaped render but fronts Claude-family models
+  # (hosts/kiro.ts defaultModel: 'claude'). Re-render with the claude overlay
+  # before copying so Kiro skills never ship the GPT/Sol behavioral patch;
+  # the resolved Codex profile is restored right after the copy loop.
+  if [ "$CODEX_GENERATION_MODEL" != "claude" ]; then
+    log "Rendering claude-profile skills for Kiro..."
+    ( cd "$SOURCE_GSTACK_DIR" && bun_cmd run gen:skill-docs --host codex --model claude )
+  fi
 
   # Create gstack dir with symlinks for runtime assets, copy+sed for SKILL.md
   KIRO_GSTACK="$KIRO_SKILLS/gstack"
@@ -1712,9 +1764,15 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
     mkdir -p "$KIRO_GSTACK/supabase"
     _link_or_copy "$SOURCE_GSTACK_DIR/supabase/config.sh" "$KIRO_GSTACK/supabase/config.sh"
   fi
-  # gstack-upgrade skill
+  # gstack-upgrade skill — sed COPY, never a symlink: a symlink would track
+  # .agents after the Codex-profile restore below (wrong overlay AND a baked
+  # './setup --host codex' that reinstalls the wrong host on /gstack-upgrade).
   if [ -f "$AGENTS_DIR/gstack-upgrade/SKILL.md" ]; then
-    _link_or_copy "$AGENTS_DIR/gstack-upgrade/SKILL.md" "$KIRO_GSTACK/gstack-upgrade/SKILL.md"
+    sed -e 's|\$HOME/.codex/skills/gstack|$HOME/.kiro/skills/gstack|g' \
+        -e "s|~/.codex/skills/gstack|~/.kiro/skills/gstack|g" \
+        -e "s|~/.claude/skills/gstack|~/.kiro/skills/gstack|g" \
+        -e 's|\./setup --host codex|./setup --host kiro|g' \
+        "$AGENTS_DIR/gstack-upgrade/SKILL.md" > "$KIRO_GSTACK/gstack-upgrade/SKILL.md"
   fi
   # Review runtime assets (individual files, not whole dir)
   for f in checklist.md design-checklist.md greptile-triage.md TODOS-format.md; do
@@ -1738,10 +1796,12 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
       target_dir="$KIRO_SKILLS/$skill_name"
       mkdir -p "$target_dir"
       # Generated Codex skills use $HOME/.codex (not ~/), plus $GSTACK_ROOT variables.
-      # Rewrite the default GSTACK_ROOT value and any remaining literal paths.
+      # Rewrite the default GSTACK_ROOT value, any remaining literal paths, and
+      # the SETUP_COMMAND host (the artifact was rendered for codex).
       sed -e 's|\$HOME/.codex/skills/gstack|$HOME/.kiro/skills/gstack|g' \
           -e "s|~/.codex/skills/gstack|~/.kiro/skills/gstack|g" \
           -e "s|~/.claude/skills/gstack|~/.kiro/skills/gstack|g" \
+          -e 's|\./setup --host codex|./setup --host kiro|g' \
           "$skill_dir/SKILL.md" > "$target_dir/SKILL.md"
       # Carved skills (v2 plan T9): rewrite + copy each sections/*.md the same way,
       # so a runtime "Read sections/<name>.md" resolves under ~/.kiro and doesn't
@@ -1754,6 +1814,7 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
           sed -e 's|\$HOME/.codex/skills/gstack|$HOME/.kiro/skills/gstack|g' \
               -e "s|~/.codex/skills/gstack|~/.kiro/skills/gstack|g" \
               -e "s|~/.claude/skills/gstack|~/.kiro/skills/gstack|g" \
+              -e 's|\./setup --host codex|./setup --host kiro|g' \
               "$section_file" > "$target_dir/sections/$(basename "$section_file")"
         done
       fi
@@ -1761,6 +1822,12 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
     echo "gstack ready (kiro)."
     echo "  browse: $BROWSE_BIN"
     echo "  kiro skills: $KIRO_SKILLS"
+  fi
+
+  # Restore the resolved Codex profile — ~/.codex/skills symlinks point into
+  # .agents/skills, so the tree must not stay on the Kiro claude render.
+  if [ "$CODEX_GENERATION_MODEL" != "claude" ]; then
+    ( cd "$SOURCE_GSTACK_DIR" && bun_cmd run gen:skill-docs --host codex --model "$CODEX_GENERATION_MODEL" )
   fi
 fi
 

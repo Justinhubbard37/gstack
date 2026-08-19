@@ -385,6 +385,12 @@ export function generateCoAuthorTrailer(ctx: TemplateContext): string {
   return hostConfig.coAuthorTrailer || 'Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>';
 }
 
+export function generateSetupCommand(ctx: TemplateContext): string {
+  // Every non-claude host must reinstall ITSELF on upgrade — bare `./setup`
+  // defaults to the claude host and would leave the invoking host stale.
+  return ctx.host === 'claude' ? './setup' : `./setup --host ${ctx.host}`;
+}
+
 export function generateChangelogWorkflow(_ctx: TemplateContext): string {
   return `## Step 13: CHANGELOG (auto-generate)
 
