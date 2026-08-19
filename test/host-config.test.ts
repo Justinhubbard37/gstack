@@ -112,6 +112,7 @@ describe('validateHostConfig', () => {
       name: 'test-host',
       displayName: 'Test Host',
       cliCommand: 'testcli',
+      defaultModel: 'claude',
       globalRoot: '.test/skills/gstack',
       localSkillRoot: '.test/skills/gstack',
       hostSubdir: '.test',
@@ -163,6 +164,12 @@ describe('validateHostConfig', () => {
     const c = makeValid();
     c.cliAliases = ['alias-one', 'alias-two'];
     expect(validateHostConfig(c)).toEqual([]);
+  });
+
+  test('invalid defaultModel is caught', () => {
+    const c = makeValid();
+    (c as any).defaultModel = 'llama-local';
+    expect(validateHostConfig(c).some(e => e.includes('defaultModel'))).toBe(true);
   });
 
   test('invalid globalRoot is caught', () => {
@@ -470,6 +477,13 @@ describe('golden-file regression', () => {
 // ─── Individual host config correctness ─────────────────────
 
 describe('host config correctness', () => {
+  test('Codex defaults to generic GPT while all existing hosts retain Claude', () => {
+    expect(codex.defaultModel).toBe('gpt');
+    for (const host of ALL_HOST_CONFIGS.filter(h => h.name !== 'codex')) {
+      expect(host.defaultModel).toBe('claude');
+    }
+  });
+
   test('claude is the only host with real-dir-symlink strategy', () => {
     for (const config of ALL_HOST_CONFIGS) {
       if (config.name === 'claude') {
