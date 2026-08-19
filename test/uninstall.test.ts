@@ -296,7 +296,9 @@ describe('hook cleanup runs before the install root is deleted', () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  });
+    // 30s: the copied uninstaller spawns several bun -e children; on a loaded
+    // box their cold starts blow bun's default 5s per-test timeout.
+  }, 30000);
 });
 
 describe('hook cleanup under lock contention is loud, never silent (review-army)', () => {
@@ -347,5 +349,8 @@ describe('hook cleanup under lock contention is loud, never silent (review-army)
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  });
+    // 30s: several settings-hook calls each wait out the 300ms lock give-up,
+    // and their bun -e cold starts stack up under load — the default 5s
+    // per-test budget is too tight on a busy box.
+  }, 30000);
 });
