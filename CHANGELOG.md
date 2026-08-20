@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.68.3.0] - 2026-08-20
+
+**Re-pairing a browser agent to narrow its access now revokes the old access on**
+**the spot, revoke frees the agent's tabs, and `root` is a reserved client name.**
+
+Tightening a paired agent is supposed to be one re-pair away. It wasn't. `POST /pair` minted a fresh setup key but never touched the agent's live session, so `pair-agent --client codex --restrict read` against an agent that had already connected (or whose new 5-minute key simply expired unexchanged) left the original full-access session, `eval` included, alive for up to 24 hours. Revocation also never released tab ownership, so an agent re-paired under the same name inherited the previous one's authenticated tabs. And because `root` is the sentinel the scope, domain, rate, and tab checks use for the omnipotent caller, `--client root` minted a "scoped" token that skipped all of them.
+
+### The numbers that matter
+
+Source: the before/after `BROWSE_HEADLESS_SKIP=1` daemon transcript in the PR and the regression tests in `browse/test/pair-agent-e2e.test.ts`, `browse/test/token-registry.test.ts`, and `browse/test/tab-isolation.test.ts`, which fail on the previous release.
+
+| Property | Before | After |
+|--------|--------|-------|
+| Re-pair to narrow, agent hasn't reconnected | old wide session lives ~24h | old session 401s immediately |
+| Narrowing re-pair before the agent connects | stale broad setup key still exchangeable | broad key dead, only the narrow key works |
+| Broaden/refresh re-pair mid-task | old session lingers alongside a new key | working session kept, stale key dropped, no outage |
+| Revoke a paired agent | tabs stay owned; same-name re-pair inherits them | tab ownership released; own-only access denied |
+| `--client root` | "scoped" token bypasses all enforcement | rejected with a named 400 and a CLI fast-fail |
+
+### What this means for you
+
+Re-pair is now the real tightening lever. Re-pair an agent with its **same `--client` name** and a narrower `--restrict`/`--domain`, and the previous session is revoked and its tabs released the instant you run it, so the old access can't linger while you wait for the agent to reconnect. Broadening or refreshing the same agent leaves its working session alone, so you never strand an agent mid-task. Revoking (or a narrowing re-pair) also frees the tabs the agent opened, so reusing a client name can't hand the next agent someone else's logged-in page. `root` is rejected as a client name on both the CLI and the daemon.
+
+### Itemized changes
+
+#### Fixed
+- A reducing re-pair (`/pair` with fewer scopes, tighter domains, a lower rate, or a stricter tab policy) revokes the client's live session and releases its tabs before minting the new key; the response carries `superseded`. Non-reducing re-pairs keep the session and only drop stale pending setup keys, so a broaden or refresh never strands a working agent. (`browse/src/server.ts`, `browse/src/token-registry.ts`)
+- A narrowing re-pair issued before the agent connects invalidates the earlier, broader setup key, so it can no longer be exchanged. (`browse/src/token-registry.ts`)
+- Revoking an agent releases the tab ownership it held: `DELETE /token` runs the release unconditionally (ownership outlives the token) and reports `tabs_released`, and an own-only client re-paired under the same name can no longer read those tabs. (`browse/src/browser-manager.ts`, `browse/src/server.ts`)
+- `root` is rejected as a `clientId` at every token writer, so a scoped token can never carry the sentinel that bypasses scope, domain, rate, and tab checks; `/pair` and `/token` return a named 400 and the CLI rejects `--client root` before it reaches the daemon. A persisted `root` entry is skipped when the registry is restored. (`browse/src/token-registry.ts`, `browse/src/cli.ts`)
+
+#### For contributors
+- Regression coverage pins each property: the reduce / broaden / shadow-key re-pair behaviors and the `grantReducesAccess` truth table (scope, domain direction, rate `0`=unlimited, tab policy) in `browse/test/pair-agent-e2e.test.ts` and `browse/test/token-registry.test.ts`; tab-ownership release and post-release denial in `browse/test/tab-isolation.test.ts`; reserved-name rejection across writers, routes, and registry restore.
+
 ## [1.68.2.0] - 2026-08-20
 
 **Revoking a paired agent now revokes everything it holds, and the**
