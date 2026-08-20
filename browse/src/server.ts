@@ -1000,7 +1000,7 @@ async function handleCommandInternalImpl(
         status: 403, json: true,
         result: JSON.stringify({
           error: `Command "${command}" not allowed by your token scope`,
-          hint: `Your scopes: ${tokenInfo.scopes.join(', ')}. Ask the user to re-pair with --admin for eval/cookies/storage access.`,
+          hint: `Your scopes: ${tokenInfo.scopes.join(', ')}. Ask the user to re-pair without --restrict for full page access, or with --control for browser control commands.`,
         }),
       };
     }

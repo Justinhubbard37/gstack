@@ -19,7 +19,12 @@
  *
  *   Security invariants:
  *     1. Only root token can mint sub-tokens (POST /token, POST /connect)
- *     2. admin scope denied by default — must be explicitly granted
+ *     2. control scope denied by default — must be explicitly flagged.
+ *        Registry API defaults (createToken/createSetupKey with no scopes)
+ *        stay ['read','write']; the /pair ceremony explicitly grants
+ *        DEFAULT_PAIR_SCOPES (read+write+admin+meta — the pairing ceremony
+ *        is the trust boundary; --restrict narrows, --control must be
+ *        explicit and never rides in via a scopes list)
  *     3. chain command scope-checks each subcommand individually
  *     4. Root token never in connection strings or pasted instructions
  *
