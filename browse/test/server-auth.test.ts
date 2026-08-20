@@ -420,8 +420,10 @@ describe('Pair scope defaults and revocation surface', () => {
     const pairBlock = sliceBetween(SERVER_SRC, "url.pathname === '/pair'", "url.pathname === '/tunnel/start'");
     expect(pairBlock).toContain('DEFAULT_PAIR_SCOPES');
     const cliBlock = sliceBetween(CLI_SRC, 'async function handlePairAgent', 'Determine the URL to use');
-    expect(cliBlock).toContain('DEFAULT_PAIR_SCOPES');
-    expect(cliBlock).not.toContain('...(restrict ? { scopes');
+    // Match the CODE shape, not a comment: a bare toContain('DEFAULT_PAIR_SCOPES')
+    // is satisfied by the explanatory comment and passes vacuously on a revert.
+    expect(cliBlock).toMatch(/scopes:\s*restrict\s*\?[\s\S]{0,200}?:\s*\[\.\.\.DEFAULT_PAIR_SCOPES\]/);
+    expect(cliBlock).not.toMatch(/\.\.\.\(restrict\s*\?/);
   });
 
   // control is the only scope behind an explicit flag; a scopes list must

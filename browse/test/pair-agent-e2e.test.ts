@@ -264,6 +264,33 @@ describe('pair-agent flow end-to-end (HTTP only, no ngrok)', () => {
     expect(body.error).toContain('control');
   });
 
+  test('scope-denied 403 hint points at --restrict/--control, never --admin', async () => {
+    // Regression: the old hint said "re-pair with --admin", which is a legacy
+    // alias for --control — following it over-granted browser-wide control.
+    const pairResp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'hint-agent', scopes: ['read'] }),
+    });
+    const { setup_key } = await pairResp.json() as any;
+    const connectResp = await fetch(`${daemon.baseUrl}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setup_key }),
+    });
+    const { token } = await connectResp.json() as any;
+    const resp = await fetch(`${daemon.baseUrl}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ command: 'goto', args: ['https://example.com'] }),
+    });
+    expect(resp.status).toBe(403);
+    const body = await resp.json() as any;
+    expect(body.hint).toContain('--restrict');
+    expect(body.hint).toContain('--control');
+    expect(body.hint).not.toContain('--admin');
+  });
+
   // ─── Revocation e2e: revoke-all + the /agents verification surface ────
 
   test('DELETE /token revokes session AND setup keys; agent leaves /agents; token 401s; re-connect fails', async () => {

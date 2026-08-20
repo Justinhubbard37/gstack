@@ -114,6 +114,22 @@ describe('pair-agent scope-flag validation (pre-server)', () => {
     }
   }, 30_000);
 
+  test('--restrict=read (equals form) → exit 1, NO daemon spawned', async () => {
+    // Regression: hasFlag/parseFlag are exact-token matches, so the equals
+    // form sailed past validatePairAgentFlags AND handlePairAgent's parse —
+    // the user asked for a read-only sandbox and silently got FULL access.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-restrict-eq-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    try {
+      const result = await runCli(['pair-agent', '--restrict=read'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('--restrict takes a space-separated value');
+      expect(fs.existsSync(stateFile)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test('--restrict swallowing the next flag → exit 1, NO daemon spawned', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-restrict-flag-'));
     const stateFile = path.join(tmpDir, 'browse.json');
@@ -248,6 +264,19 @@ describe('tunnel against a live daemon (HTTP only, no browser)', () => {
       const empty = await runCli(['tunnel', 'agents'], baseEnv(stateFile));
       expect(empty.code).toBe(0);
       expect(empty.stdout).toContain('No paired agents.');
+
+      // Regression: handleTunnel used to trim() the name, but clientIds are
+      // stored verbatim — a space-padded agent became unrevocable by the
+      // documented kill switch (trimmed DELETE 404'd while the grant lived).
+      const padPair = await fetch(`${baseUrl}/pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rootToken}` },
+        body: JSON.stringify({ clientId: ' padded' }),
+      });
+      expect(padPair.status).toBe(200);
+      const padRevoke = await runCli(['tunnel', 'revoke', ' padded'], baseEnv(stateFile));
+      expect(padRevoke.code).toBe(0);
+      expect(padRevoke.stdout).toContain('Verified: not in the active agent list.');
     } finally {
       try { daemon.kill('SIGKILL'); } catch { /* already gone */ }
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -283,6 +312,91 @@ describe('tunnel against a lying or unreachable daemon (stub harness)', () => {
       expect(result.code).toBe(1);
       expect(result.stdout).toContain('count unknown');
       expect(result.stderr).toContain('Revocation incomplete: "mallory" is still listed');
+    } finally {
+      stub.stop(true);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test('DELETE succeeds but /agents errors → "could not verify", exit 1 (never a silent success)', async () => {
+    // Regression pin: a revoke whose verification read fails must NOT report
+    // clean success — the whole point of the re-read is proving the deletion.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-tunnel-noverify-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    const stub = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === 'DELETE' && url.pathname.startsWith('/token/')) {
+          return Response.json({ revoked: 'mallory', tokens_deleted: 1 });
+        }
+        if (url.pathname === '/agents') {
+          return new Response('boom', { status: 500 });
+        }
+        return Response.json({ status: 'healthy' });
+      },
+    });
+    try {
+      writeStateFile(stateFile, process.pid, stub.port);
+      const result = await runCli(['tunnel', 'revoke', 'mallory'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Revoked, but could not verify against the agent list.');
+    } finally {
+      stub.stop(true);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test('DELETE returns 500 → "Revoke failed" with the body error, exit 1', async () => {
+    // Regression pin: a non-404 HTTP failure must surface the daemon's error,
+    // not fall through to a success print.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-tunnel-500-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    const stub = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === 'DELETE' && url.pathname.startsWith('/token/')) {
+          return Response.json({ error: 'registry exploded' }, { status: 500 });
+        }
+        return Response.json({ status: 'healthy' });
+      },
+    });
+    try {
+      writeStateFile(stateFile, process.pid, stub.port);
+      const result = await runCli(['tunnel', 'revoke', 'mallory'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Revoke failed: registry exploded');
+    } finally {
+      stub.stop(true);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test('tunnel agents with a broken /agents → "Could not read the agent list", exit 1', async () => {
+    // Regression pin: a 500 from /agents must not render as "No paired
+    // agents." — an unreadable list is not an empty list.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-tunnel-agents500-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    const stub = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === '/agents') {
+          return new Response('boom', { status: 500 });
+        }
+        return Response.json({ status: 'healthy' });
+      },
+    });
+    try {
+      writeStateFile(stateFile, process.pid, stub.port);
+      const result = await runCli(['tunnel', 'agents'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Could not read the agent list');
+      expect(result.stdout).not.toContain('No paired agents.');
     } finally {
       stub.stop(true);
       fs.rmSync(tmpDir, { recursive: true, force: true });

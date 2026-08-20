@@ -1225,6 +1225,12 @@ async function tunnelAgents(): Promise<number> {
  * opposite of the user's intent. And `control` never rides in via --restrict:
  * browser-wide destructive ops stay behind the explicit --control flag. */
 function validatePairAgentFlags(args: string[]): void {
+  // hasFlag/parseFlag are exact-token matches, so `--restrict=read` would
+  // sail past every check below and silently grant FULL access.
+  if (args.some(a => a.startsWith('--restrict='))) {
+    console.error('[browse] --restrict takes a space-separated value: --restrict read or --restrict "read,write". The --restrict=... form is not supported.');
+    process.exit(1);
+  }
   if (!hasFlag(args, '--restrict')) return;
   const restrict = parseFlag(args, '--restrict');
   if (!restrict || !restrict.trim() || restrict.startsWith('--')) {
@@ -1244,8 +1250,10 @@ function validatePairAgentFlags(args: string[]): void {
 
 async function handleTunnel(args: string[]): Promise<never> {
   const sub = args[0];
-  if (sub === 'revoke' && args.length === 2 && args[1].trim()) {
-    process.exit(await tunnelRevoke(args[1].trim()));
+  // The name passes through VERBATIM: clientIds are stored untrimmed, so a
+  // space-padded name must stay revocable (encodeURIComponent handles it).
+  if (sub === 'revoke' && args.length === 2 && args[1]) {
+    process.exit(await tunnelRevoke(args[1]));
   }
   if (sub === 'agents' && args.length === 1) {
     process.exit(await tunnelAgents());

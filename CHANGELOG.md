@@ -42,7 +42,7 @@ Revoke means revoked: one command deletes the session and every setup key, print
 - `DELETE /token/:id` decodes percent-encoded client ids, so names with spaces round-trip from the CLI.
 
 ### For contributors
-- 40+ new test cases: revoke-all regression shapes, a subprocess CLI harness with stub daemons pinning the version-skew net ("Revocation incomplete" on a lying daemon), e2e scope-contract pins, and source tripwires for `DEFAULT_PAIR_SCOPES` and the decode path.
+- 35 new test cases: revoke-all regression shapes, a subprocess CLI harness with stub daemons pinning the version-skew net ("Revocation incomplete" on a lying daemon) and every CLI error branch, e2e scope-contract and 403-hint pins, and code-shape tripwires for `DEFAULT_PAIR_SCOPES` and the decode path.
 
 ## [1.68.1.0] - 2026-08-18
 
