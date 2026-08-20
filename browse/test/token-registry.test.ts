@@ -298,12 +298,52 @@ describe('token-registry', () => {
   describe('revokeToken', () => {
     it('revokes existing token', () => {
       const info = createToken({ clientId: 'to-revoke' });
-      expect(revokeToken('to-revoke')).toBe(true);
+      // revokeToken returns the delete count, not a boolean (truthy for callers)
+      expect(revokeToken('to-revoke')).toBe(1);
       expect(validateToken(info.token)).toBeNull();
     });
 
-    it('returns false for non-existent client', () => {
-      expect(revokeToken('no-such-client')).toBe(false);
+    it('returns 0 for non-existent client', () => {
+      expect(revokeToken('no-such-client')).toBe(0);
+    });
+
+    // Regression: revokeToken deleted only the FIRST matching Map entry. The
+    // spent setup key (kept for idempotent re-exchange) is inserted before the
+    // session token, so it shadowed the session: revoke reported success while
+    // the live session survived and DELETE /token returned a false 200.
+    it('revokes the session even when a spent setup key precedes it (shape a)', () => {
+      const setup = createSetupKey({ clientId: 'shadowed' });
+      const session = exchangeSetupKey(setup.token)!;
+      expect(revokeToken('shadowed')).toBe(2);
+      expect(validateToken(session.token)).toBeNull();
+      expect(exchangeSetupKey(setup.token)).toBeNull();
+    });
+
+    // Regression: an UNSPENT setup key created after the session survived the
+    // old first-match revoke, so a "revoked" agent could POST /connect and
+    // mint a brand-new session within the key's 5-minute validity window.
+    it('closes the re-grant hole: unspent setup key dies with the revoke (shape b)', () => {
+      const first = createSetupKey({ clientId: 'regrant' });
+      exchangeSetupKey(first.token);
+      const second = createSetupKey({ clientId: 'regrant' });
+      expect(revokeToken('regrant')).toBe(3);
+      expect(exchangeSetupKey(second.token)).toBeNull();
+      expect(listTokens().filter(t => t.clientId === 'regrant')).toHaveLength(0);
+    });
+
+    it('revokes multiple pending setup keys for one clientId in a single call (shape c)', () => {
+      const keys = [1, 2, 3].map(() => createSetupKey({ clientId: 'multi' }));
+      expect(revokeToken('multi')).toBe(3);
+      for (const k of keys) expect(exchangeSetupKey(k.token)).toBeNull();
+      expect(revokeToken('multi')).toBe(0); // idempotent: second call finds nothing
+    });
+
+    it('does not touch other clients\' tokens', () => {
+      const bystander = createToken({ clientId: 'bystander' });
+      createSetupKey({ clientId: 'target' });
+      createToken({ clientId: 'target' });
+      expect(revokeToken('target')).toBe(2);
+      expect(validateToken(bystander.token)).not.toBeNull();
     });
   });
 

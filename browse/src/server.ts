@@ -2337,8 +2337,8 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             status: 404, headers: { 'Content-Type': 'application/json' },
           });
         }
-        console.log(`[browse] Revoked token for: ${clientId}`);
-        return new Response(JSON.stringify({ revoked: clientId }), {
+        console.log(`[browse] Revoked ${revoked} token(s) for: ${clientId}`);
+        return new Response(JSON.stringify({ revoked: clientId, tokens_deleted: revoked }), {
           status: 200, headers: { 'Content-Type': 'application/json' },
         });
       }

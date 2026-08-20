@@ -417,17 +417,23 @@ export function recordCommand(token: string): void {
 }
 
 /**
- * Revoke a token by client ID. Returns true if found and revoked.
+ * Revoke ALL tokens for a client ID — the session token and every setup key,
+ * spent or unspent. Deleting only the first match left two holes: a spent
+ * setup key (kept for idempotent re-exchange) shadowed the session token, so
+ * revoke reported success while the live session survived; and an unspent
+ * setup key surviving revoke let a "revoked" agent POST /connect into a
+ * fresh session. Returns the number of tokens deleted (0 = nothing found).
  */
-export function revokeToken(clientId: string): boolean {
+export function revokeToken(clientId: string): number {
+  let deleted = 0;
   for (const [token, info] of tokens) {
     if (info.clientId === clientId) {
-      tokens.delete(token);
-      rateBuckets.delete(clientId);
-      return true;
+      tokens.delete(token); // Map tolerates delete during for...of iteration
+      deleted++;
     }
   }
-  return false;
+  if (deleted > 0) rateBuckets.delete(clientId);
+  return deleted;
 }
 
 /**
