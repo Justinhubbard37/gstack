@@ -33,7 +33,7 @@ import {
   listTokens, recordCommand,
   isRootToken, checkConnectRateLimit, type TokenInfo, type ScopeCategory,
   DEFAULT_PAIR_SCOPES, InvalidScopeError, ReservedClientIdError, assertValidClientId,
-  revokeSetupKeys, getClientSession, grantReducesAccess,
+  assertValidTokenOptions, revokeSetupKeys, getClientSession, grantReducesAccess,
 } from './token-registry';
 import { validateTempPath } from './path-security';
 import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks, isPairAgentEnabled } from './config';
@@ -2431,6 +2431,12 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             rateLimit: pairBody.rateLimit ?? 10,
             tabPolicy: 'own-only' as const,
           };
+          // Validate BEFORE any revoke (createSetupKey validates too, but that
+          // runs after the teardown below). A bad scope or negative rateLimit
+          // must 400 without knocking a live session offline — otherwise a
+          // reducing re-pair with a typo (--restrict red) destroys the session
+          // and mints no replacement.
+          assertValidTokenOptions(grant.scopes, grant.rateLimit);
           const priorSession = pairBody.clientId ? getClientSession(pairBody.clientId) : null;
           let superseded: { tokens_deleted: number; tabs_released: number } | undefined;
           if (priorSession && grantReducesAccess(priorSession, grant)) {
@@ -2440,6 +2446,12 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             console.log(`[browse] Superseded ${tokensDeleted} token(s), released ${tabsReleased} tab(s) for reducing re-pair: ${pairBody.clientId}`);
           } else if (pairBody.clientId) {
             revokeSetupKeys(pairBody.clientId);
+            // No live session, but tab ownership outlives token expiry: free any
+            // tabs orphaned by an expired session so this re-pair can't inherit
+            // an earlier incarnation's authenticated pages (mirrors DELETE
+            // /token's unconditional release). A live-session broaden keeps its
+            // tabs — the working agent still owns them.
+            if (!priorSession) browserManager.releaseClientTabs(pairBody.clientId);
           }
           const setupKey = createSetupKey({
             clientId: pairBody.clientId,

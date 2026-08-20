@@ -106,7 +106,7 @@ export const DEFAULT_PAIR_SCOPES: readonly ScopeCategory[] = ['read', 'write', '
  */
 export class InvalidScopeError extends Error {}
 
-function assertValidTokenOptions(scopes: readonly string[], rateLimit: number): void {
+export function assertValidTokenOptions(scopes: readonly string[], rateLimit: number): void {
   const validScopes: ScopeCategory[] = ['read', 'write', 'admin', 'meta', 'control'];
   for (const s of scopes) {
     if (!validScopes.includes(s as ScopeCategory)) {

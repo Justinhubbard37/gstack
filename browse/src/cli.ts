@@ -1229,7 +1229,7 @@ function validatePairAgentFlags(args: string[]): void {
   // naming an agent that way would silently un-sandbox it. Reject client-side
   // before hitting the daemon (the server rejects it too).
   const client = parseFlag(args, '--client');
-  if (client !== undefined && client.trim().toLowerCase() === 'root') {
+  if (client && client.trim().toLowerCase() === 'root') {
     console.error("[browse] --client 'root' is reserved — it would bypass all scope enforcement. Choose another name.");
     process.exit(1);
   }

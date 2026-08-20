@@ -373,6 +373,24 @@ describe('pair-agent flow end-to-end (HTTP only, no ngrok)', () => {
     expect((await statusWith(s)).status).not.toBe(401);                    // still working
   });
 
+  test('a reducing re-pair with an INVALID scope 400s and leaves the live session intact', async () => {
+    // Regression: the supersede revoke must run AFTER validation. A scope typo
+    // (--restrict red) on a narrowing re-pair must not destroy the session and
+    // then fail to mint a replacement — the agent would be knocked offline.
+    const { setup_key: k } = await pairAs({ clientId: 'validate-me' });
+    const { body: c } = await connectKey(k);
+    const s = c.token as string;
+    expect((await statusWith(s)).status).not.toBe(401);
+    const resp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'validate-me', scopes: ['red'] }),
+    });
+    expect(resp.status).toBe(400);
+    expect((await resp.json() as any).error).toContain('red');
+    // The working session survives the validation error (not revoked).
+    expect((await statusWith(s)).status).not.toBe(401);
+  });
+
   // ─── D3: DELETE /token releases tabs unconditionally; 404 only when empty ─
 
   test('DELETE /token returns tabs_released and 404 only when nothing to revoke or release', async () => {

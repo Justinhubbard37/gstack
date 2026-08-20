@@ -155,6 +155,21 @@ describe('pair-agent scope-flag validation (pre-server)', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 30_000);
+
+  test('--client root → exit 1 reserved-name error, NO daemon spawned', async () => {
+    // `root` is the sentinel that bypasses every scope/domain/rate/tab check;
+    // the CLI must reject it pre-server (the daemon also 400s it as defense-in-depth).
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-client-root-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    try {
+      const result = await runCli(['pair-agent', '--client', 'root'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('reserved');
+      expect(fs.existsSync(stateFile)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('tunnel against no daemon (#2254 — never boot one)', () => {
