@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.68.2.0] - 2026-08-20
+
+**Revoking a paired agent now revokes everything it holds, and the**
+**documented kill switch is real: tunnel revoke deletes, then proves it.**
+
+Revoking a remote agent was broken twice over. `revokeToken` deleted only the first token matching the agent's name, and the spent setup key kept for connection retries always sat first in line. So `DELETE /token/<agent>` returned 200 while the live session kept working, a leftover unspent setup key could mint a brand-new session for a "revoked" agent (inside the key's 5-minute validity), and a second DELETE returned 200 again. Meanwhile the documented way out, `$B tunnel revoke`, did not exist: the CLI forwarded it to the daemon as an unknown command. The pairing docs also promised a read+write sandbox three releases after pairing deliberately switched to full page access.
+
+### The numbers that matter
+
+Source: the before/after curl transcript in the PR (a `BROWSE_HEADLESS_SKIP=1` daemon on each branch) and the regression tests in `browse/test/token-registry.test.ts` and `browse/test/tunnel-revoke-cli.test.ts`, which fail on the previous release.
+
+| Metric | Before | After |
+|--------|--------|-------|
+| DELETE /token with a pending setup key | 200, session survives | 200, all 3 tokens deleted |
+| Revoked agent re-connects via leftover key | new session minted | 401 |
+| `$B tunnel revoke <name>` | Unknown command 'tunnel' | revokes, then verifies against /agents |
+| Second DELETE for the same agent | 200 again | 404 |
+| Bare `--restrict` (forgotten value) | silent FULL access | hard error, exit 1 |
+| Docs on default pairing scopes | "read+write, no JS" | read+write+admin+meta, stated plainly |
+
+### What this means for you
+
+Revoke means revoked: one command deletes the session and every setup key, prints the count, and re-reads the agent list to prove the agent is gone. `$B tunnel agents` shows everyone paired, pending setup keys included. The pairing docs now tell the truth about default access, when to reach for `--restrict` (agents reading untrusted pages), and that `$B stop` clears every token at once. Scope typos fail at `/pair` naming the bad scope instead of surfacing to the remote agent as a body error, and a scopes list can no longer smuggle in the `control` scope.
+
+### Itemized changes
+
+### Added
+- `tunnel revoke <name>` and `tunnel agents` CLI subcommands: pre-server (never boot a daemon to revoke against it), post-revoke verification re-read, truthful exit codes for unknown names, unreachable daemons, and old daemons that claim success while the agent stays listed.
+- `GET /agents` lists pending (unexchanged) setup keys, marked `pending`; setup-key tokens never leave the server. `DELETE /token` responses carry `tokens_deleted` and the daemon logs the count.
+
+### Changed
+- The CLI always sends an explicit scopes list; both CLI and server reference one exported `DEFAULT_PAIR_SCOPES` constant, pinned by a source tripwire so the defaults cannot drift apart again.
+- The scope-denied 403 hint recommends re-pairing without `--restrict` or with `--control`; it no longer suggests `--admin`, which over-granted browser control.
+- pair-agent/SKILL.md, REMOTE_BROWSER_ACCESS.md, and ARCHITECTURE.md document the real default, `--restrict`, and the tunnel allowlist nuance (`eval` works remotely; `js`/`cookies`/`storage` are local-only). The never-implemented `tunnel rotate` is replaced by `$B stop`, and the phantom `/sidebar-chat` tunnel entries are gone.
+
+### Fixed
+- `revokeToken` deletes ALL tokens for a client id: the session plus spent and pending setup keys. Closes the false-200 revoke and the re-grant hole.
+- Bare `--restrict` (or `--restrict` swallowing the next flag) errors out instead of silently granting full access; `--restrict` can never grant `control`.
+- Scope and rateLimit typos are rejected at `/pair` and `/token` with the field named; `rateLimit: 0` (unlimited) survives the /pair path.
+- `DELETE /token/:id` decodes percent-encoded client ids, so names with spaces round-trip from the CLI.
+
+### For contributors
+- 40+ new test cases: revoke-all regression shapes, a subprocess CLI harness with stub daemons pinning the version-skew net ("Revocation incomplete" on a lying daemon), e2e scope-contract pins, and source tripwires for `DEFAULT_PAIR_SCOPES` and the decode path.
+
 ## [1.68.1.0] - 2026-08-18
 
 **Phantom hook errors are dead. Your settings.json now heals itself**
