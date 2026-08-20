@@ -92,7 +92,7 @@ When a user runs `pair-agent --client`, the daemon starts an ngrok tunnel so a r
 The fix is **two HTTP listeners**, not one:
 
 - **Local listener** (`127.0.0.1:LOCAL_PORT`) — always bound. Serves token bootstrap (`POST /extension-token`, released only to the pinned extension identity), `/health` (liveness/status only — never a token), `/cookie-picker`, `/inspector/*`, `/welcome`, `/refs`, the sidebar-agent API, and the full command surface. Never forwarded.
-- **Tunnel listener** (`127.0.0.1:TUNNEL_PORT`) — bound lazily on `/tunnel/start`, torn down on `/tunnel/stop`. Serves a locked allowlist: `/connect` (pairing ceremony, unauth + rate-limited), `/command` (scoped tokens only, further restricted to a browser-driving command allowlist), and `/sidebar-chat`. Everything else 404s.
+- **Tunnel listener** (`127.0.0.1:TUNNEL_PORT`) — bound lazily on `/tunnel/start`, torn down on `/tunnel/stop`. Serves a locked allowlist: `/connect` (pairing ceremony, unauth + rate-limited) and `/command` (scoped tokens only, further restricted to a browser-driving command allowlist). Everything else 404s.
 
 ngrok forwards only the tunnel port. The security property comes from **physical port separation**: a tunnel caller cannot reach `/health` or `/cookie-picker` because those paths don't exist on that TCP socket. Header inference (check `x-forwarded-for`, check origin) is unreliable (ngrok header behavior changes; local proxies can add these headers); socket separation isn't.
 
@@ -103,7 +103,6 @@ ngrok forwards only the tunnel port. The security property comes from **physical
 | `GET /connect` | public (`{alive:true}`) | public (`{alive:true}`) | Probe path for tunnel liveness |
 | `POST /connect` | public (rate-limited 300/min) | public (rate-limited) | Setup-key exchange for pair-agent |
 | `POST /command` | auth (Bearer root OR scoped) | auth (scoped only, allowlisted commands) | Root token on tunnel = 403 |
-| `POST /sidebar-chat` | auth | auth | Lets remote agent post into local sidebar |
 | `POST /pair` | root-only | 404 | Pairing mint — local operator action |
 | `POST /tunnel/{start,stop}` | root-only | 404 | Daemon configuration |
 | `POST /token`, `DELETE /token/:id` | root-only | 404 | Scoped token mint/revoke |
