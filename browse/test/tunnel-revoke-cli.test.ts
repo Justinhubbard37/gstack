@@ -97,6 +97,50 @@ describe('tunnel subcommand parsing', () => {
   }, 60_000);
 });
 
+// pair-agent scope-flag misuse shares this file's subprocess harness: like
+// tunnel, the validation must run pre-server, so "no daemon spawned" is the
+// load-bearing assertion.
+describe('pair-agent scope-flag validation (pre-server)', () => {
+  test('bare --restrict → exit 1 usage error, NO daemon spawned (was: silent FULL grant)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-restrict-bare-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    try {
+      const result = await runCli(['pair-agent', '--restrict'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('--restrict needs a scope list');
+      expect(fs.existsSync(stateFile)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test('--restrict swallowing the next flag → exit 1, NO daemon spawned', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-restrict-flag-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    try {
+      const result = await runCli(['pair-agent', '--restrict', '--client', 'bob'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('--restrict needs a scope list');
+      expect(fs.existsSync(stateFile)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test('--restrict "read,control" → exit 1 pointing at --control, NO daemon spawned', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-restrict-ctl-'));
+    const stateFile = path.join(tmpDir, 'browse.json');
+    try {
+      const result = await runCli(['pair-agent', '--restrict', 'read,control'], baseEnv(stateFile));
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Re-run with --control');
+      expect(fs.existsSync(stateFile)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe('tunnel against no daemon (#2254 — never boot one)', () => {
   test('revoke → exit 0, "No daemon running", nothing spawned', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-tunnel-dead-'));

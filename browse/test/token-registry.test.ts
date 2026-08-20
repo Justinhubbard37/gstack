@@ -6,6 +6,7 @@ import {
   revokeToken, rotateRoot, listTokens, recordCommand,
   serializeRegistry, restoreRegistry, checkConnectRateLimit,
   SCOPE_READ, SCOPE_WRITE, SCOPE_ADMIN, SCOPE_CONTROL, SCOPE_META,
+  DEFAULT_PAIR_SCOPES, InvalidScopeError,
   __resetRegistry,
 } from '../src/token-registry';
 
@@ -344,6 +345,35 @@ describe('token-registry', () => {
       createToken({ clientId: 'target' });
       expect(revokeToken('target')).toBe(2);
       expect(validateToken(bystander.token)).not.toBeNull();
+    });
+  });
+
+  describe('pair defaults and option validation', () => {
+    it('DEFAULT_PAIR_SCOPES is exactly read,write,admin,meta (b73f3644: the ceremony is the trust boundary)', () => {
+      expect([...DEFAULT_PAIR_SCOPES]).toEqual(['read', 'write', 'admin', 'meta']);
+    });
+
+    // Regression: only createToken validated options, so a scope typo minted
+    // a poisoned setup key at /pair and surfaced to the REMOTE agent at
+    // /connect as a misleading "Invalid request body".
+    it('createSetupKey rejects an unknown scope with InvalidScopeError naming it', () => {
+      expect(() => createSetupKey({ scopes: ['raed' as never] }))
+        .toThrow(InvalidScopeError);
+      expect(() => createSetupKey({ scopes: ['raed' as never] }))
+        .toThrow('Invalid scope: raed');
+    });
+
+    it('createSetupKey rejects a negative rateLimit', () => {
+      expect(() => createSetupKey({ rateLimit: -5 })).toThrow(InvalidScopeError);
+    });
+
+    // Regression: `opts.rateLimit || 10` coerced the documented "0 = unlimited"
+    // into 10 on the /pair path while /token honored it.
+    it('createSetupKey preserves rateLimit 0 (unlimited)', () => {
+      const setup = createSetupKey({ rateLimit: 0 });
+      expect(setup.rateLimit).toBe(0);
+      const session = exchangeSetupKey(setup.token)!;
+      expect(session.rateLimit).toBe(0);
     });
   });
 

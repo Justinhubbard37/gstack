@@ -194,6 +194,76 @@ describe('pair-agent flow end-to-end (HTTP only, no ngrok)', () => {
     expect(Array.isArray(scopes)).toBe(true);
   });
 
+  // ─── Pair scope contract: defaults, explicit lists, typo naming ───────
+
+  test('default /connect scopes are exactly read,write,admin,meta', async () => {
+    const pairResp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'default-scopes' }),
+    });
+    const { setup_key, scopes: pairScopes } = await pairResp.json() as any;
+    expect(pairScopes).toEqual(['read', 'write', 'admin', 'meta']);
+    const connectResp = await fetch(`${daemon.baseUrl}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setup_key }),
+    });
+    const { scopes } = await connectResp.json() as any;
+    expect(scopes).toEqual(['read', 'write', 'admin', 'meta']);
+  });
+
+  test('explicit scopes are honored end-to-end (the --restrict wire contract)', async () => {
+    const pairResp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'restricted-scopes', scopes: ['read'] }),
+    });
+    const { setup_key } = await pairResp.json() as any;
+    const connectResp = await fetch(`${daemon.baseUrl}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setup_key }),
+    });
+    const { scopes } = await connectResp.json() as any;
+    expect(scopes).toEqual(['read']);
+  });
+
+  test('POST /pair with a scope typo fails fast, naming the scope', async () => {
+    // Regression: pre-fix this returned 200 with a poisoned setup key whose
+    // failure surfaced at /connect as a misleading "Invalid request body".
+    const resp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'typo-agent', scopes: ['raed'] }),
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as any;
+    expect(body.error).toContain('Invalid scope: raed');
+  });
+
+  test('POST /token with a scope typo names the scope too', async () => {
+    const resp = await fetch(`${daemon.baseUrl}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'typo-token', scopes: ['wirte'] }),
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as any;
+    expect(body.error).toContain('Invalid scope: wirte');
+  });
+
+  test('control cannot ride in through a /pair scopes list without the control flag', async () => {
+    const resp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'sneaky', scopes: ['read', 'control'] }),
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as any;
+    expect(body.error).toContain('control');
+  });
+
   // ─── Revocation e2e: revoke-all + the /agents verification surface ────
 
   test('DELETE /token revokes session AND setup keys; agent leaves /agents; token 401s; re-connect fails', async () => {

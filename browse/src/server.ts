@@ -31,7 +31,8 @@ import {
   initRegistry, validateToken as validateScopedToken, checkScope, checkDomain,
   checkRate, createToken, createSetupKey, exchangeSetupKey, revokeToken,
   listTokens, recordCommand,
-  isRootToken, checkConnectRateLimit, type TokenInfo,
+  isRootToken, checkConnectRateLimit, type TokenInfo, type ScopeCategory,
+  DEFAULT_PAIR_SCOPES, InvalidScopeError,
 } from './token-registry';
 import { validateTempPath } from './path-security';
 import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks, isPairAgentEnabled } from './config';
@@ -2316,7 +2317,14 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             scopes: session.scopes,
             agent: session.clientId,
           }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-        } catch {
+        } catch (err) {
+          // Name the caller's typo (bad scope, negative rateLimit) instead of
+          // hiding it behind the generic body error.
+          if (err instanceof InvalidScopeError) {
+            return new Response(JSON.stringify({ error: err.message }), {
+              status: 400, headers: { 'Content-Type': 'application/json' },
+            });
+          }
           return new Response(JSON.stringify({ error: 'Invalid request body' }), {
             status: 400, headers: { 'Content-Type': 'application/json' },
           });
@@ -2384,12 +2392,20 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
         }
         try {
           const pairBody = await req.json() as any;
-          // Default: full access (read+write+admin+meta). The trust boundary is
-          // the pairing ceremony itself, not the scope. --control adds browser-wide
-          // destructive commands (stop, restart, disconnect). --restrict limits scope.
+          // Default: DEFAULT_PAIR_SCOPES (full page access). The trust boundary
+          // is the pairing ceremony itself, not the scope. --control adds
+          // browser-wide destructive commands (stop, restart, disconnect).
+          // --restrict limits scope — but can never grant control: that scope
+          // stays behind the explicit control flag.
+          if (!pairBody.control && !pairBody.admin
+              && Array.isArray(pairBody.scopes) && pairBody.scopes.includes('control')) {
+            return new Response(JSON.stringify({
+              error: 'The control scope requires the control flag (--control); it cannot be granted via a scopes list.',
+            }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+          }
           const scopes = pairBody.control || pairBody.admin
-            ? ['read', 'write', 'admin', 'meta', 'control'] as const
-            : (pairBody.scopes || ['read', 'write', 'admin', 'meta']) as const;
+            ? [...DEFAULT_PAIR_SCOPES, 'control' as const]
+            : ((pairBody.scopes || [...DEFAULT_PAIR_SCOPES]) as ScopeCategory[]);
           const setupKey = createSetupKey({
             clientId: pairBody.clientId,
             scopes: [...scopes],
@@ -2425,7 +2441,14 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             tunnel_url: verifiedTunnelUrl,
             server_url: `http://127.0.0.1:${browsePort}`,
           }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-        } catch {
+        } catch (err) {
+          // Name the caller's typo (bad scope, negative rateLimit) instead of
+          // hiding it behind the generic body error.
+          if (err instanceof InvalidScopeError) {
+            return new Response(JSON.stringify({ error: err.message }), {
+              status: 400, headers: { 'Content-Type': 'application/json' },
+            });
+          }
           return new Response(JSON.stringify({ error: 'Invalid request body' }), {
             status: 400, headers: { 'Content-Type': 'application/json' },
           });

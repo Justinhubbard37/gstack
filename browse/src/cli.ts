@@ -18,6 +18,9 @@ import { resolveConfig, ensureStateDir, readVersionHash, isPairAgentEnabled } fr
 import { parseProxyConfig, computeConfigHash, ProxyConfigError } from './proxy-config';
 import { redactProxyUrl } from './proxy-redact';
 import { spawnTerminalAgent } from './terminal-agent-control';
+// Zero side effects on import (documented invariant in token-registry.ts) —
+// safe to pull the shared pairing default into the CLI.
+import { DEFAULT_PAIR_SCOPES } from './token-registry';
 
 const config = resolveConfig();
 const IS_WINDOWS = process.platform === 'win32';
@@ -1216,6 +1219,29 @@ async function tunnelAgents(): Promise<number> {
   return 0;
 }
 
+/** Reject pair-agent scope-flag misuse BEFORE any consent or server work.
+ * Bare `--restrict` (or a flag-shaped value from a forgotten argument) used
+ * to parse as "no restriction" and silently grant FULL access — the exact
+ * opposite of the user's intent. And `control` never rides in via --restrict:
+ * browser-wide destructive ops stay behind the explicit --control flag. */
+function validatePairAgentFlags(args: string[]): void {
+  if (!hasFlag(args, '--restrict')) return;
+  const restrict = parseFlag(args, '--restrict');
+  if (!restrict || !restrict.trim() || restrict.startsWith('--')) {
+    console.error('[browse] --restrict needs a scope list, e.g. --restrict read or --restrict "read,write". Bare --restrict would silently grant FULL access.');
+    process.exit(1);
+  }
+  if (hasFlag(args, '--control') || hasFlag(args, '--admin')) {
+    // Server-side, the control flag wins and the scopes list is ignored.
+    console.warn('[browse] --restrict is ignored when --control/--admin is set (control implies full access).');
+    return;
+  }
+  if (restrict.split(',').map(s => s.trim()).includes('control')) {
+    console.error('[browse] The control scope is not granted via --restrict. Re-run with --control.');
+    process.exit(1);
+  }
+}
+
 async function handleTunnel(args: string[]): Promise<never> {
   const sub = args[0];
   if (sub === 'revoke' && args.length === 2 && args[1].trim()) {
@@ -1236,8 +1262,12 @@ async function handlePairAgent(state: ServerState, args: string[]): Promise<void
   const localHost = parseFlag(args, '--local');
 
   // Call POST /pair to create a setup key
-  // Default: full access (read+write+admin+meta). --control adds browser-wide ops.
+  // Default: DEFAULT_PAIR_SCOPES (full page access). --control adds browser-wide ops.
   // --restrict limits: --restrict read (read-only), --restrict "read,write" (no admin)
+  // Scopes are ALWAYS sent explicitly so the effective default lives in one
+  // place (token-registry) instead of drifting between CLI omission and
+  // server fallback. Flag misuse was rejected pre-server by
+  // validatePairAgentFlags.
   const pairResp = await fetch(`http://127.0.0.1:${state.port}/pair`, {
     method: 'POST',
     headers: {
@@ -1248,7 +1278,9 @@ async function handlePairAgent(state: ServerState, args: string[]): Promise<void
       domains,
       clientId: clientName,
       control,
-      ...(restrict ? { scopes: restrict.split(',').map(s => s.trim()) } : {}),
+      scopes: restrict
+        ? restrict.split(',').map(s => s.trim())
+        : [...DEFAULT_PAIR_SCOPES],
     }),
     signal: AbortSignal.timeout(5000),
   });
@@ -1791,6 +1823,9 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
   // state, so replacing it kills nothing the user had.
   let pairAgentPreexistingDaemonAlive = false;
   if (command === 'pair-agent') {
+    // Scope-flag misuse is rejected before consent gates and ensureServer —
+    // an arg error must never boot a daemon.
+    validatePairAgentFlags(commandArgs);
     const preState = readState();
     pairAgentPreexistingDaemonAlive = Boolean(preState?.pid && isProcessAlive(preState.pid));
   }

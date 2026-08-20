@@ -82,6 +82,35 @@ const SCOPE_MAP: Record<ScopeCategory, Set<string>> = {
   meta: SCOPE_META,
 };
 
+/**
+ * Scopes granted by POST /pair when nothing narrower is requested.
+ * Deliberately full page access (b73f3644 / #907): the trust boundary is the
+ * pairing ceremony, not the scope. 'control' (browser-wide destructive ops)
+ * is the only scope that stays opt-in via the control flag. Referenced by
+ * BOTH server.ts (/pair default) and cli.ts (explicit send) so the two
+ * defaults cannot silently drift apart again.
+ */
+export const DEFAULT_PAIR_SCOPES: readonly ScopeCategory[] = ['read', 'write', 'admin', 'meta'];
+
+/**
+ * Typed error for caller-supplied token options (unknown scope, negative
+ * rateLimit). HTTP handlers catch it to 400 with the message at the endpoint
+ * where the typo happened — pre-fix, a bad scope sailed through /pair into a
+ * poisoned setup key and surfaced as a misleading "Invalid request body" to
+ * the remote agent at /connect.
+ */
+export class InvalidScopeError extends Error {}
+
+function assertValidTokenOptions(scopes: readonly string[], rateLimit: number): void {
+  const validScopes: ScopeCategory[] = ['read', 'write', 'admin', 'meta', 'control'];
+  for (const s of scopes) {
+    if (!validScopes.includes(s as ScopeCategory)) {
+      throw new InvalidScopeError(`Invalid scope: ${s}. Valid: ${validScopes.join(', ')}`);
+    }
+  }
+  if (rateLimit < 0) throw new InvalidScopeError('rateLimit must be >= 0');
+}
+
 // ─── Types ──────────────────────────────────────────────────────
 
 export interface TokenInfo {
@@ -200,13 +229,7 @@ export function createToken(opts: CreateTokenOptions): TokenInfo {
   } = opts;
 
   // Validate inputs
-  const validScopes: ScopeCategory[] = ['read', 'write', 'admin', 'meta', 'control'];
-  for (const s of scopes) {
-    if (!validScopes.includes(s as ScopeCategory)) {
-      throw new Error(`Invalid scope: ${s}. Valid: ${validScopes.join(', ')}`);
-    }
-  }
-  if (rateLimit < 0) throw new Error('rateLimit must be >= 0');
+  assertValidTokenOptions(scopes, rateLimit);
   if (expiresSeconds !== null && expiresSeconds !== undefined && expiresSeconds < 0) {
     throw new Error('expiresSeconds must be >= 0 or null');
   }
@@ -248,6 +271,13 @@ export function createToken(opts: CreateTokenOptions): TokenInfo {
  * Setup keys expire in 5 minutes and can only be exchanged once.
  */
 export function createSetupKey(opts: Omit<CreateTokenOptions, 'clientId'> & { clientId?: string }): TokenInfo {
+  const scopes = opts.scopes || ['read', 'write'];
+  // ?? not ||: rateLimit 0 is documented as "unlimited" and must survive.
+  const rateLimit = opts.rateLimit ?? 10;
+  // Validate HERE, not only at exchange time in createToken — otherwise a
+  // typo mints a poisoned setup key whose failure surfaces to the wrong
+  // party (the remote agent, at /connect, as "Invalid request body").
+  assertValidTokenOptions(scopes, rateLimit);
   const token = generateToken('gsk_setup_');
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString(); // 5 min
@@ -256,10 +286,10 @@ export function createSetupKey(opts: Omit<CreateTokenOptions, 'clientId'> & { cl
     token,
     clientId: opts.clientId || `remote-${Date.now()}`,
     type: 'setup',
-    scopes: opts.scopes || ['read', 'write'],
+    scopes,
     domains: opts.domains,
     tabPolicy: opts.tabPolicy || 'own-only',
-    rateLimit: opts.rateLimit || 10,
+    rateLimit,
     expiresAt,
     createdAt: now.toISOString(),
     usesRemaining: 1,
