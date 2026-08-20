@@ -366,6 +366,18 @@ describe('token-registry', () => {
       createSetupKey({}); // setup keys not listed
       expect(listTokens()).toHaveLength(2);
     });
+
+    it('includeSetup lists pending setup keys but hides spent ones', () => {
+      createToken({ clientId: 'sess' });
+      createSetupKey({ clientId: 'pending' });
+      const spent = createSetupKey({ clientId: 'spent' });
+      exchangeSetupKey(spent.token);
+      expect(listTokens().map(t => t.clientId).sort()).toEqual(['sess', 'spent']);
+      const withSetup = listTokens({ includeSetup: true });
+      // Pending key = a live grant the operator must see; the SPENT key is
+      // re-exchange bookkeeping for the already-listed session and stays hidden.
+      expect(withSetup.filter(t => t.type === 'setup').map(t => t.clientId)).toEqual(['pending']);
+    });
   });
 
   describe('serialization', () => {

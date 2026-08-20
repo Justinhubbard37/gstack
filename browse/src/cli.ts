@@ -1101,6 +1101,133 @@ export function extractGlobalFlags(rawArgs: string[], env: NodeJS.ProcessEnv): G
   };
 }
 
+// ─── Tunnel token management (pre-server, #2254 pattern) ────────
+// Tokens live in daemon memory, so a dead daemon means "nothing is paired" —
+// a success state, not an error. Never boot a daemon to serve these, and
+// never mutate the state file (stale-state cleanup stays stop's job).
+
+/** Live-daemon check for tunnel subcommands. Dead pid AND failed health →
+ * null. An alive pid with an unreachable port falls through to the HTTP
+ * call, whose failure is reported truthfully (exit 1), not as "no daemon". */
+async function tunnelDaemonState(): Promise<ServerState | null> {
+  const state = readState();
+  if (!state) return null;
+  if (!isProcessAlive(state.pid) && !(await isServerHealthy(state.port))) return null;
+  return state;
+}
+
+/** Fetch active agent clientIds (sessions + pending setup keys). Returns
+ * null when the list can't be read — callers must not treat that as empty. */
+async function fetchAgentList(state: ServerState): Promise<Array<{ clientId: string; scopes: string[]; domains?: string[]; expiresAt: string | null; commandCount: number; pending?: boolean }> | null> {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${state.port}/agents`, {
+      headers: { 'Authorization': `Bearer ${state.token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) return null;
+    const body = await resp.json() as { agents?: unknown };
+    if (!Array.isArray(body.agents)) return null;
+    return body.agents as Array<{ clientId: string; scopes: string[]; domains?: string[]; expiresAt: string | null; commandCount: number; pending?: boolean }>;
+  } catch {
+    return null;
+  }
+}
+
+async function tunnelRevoke(name: string): Promise<number> {
+  const state = await tunnelDaemonState();
+  if (!state) {
+    console.log('No daemon running - tokens live in daemon memory, so nothing is paired.');
+    return 0;
+  }
+  let resp: Response;
+  try {
+    resp = await fetch(`http://127.0.0.1:${state.port}/token/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${state.token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (err) {
+    console.error(`[browse] Could not reach daemon: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+  if (resp.status === 404) {
+    console.error(`No paired agent named "${name}".`);
+    const agents = await fetchAgentList(state);
+    if (agents && agents.length) {
+      console.error(`Active agents: ${agents.map(a => a.clientId).join(', ')}`);
+    } else if (agents) {
+      console.error('No agents are currently paired.');
+    }
+    return 1;
+  }
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try {
+      const body = await resp.json() as { error?: string };
+      if (body.error) msg = body.error;
+    } catch { /* keep the status-line message */ }
+    console.error(`[browse] Revoke failed: ${msg}`);
+    return 1;
+  }
+  let deleted: number | undefined;
+  try {
+    const body = await resp.json() as { tokens_deleted?: number };
+    if (typeof body.tokens_deleted === 'number') deleted = body.tokens_deleted;
+  } catch { /* old daemons answer {revoked} only — count stays unknown */ }
+  console.log(deleted === undefined
+    ? `Revoked "${name}" (count unknown).`
+    : `Revoked "${name}" (${deleted} token${deleted === 1 ? '' : 's'}).`);
+  // Post-revoke verification: re-read the agent list to PROVE it's gone.
+  // This is also the version-skew net — an old daemon with the first-match
+  // revoke bug returns 200 while the session survives; catch it here.
+  const agents = await fetchAgentList(state);
+  if (agents === null) {
+    console.error('[browse] Revoked, but could not verify against the agent list.');
+    return 1;
+  }
+  if (agents.some(a => a.clientId === name)) {
+    console.error(`[browse] Revocation incomplete: "${name}" is still listed (old daemon or concurrent re-pair). Re-run "tunnel revoke ${name}", or run "stop" to clear every token.`);
+    return 1;
+  }
+  console.log('Verified: not in the active agent list.');
+  return 0;
+}
+
+async function tunnelAgents(): Promise<number> {
+  const state = await tunnelDaemonState();
+  if (!state) {
+    console.log('No daemon running - no paired agents.');
+    return 0;
+  }
+  const agents = await fetchAgentList(state);
+  if (agents === null) {
+    console.error('[browse] Could not read the agent list from the daemon.');
+    return 1;
+  }
+  if (agents.length === 0) {
+    console.log('No paired agents.');
+    return 0;
+  }
+  for (const a of agents) {
+    const pending = a.pending ? '  (pending setup key)' : '';
+    const domains = a.domains && a.domains.length ? a.domains.join(',') : 'any';
+    console.log(`${a.clientId}${pending}  scopes=${(a.scopes || []).join(',')}  domains=${domains}  expires=${a.expiresAt ?? 'never'}  commands=${a.commandCount ?? 0}`);
+  }
+  return 0;
+}
+
+async function handleTunnel(args: string[]): Promise<never> {
+  const sub = args[0];
+  if (sub === 'revoke' && args.length === 2 && args[1].trim()) {
+    process.exit(await tunnelRevoke(args[1].trim()));
+  }
+  if (sub === 'agents' && args.length === 1) {
+    process.exit(await tunnelAgents());
+  }
+  console.error('usage: browse tunnel <revoke <agent-name> | agents>');
+  process.exit(1);
+}
+
 async function handlePairAgent(state: ServerState, args: string[]): Promise<void> {
   const clientName = parseFlag(args, '--client') || `remote-${Date.now()}`;
   const domains = parseFlag(args, '--domain')?.split(',').map(d => d.trim());
@@ -1303,6 +1430,7 @@ Multi-step:     chain (reads JSON from stdin)
 Tabs:           tabs | tab <id> | newtab [url] | closetab [id]
 Server:         status | cookie <n>=<v> | header <n>:<v>
                 useragent <str> | stop | restart
+                tunnel revoke <name> | tunnel agents  (paired-agent tokens)
                 --force-restart: replace a live-but-busy daemon (any command;
                 LOSES tabs/cookies/logins — never done automatically)
 Dialogs:        dialog-accept [text] | dialog-dismiss
@@ -1639,6 +1767,13 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     }
     // Live daemon without --force-restart → fall through to the normal
     // sendCommand('stop') path (graceful shutdown; busy semantics apply).
+  }
+
+  // ─── Tunnel token management (pre-server short-circuit, #2254) ──
+  // Tokens live in daemon memory; a dead daemon has nothing to revoke or
+  // list, so never boot one to serve these.
+  if (command === 'tunnel') {
+    await handleTunnel(commandArgs); // always exits
   }
 
   // Special case: chain reads from stdin

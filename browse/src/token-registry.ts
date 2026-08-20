@@ -449,8 +449,12 @@ export function rotateRoot(): string {
 
 /**
  * List all active (non-expired) scoped tokens.
+ * With includeSetup, unexchanged ("pending") setup keys are listed too —
+ * they are live grants an operator must be able to see and revoke. Spent
+ * keys stay hidden: they are re-exchange bookkeeping for a session that is
+ * already listed.
  */
-export function listTokens(): TokenInfo[] {
+export function listTokens(opts?: { includeSetup?: boolean }): TokenInfo[] {
   const now = new Date();
   const result: TokenInfo[] = [];
 
@@ -460,6 +464,8 @@ export function listTokens(): TokenInfo[] {
       continue;
     }
     if (info.type === 'session') {
+      result.push(info);
+    } else if (opts?.includeSetup && info.type === 'setup' && info.usesRemaining !== 0) {
       result.push(info);
     }
   }
