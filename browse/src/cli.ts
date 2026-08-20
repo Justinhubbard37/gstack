@@ -1225,6 +1225,14 @@ async function tunnelAgents(): Promise<number> {
  * opposite of the user's intent. And `control` never rides in via --restrict:
  * browser-wide destructive ops stay behind the explicit --control flag. */
 function validatePairAgentFlags(args: string[]): void {
+  // `root` is the sentinel that bypasses all scope/domain/rate/tab enforcement;
+  // naming an agent that way would silently un-sandbox it. Reject client-side
+  // before hitting the daemon (the server rejects it too).
+  const client = parseFlag(args, '--client');
+  if (client !== undefined && client.trim().toLowerCase() === 'root') {
+    console.error("[browse] --client 'root' is reserved — it would bypass all scope enforcement. Choose another name.");
+    process.exit(1);
+  }
   // hasFlag/parseFlag are exact-token matches, so `--restrict=read` would
   // sail past every check below and silently grant FULL access.
   if (args.some(a => a.startsWith('--restrict='))) {

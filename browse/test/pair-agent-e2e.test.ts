@@ -291,6 +291,33 @@ describe('pair-agent flow end-to-end (HTTP only, no ngrok)', () => {
     expect(body.hint).not.toContain('--admin');
   });
 
+  // ─── D2: reserved clientId is rejected with a named 400 ───────────────
+
+  test('POST /pair with clientId "root" returns 400 naming the reservation', async () => {
+    const resp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'root' }),
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as any;
+    // The reservation is named, NOT hidden behind the generic "Invalid request body".
+    expect(body.error).toContain('root');
+    expect(body.error).not.toBe('Invalid request body');
+  });
+
+  test('POST /token with clientId "root" returns 400 naming the reservation', async () => {
+    const resp = await fetch(`${daemon.baseUrl}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'root' }),
+    });
+    expect(resp.status).toBe(400);
+    const body = await resp.json() as any;
+    expect(body.error).toContain('root');
+    expect(body.error).not.toBe('Invalid request body');
+  });
+
   // ─── Revocation e2e: revoke-all + the /agents verification surface ────
 
   test('DELETE /token revokes session AND setup keys; agent leaves /agents; token 401s; re-connect fails', async () => {

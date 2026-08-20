@@ -6,7 +6,7 @@ import {
   revokeToken, rotateRoot, listTokens, recordCommand,
   serializeRegistry, restoreRegistry, checkConnectRateLimit,
   SCOPE_READ, SCOPE_WRITE, SCOPE_ADMIN, SCOPE_CONTROL, SCOPE_META,
-  DEFAULT_PAIR_SCOPES, InvalidScopeError,
+  DEFAULT_PAIR_SCOPES, InvalidScopeError, ReservedClientIdError,
   __resetRegistry,
 } from '../src/token-registry';
 
@@ -17,6 +17,39 @@ describe('token-registry', () => {
     // a UUID in rootToken and the guard would throw.
     __resetRegistry();
     initRegistry('root-token-for-tests');
+  });
+
+  // D2: `root` is the sentinel checkScope/checkDomain/checkRate use for the
+  // omnipotent caller; a scoped token carrying it bypasses all enforcement.
+  describe('reserved clientId (D2)', () => {
+    it('createToken rejects clientId "root" and lookalikes', () => {
+      expect(() => createToken({ clientId: 'root' })).toThrow(ReservedClientIdError);
+      expect(() => createToken({ clientId: 'ROOT' })).toThrow(ReservedClientIdError);
+      expect(() => createToken({ clientId: '  root  ' })).toThrow(ReservedClientIdError);
+    });
+
+    it('createToken rejects empty / whitespace clientId', () => {
+      expect(() => createToken({ clientId: '' })).toThrow(ReservedClientIdError);
+      expect(() => createToken({ clientId: '   ' })).toThrow(ReservedClientIdError);
+    });
+
+    it('createSetupKey rejects clientId "root" but allows an omitted one', () => {
+      expect(() => createSetupKey({ clientId: 'root' })).toThrow(ReservedClientIdError);
+      // Omitted clientId gets a safe generated default, not a throw.
+      const key = createSetupKey({});
+      expect(key.clientId.startsWith('remote-')).toBe(true);
+    });
+
+    it('restoreRegistry skips a persisted "root" entry instead of injecting a bypass token', () => {
+      restoreRegistry({ agents: {
+        root: { token: 'gsk_sess_evil', type: 'session', scopes: ['read', 'write', 'admin', 'meta', 'control'], tabPolicy: 'shared', rateLimit: 0, expiresAt: null, createdAt: new Date().toISOString() } as any,
+        good: { token: 'gsk_sess_good', type: 'session', scopes: ['read'], tabPolicy: 'own-only', rateLimit: 10, expiresAt: null, createdAt: new Date().toISOString() } as any,
+      } });
+      // The evil root entry is dropped; the valid one still restores.
+      expect(validateToken('gsk_sess_evil')).toBeNull();
+      const good = validateToken('gsk_sess_good');
+      expect(good?.clientId).toBe('good');
+    });
   });
 
   describe('root token', () => {

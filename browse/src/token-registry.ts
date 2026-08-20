@@ -116,6 +116,26 @@ function assertValidTokenOptions(scopes: readonly string[], rateLimit: number): 
   if (rateLimit < 0) throw new InvalidScopeError('rateLimit must be >= 0');
 }
 
+/**
+ * Typed error for a reserved or malformed clientId. `root` is the sentinel that
+ * checkScope/checkDomain/checkRate and the server command gate use to mean "the
+ * omnipotent root caller" (validateToken:360), so a scoped token carrying it
+ * would bypass every enforcement path. Empty/non-string ids collapse distinct
+ * agents together and break revoke-by-clientId. Request-path writers throw;
+ * restoreRegistry skips-and-logs so one bad state-file entry can't drop later
+ * sessions or brick boot.
+ */
+export class ReservedClientIdError extends Error {}
+
+export function assertValidClientId(clientId: unknown): asserts clientId is string {
+  if (typeof clientId !== 'string' || clientId.trim() === '') {
+    throw new ReservedClientIdError('clientId must be a non-empty string');
+  }
+  if (clientId.trim().toLowerCase() === 'root') {
+    throw new ReservedClientIdError("clientId 'root' is reserved");
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────
 
 export interface TokenInfo {
@@ -234,6 +254,7 @@ export function createToken(opts: CreateTokenOptions): TokenInfo {
   } = opts;
 
   // Validate inputs
+  assertValidClientId(clientId);
   assertValidTokenOptions(scopes, rateLimit);
   if (expiresSeconds !== null && expiresSeconds !== undefined && expiresSeconds < 0) {
     throw new Error('expiresSeconds must be >= 0 or null');
@@ -276,6 +297,9 @@ export function createToken(opts: CreateTokenOptions): TokenInfo {
  * Setup keys expire in 5 minutes and can only be exchanged once.
  */
 export function createSetupKey(opts: Omit<CreateTokenOptions, 'clientId'> & { clientId?: string }): TokenInfo {
+  // Only validate when a clientId is supplied; an omitted one gets a safe
+  // generated `remote-<ts>` default below.
+  if (opts.clientId !== undefined) assertValidClientId(opts.clientId);
   const scopes = opts.scopes || ['read', 'write'];
   // ?? not ||: rateLimit 0 is documented as "unlimited" and must survive.
   const rateLimit = opts.rateLimit ?? 10;
@@ -534,6 +558,16 @@ export function restoreRegistry(state: TokenRegistryState): void {
   for (const [clientId, data] of Object.entries(state.agents)) {
     // Skip expired tokens
     if (data.expiresAt && new Date(data.expiresAt) < now) continue;
+
+    // Skip-and-log rather than throw: a hand-edited or corrupt state file must
+    // not brick boot or drop every later valid session. A persisted clientId
+    // 'root' would otherwise inject a token that bypasses all scope checks.
+    try {
+      assertValidClientId(clientId);
+    } catch (err) {
+      console.warn(`[browse] restoreRegistry: skipping invalid clientId ${JSON.stringify(clientId)}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
 
     tokens.set(data.token, {
       ...data,

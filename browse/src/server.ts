@@ -32,7 +32,7 @@ import {
   checkRate, createToken, createSetupKey, exchangeSetupKey, revokeToken,
   listTokens, recordCommand,
   isRootToken, checkConnectRateLimit, type TokenInfo, type ScopeCategory,
-  DEFAULT_PAIR_SCOPES, InvalidScopeError,
+  DEFAULT_PAIR_SCOPES, InvalidScopeError, ReservedClientIdError,
 } from './token-registry';
 import { validateTempPath } from './path-security';
 import { resolveConfig, ensureStateDir, readVersionHash, resolveChromiumProfile, cleanSingletonLocks, isPairAgentEnabled } from './config';
@@ -2318,9 +2318,9 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             agent: session.clientId,
           }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         } catch (err) {
-          // Name the caller's typo (bad scope, negative rateLimit) instead of
-          // hiding it behind the generic body error.
-          if (err instanceof InvalidScopeError) {
+          // Name the caller's typo (bad scope, negative rateLimit, reserved
+          // clientId) instead of hiding it behind the generic body error.
+          if (err instanceof InvalidScopeError || err instanceof ReservedClientIdError) {
             return new Response(JSON.stringify({ error: err.message }), {
               status: 400, headers: { 'Content-Type': 'application/json' },
             });
@@ -2442,9 +2442,9 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
             server_url: `http://127.0.0.1:${browsePort}`,
           }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         } catch (err) {
-          // Name the caller's typo (bad scope, negative rateLimit) instead of
-          // hiding it behind the generic body error.
-          if (err instanceof InvalidScopeError) {
+          // Name the caller's typo (bad scope, negative rateLimit, reserved
+          // clientId) instead of hiding it behind the generic body error.
+          if (err instanceof InvalidScopeError || err instanceof ReservedClientIdError) {
             return new Response(JSON.stringify({ error: err.message }), {
               status: 400, headers: { 'Content-Type': 'application/json' },
             });
