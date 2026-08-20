@@ -1056,6 +1056,25 @@ export class BrowserManager {
     this.tabOwnership.set(tabId, toClientId);
   }
 
+  /**
+   * Release all tab ownership held by a client (called on revoke / reducing
+   * re-pair). Deletes the ownership entries so an own-only client re-pairing
+   * under the same name can no longer inherit the revoked agent's
+   * authenticated tabs (checkTabAccess gates own-only on owner === clientId).
+   * Tabs are NOT closed — leaving the page open is the local human's call, not
+   * the daemon's; the residual is a root-only tab. Returns the released ids.
+   */
+  releaseClientTabs(clientId: string): number[] {
+    const released: number[] = [];
+    for (const [tabId, owner] of this.tabOwnership) {
+      if (owner === clientId) {
+        this.tabOwnership.delete(tabId);
+        released.push(tabId);
+      }
+    }
+    return released;
+  }
+
   async getTabListWithTitles(): Promise<Array<{ id: number; url: string; title: string; active: boolean }>> {
     const tabs: Array<{ id: number; url: string; title: string; active: boolean }> = [];
     for (const [id, page] of this.pages) {

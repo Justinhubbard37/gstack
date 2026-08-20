@@ -318,6 +318,35 @@ describe('pair-agent flow end-to-end (HTTP only, no ngrok)', () => {
     expect(body.error).not.toBe('Invalid request body');
   });
 
+  // ─── D3: DELETE /token releases tabs unconditionally; 404 only when empty ─
+
+  test('DELETE /token returns tabs_released and 404 only when nothing to revoke or release', async () => {
+    const pairResp = await fetch(`${daemon.baseUrl}/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemon.token}` },
+      body: JSON.stringify({ clientId: 'd3-agent' }),
+    });
+    const { setup_key } = await pairResp.json() as any;
+    await fetch(`${daemon.baseUrl}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setup_key }),
+    });
+    const del = await fetch(`${daemon.baseUrl}/token/d3-agent`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${daemon.token}` },
+    });
+    expect(del.status).toBe(200);
+    const body = await del.json() as any;
+    expect(body.tokens_deleted).toBeGreaterThanOrEqual(1);
+    // Headless-skip daemon owns no real tabs, but the field is always present.
+    expect(body.tabs_released).toBe(0);
+    // Nothing to revoke AND nothing to release → 404.
+    const del2 = await fetch(`${daemon.baseUrl}/token/nonexistent-xyz`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${daemon.token}` },
+    });
+    expect(del2.status).toBe(404);
+  });
+
   // ─── Revocation e2e: revoke-all + the /agents verification surface ────
 
   test('DELETE /token revokes session AND setup keys; agent leaves /agents; token 401s; re-connect fails', async () => {

@@ -2348,13 +2348,18 @@ export function buildFetchHandler(cfg: ServerConfig): ServerHandle {
           });
         }
         const revoked = revokeToken(clientId);
-        if (!revoked) {
+        // Release tabs UNCONDITIONALLY: ownership outlives the token (it clears
+        // only on tab close), so a client whose token already expired can still
+        // own tabs. Gating release on a revoke hit would orphan that ownership
+        // and let a same-name re-pair inherit an authenticated tab.
+        const tabsReleased = browserManager.releaseClientTabs(clientId).length;
+        if (!revoked && tabsReleased === 0) {
           return new Response(JSON.stringify({ error: `Agent "${clientId}" not found` }), {
             status: 404, headers: { 'Content-Type': 'application/json' },
           });
         }
-        console.log(`[browse] Revoked ${revoked} token(s) for: ${clientId}`);
-        return new Response(JSON.stringify({ revoked: clientId, tokens_deleted: revoked }), {
+        console.log(`[browse] Revoked ${revoked} token(s), released ${tabsReleased} tab(s) for: ${clientId}`);
+        return new Response(JSON.stringify({ revoked: clientId, tokens_deleted: revoked, tabs_released: tabsReleased }), {
           status: 200, headers: { 'Content-Type': 'application/json' },
         });
       }
