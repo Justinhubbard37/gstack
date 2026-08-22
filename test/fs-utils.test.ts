@@ -61,6 +61,33 @@ describe("mkdirpSync", () => {
   });
 });
 
+describe("swept mkdirp sites under bun-on-Windows EEXIST semantics (#2635)", () => {
+  const DECISION_LOG = path.resolve(import.meta.dir, "..", "bin", "gstack-decision-log");
+
+  test("decision-log still writes when its projects dir already exists", () => {
+    // Proves the sweep WIRING, not just the helper: the first call creates
+    // ~/.gstack/projects/<slug>/, the second hits the emulated Windows EEXIST
+    // on that pre-existing dir — bare mkdirSync crashed here before the sweep.
+    const base = tmpdir();
+    try {
+      const work = path.join(base, "work");
+      fs.mkdirSync(work, { recursive: true });
+      const payload = '{"decision":"eexist probe","rationale":"r","scope":"repo","source":"user"}';
+      const env = { ...process.env, HOME: base };
+      const first = spawnSync("bun", [DECISION_LOG, payload], { cwd: work, encoding: "utf8", env });
+      expect(first.status).toBe(0);
+      const second = spawnSync(
+        "bun", ["--preload", EEXIST_PRELOAD, DECISION_LOG, payload],
+        { cwd: work, encoding: "utf8", env },
+      );
+      expect(second.status).toBe(0);
+      expect(second.stderr ?? "").not.toContain("EEXIST");
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("install-prepush-hook under bun-on-Windows EEXIST semantics (#2635)", () => {
   test("install succeeds when .git/hooks already exists, existing hook preserved", () => {
     const base = tmpdir();
