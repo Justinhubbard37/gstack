@@ -341,6 +341,46 @@ describe('gstack-gbrain-source-wireup — wireup mode', () => {
   });
 });
 
+describe('gstack-gbrain-source-wireup — ZeroEntropy sunset advisory (#2365)', () => {
+  // The hosted ZeroEntropy API dies Sept 4, 2026; a gbrain on the zeroentropyai
+  // recipe keeps importing but stops embedding SILENTLY. Detection is a
+  // fail-open grep of ~/.gbrain/config.json — missing/other-provider configs
+  // must stay silent and never block the wireup.
+
+  test('config naming zeroentropyai → sunset warning, wireup still succeeds', () => {
+    setupGstackRepo('git@github.com:user/gstack-brain-user.git');
+    makeFakeGbrain({});
+    fs.mkdirSync(path.join(tmpHome, '.gbrain'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.gbrain', 'config.json'),
+      JSON.stringify({ embedding: { recipe: 'zeroentropyai' } }),
+    );
+    const r = run([], { env: { GSTACK_BRAIN_NO_SYNC: '1' } });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('ZeroEntropy');
+    expect(r.stderr).toContain('2365');
+  });
+
+  test('config on another provider → no warning (fail-open, no false positive)', () => {
+    setupGstackRepo('git@github.com:user/gstack-brain-user.git');
+    makeFakeGbrain({});
+    fs.mkdirSync(path.join(tmpHome, '.gbrain'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.gbrain', 'config.json'),
+      JSON.stringify({ embedding: { recipe: 'voyage:voyage-code-3' } }),
+    );
+    const r = run([], { env: { GSTACK_BRAIN_NO_SYNC: '1' } });
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('ZeroEntropy');
+  });
+
+  test('advisory docs entry exists (USING_GBRAIN_WITH_GSTACK.md content pin)', () => {
+    const doc = fs.readFileSync(path.join(ROOT, 'USING_GBRAIN_WITH_GSTACK.md'), 'utf-8');
+    expect(doc).toContain('September 4, 2026');
+    expect(doc).toContain('#2365');
+  });
+});
+
 describe('gstack-gbrain-source-wireup — --database-url lock (defends against external config rewrites)', () => {
   test('--database-url flag is exported as GBRAIN_DATABASE_URL to child gbrain calls', () => {
     setupGstackRepo('git@github.com:user/gstack-brain-user.git');

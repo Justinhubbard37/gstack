@@ -316,6 +316,15 @@ do_wireup() {
       ;;
   esac
 
+  # ZeroEntropy sunset advisory (#2365): the provider shuts down Sept 4, 2026,
+  # after which brains on gbrain's zeroentropyai recipe stop embedding new
+  # pages silently. Detection is a fail-open grep of gbrain's config — any
+  # missing/unreadable/other-provider config stays silent (grep -qs), never
+  # blocking a working setup.
+  if grep -qsi 'zeroentropyai' "$GBRAIN_CONFIG" 2>/dev/null; then
+    warn "gbrain config appears to use the ZeroEntropy embedding recipe. ZeroEntropy sunsets on September 4, 2026 — after that, new pages stop embedding silently. Migration options: https://github.com/garrytan/gstack/issues/2365"
+  fi
+
   if [ "${GSTACK_BRAIN_NO_SYNC:-0}" = "1" ]; then
     echo "source_id=$id"
     echo "worktree=$WORKTREE"
