@@ -42,10 +42,12 @@ let gbrainStateFile: string;
 function makeFakeGbrain(opts: {
   version?: string | null; // null = "binary missing" (don't write the file)
   syncFails?: boolean;
+  syncHelpNoSource?: boolean; // simulate an older gbrain whose sync lacks --source
 }) {
   const version = opts.version ?? '0.18.2';
   if (version === null) return; // simulate missing binary by NOT writing one
   const syncFails = opts.syncFails ?? false;
+  const syncHelpNoSource = opts.syncHelpNoSource ?? false;
 
   // Stub gbrain reads/writes state from a JSON file. Fields:
   //   sources: [{id, local_path, federated}]
@@ -109,6 +111,13 @@ json.dump(state, open('$STATE','w'), indent=2)
 fi
 
 # sync --repo <p>  → records, optionally fails
+# sync --help → advertise flags (the wireup probes this before choosing the
+# sync form; the default fake mirrors a current gbrain, which HAS --source)
+if [ "$1" = "sync" ] && [ "$2" = "--help" ]; then
+  echo "Usage: gbrain sync [--repo <path>]${syncHelpNoSource ? '' : ' [--source <id>]'}"
+  exit 0
+fi
+
 if [ "$1" = "sync" ]; then
   ${syncFails ? 'echo "sync failed: connection error" >&2; exit 1' : 'echo "1 page imported"; exit 0'}
 fi
@@ -191,6 +200,31 @@ describe('gstack-gbrain-source-wireup — wireup mode', () => {
     expect(state.sources[0].id).toBe('gstack-brain-user');
     expect(state.sources[0].local_path).toBe(worktreeDir);
     expect(state.sources[0].federated).toBe(true);
+  });
+
+  test('the real sync targets the REGISTERED source, never --repo (#2662)', () => {
+    // `sync --repo <path>` resolves against the brain's DEFAULT source and can
+    // silently repoint its local_path anchor at our worktree. This case runs
+    // WITHOUT GSTACK_BRAIN_NO_SYNC — the skip-mode cases never reach the sync,
+    // so asserting the sync argv there would be vacuous.
+    setupGstackRepo('git@github.com:user/gstack-brain-user.git');
+    makeFakeGbrain({});
+    const r = run([]);
+    expect(r.status).toBe(0);
+    const calls = gbrainCalls();
+    expect(calls.some((c) => c.startsWith('gbrain sync --source gstack-brain-user'))).toBe(true);
+    expect(calls.some((c) => c.includes('sync --repo'))).toBe(false);
+  });
+
+  test('older gbrain without sync --source: falls back to --repo with an upgrade warning', () => {
+    setupGstackRepo('git@github.com:user/gstack-brain-user.git');
+    makeFakeGbrain({ syncHelpNoSource: true });
+    const r = run([]);
+    expect(r.status).toBe(0);
+    const calls = gbrainCalls();
+    expect(calls.some((c) => c.startsWith('gbrain sync --repo'))).toBe(true);
+    expect(calls.some((c) => c.includes('sync --source '))).toBe(false);
+    expect(r.stderr).toContain('#2662');
   });
 
   test('idempotent re-run after success: no new sources add call', () => {

@@ -332,8 +332,21 @@ do_wireup() {
     exit 0
   fi
 
+  # #2662: `sync --repo <path>` resolves against the brain's DEFAULT source and
+  # can silently repoint that source's local_path anchor at our worktree while
+  # the source registered above gets nothing. Target the registered source by
+  # id. `--source` support is probed first (the documented floor is gbrain >=
+  # 0.18.0 and nothing proves the flag exists there): an older gbrain keeps the
+  # wrong-but-working --repo call with an upgrade warning, never a hard failure.
   local sync_out sync_redacted
-  sync_out=$(gbrain sync --repo "$WORKTREE" 2>&1) || {
+  local -a sync_cmd
+  if gbrain sync --help 2>/dev/null | grep -q -- '--source'; then
+    sync_cmd=(gbrain sync --source "$id")
+  else
+    warn "this gbrain's sync lacks --source; falling back to 'sync --repo' (upgrade gbrain so the sync targets source $id directly — #2662)"
+    sync_cmd=(gbrain sync --repo "$WORKTREE")
+  fi
+  sync_out=$("${sync_cmd[@]}" 2>&1) || {
     # Redact any postgres:// URLs from the error message in case gbrain logged
     # a connection error containing the full DSN with password. The user sees
     # "***REDACTED***" instead of credentials in their stderr or any log.
