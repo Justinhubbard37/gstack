@@ -195,7 +195,17 @@ while [ $# -gt 0 ]; do
 done
 
 case "$HOST" in
-  claude|codex|kiro|factory|opencode|cursor|slate|auto) ;;
+  claude|codex|kiro|factory|opencode|cursor|auto) ;;
+  slate)
+    echo ""
+    echo "Slate is not yet a first-class install target (docs/designs/SLATE_HOST.md —"
+    echo "blocked on the host-config refactor). Slate discovers skills from"
+    echo ".claude/skills as a compatibility fallback, so a Slate user is served by"
+    echo "the Claude install today:"
+    echo ""
+    echo "  ./setup --host claude"
+    echo ""
+    exit 0 ;;
   openclaw)
     echo ""
     echo "OpenClaw integration uses a different model — OpenClaw spawns Claude Code"
@@ -321,6 +331,14 @@ elif [ "$HOST" = "opencode" ]; then
   INSTALL_OPENCODE=1
 elif [ "$HOST" = "cursor" ]; then
   INSTALL_CURSOR=1
+fi
+
+# A host that passes --host validation but sets no INSTALL_* flag would
+# silently configure nothing and exit 0 (the #2361 slate failure class).
+# Fail loudly if a future host lands in the accept-list without a dispatch arm.
+if [ "$HOST" != "auto" ] && [ "$INSTALL_CLAUDE" -eq 0 ] && [ "$INSTALL_CODEX" -eq 0 ] && [ "$INSTALL_KIRO" -eq 0 ] && [ "$INSTALL_FACTORY" -eq 0 ] && [ "$INSTALL_OPENCODE" -eq 0 ] && [ "$INSTALL_CURSOR" -eq 0 ]; then
+  echo "Error: no install arm exists for host '$HOST' — it passed --host validation but sets no INSTALL_* flag, so setup would configure nothing and exit 0. This is a setup bug. Valid install targets: claude, codex, kiro, factory, opencode, cursor (informational: slate, openclaw, hermes, gbrain)." >&2
+  exit 1
 fi
 
 if [ "$MODEL_OVERRIDE_SET" -eq 1 ] && [ "$INSTALL_CODEX" -eq 0 ]; then
