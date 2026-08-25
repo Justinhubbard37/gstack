@@ -26,22 +26,7 @@ GBrain hint text (if present) tells you when to prefer \`gbrain\` over Grep;
 
 ${isBrainHost ? `If output shows \`ARTIFACTS_SYNC: artifacts repo detected\`, offer \`gstack-brain-restore\` via AskUserQuestion; otherwise continue.
 
-` : ''}Privacy stop-gate: if output shows \`ARTIFACTS_SYNC: off\`, \`artifacts_sync_mode_prompted\` is \`false\`, and gbrain is on PATH or \`gbrain doctor --fast --json\` works, ask once:
-
-> gstack can publish your artifacts (CEO plans, designs, reports) to a private GitHub repo that GBrain indexes across machines. How much should sync?
-
-Options:
-- A) Everything allowlisted (recommended)
-- B) Only artifacts
-- C) Decline, keep everything local
-
-After answer:
-
-\`\`\`bash
-# Chosen mode: full | artifacts-only | off
-${ctx.paths.binDir}/gstack-config set artifacts_sync_mode <choice>
-${ctx.paths.binDir}/gstack-config set artifacts_sync_mode_prompted true
-\`\`\`
-
-If A/B and \`~/.gstack/.git\` is missing, ask whether to run \`gstack-artifacts-init\`. Do not block the skill.`;
+` : ''}The one-time privacy stop-gate (artifacts-sync consent) arrives as a
+\`GSTACK_INSTRUCTION\` block from skill-start when consent is actually pending
+— fire it via AskUserQuestion exactly as the block instructs.`;
 }
