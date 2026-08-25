@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.69.1.0] - 2026-08-25
+
+**Prompt bloat now fails CI.**
+**Every skill's context cost has a ceiling, and ceilings only ratchet down.**
+
+Every gstack skill invocation pays a fixed prompt cost before it does any work, and until now nothing stopped that cost from creeping. This release checks in a context-budget ratchet: a free test that grades two token ledgers, the always-on frontmatter catalog every session loads and the per-invocation cost of each skill, against ceilings committed in a fixture. A skill that grows past its ceiling fails `bun run test`. A new skill with no ceiling fails until someone consciously budgets it. When a reduction lands, one command re-captures the fixture and the win is locked. Five skills also shed dead frontmatter keys that no runtime, host, or test ever read from the generated files.
+
+### The numbers that matter
+
+Source: `bin/gstack-context-bill` (offline, calibrated estimate) and `test/fixtures/context-budget.json` in this release.
+
+| Metric | Value |
+|---|---|
+| Always-on frontmatter, whole catalog | ~6.0K tokens actual, 6,344 ceiling (x1.05) |
+| Per-skill eager ceilings enforced | 59 (x1.10 headroom each) |
+| Heaviest skill today | `/review` at ~26.6K tokens per invocation |
+| Dead frontmatter lines removed | 8 across 5 skills |
+
+That 26.6K number is the point. This release is the measurement-and-enforcement phase of a reviewed token-reduction program; the phases that follow move preamble bash into `bin/` scripts and carve the heavyweight skills, targeting ~13-15K for `/review`. The ratchet is what makes each of those wins permanent instead of aspirational.
+
+### What this means for gstack users
+
+Nothing changes in how you invoke skills today. What changes is the trajectory: context cost is now a tested invariant, so every future release either holds the line or gets consciously cheaper. If you maintain skills, budget growth is a visible decision in your diff, not a silent tax on every session. Upgrade normally.
+
+### Itemized changes
+
+### Added
+- Context-budget ratchet: `test/context-budget-ratchet.test.ts` grades the always-on and per-invocation token ledgers against `test/fixtures/context-budget.json` via `checkBudget`; regenerate ceilings with `bun test/helpers/capture-context-budget.ts` (atomic write). New skills must be budgeted; removed skills must be pruned; fixture shape is validated so a malformed ceiling cannot silently disable enforcement.
+- Coverage for the previously-untested `alwaysOnTotal` violation branch in `lib/context-bill.ts`, a capture round-trip test pinning the headroom math, Windows path-separator normalization pins, and a regression pin that generated Claude renders strip gen-time-only frontmatter keys while keeping host-read (`hooks:`) and runtime-read (`gbrain:`) keys.
+
+### Changed
+- Claude renders no longer carry `interactive:` and `benefits-from:` frontmatter (gen-time inputs with no reader of the generated copy) — 8 dead lines across autoplan and the four plan-review skills, trimming the catalog every session loads.
+- The ratchet bill pins the root skill to a stable key, dedupes symlink-aliased skills by realpath (one ceiling per physical skill, Windows-checkout safe), and rebuilds all totals from the filtered skill list.
+
 ## [1.69.0.0] - 2026-08-22
 
 **The silent-failure wave: tools that reported success while doing nothing —**
