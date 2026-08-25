@@ -456,6 +456,100 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     minUnionBytes: 91_000, // Phase 4 wave 1; estimated union ~94.9KB
     mustContain: ['readiness', 'merge', 'canary', 'revert', 'staging'],
   },
+  // ── Token-reduction Phase 4 wave 2 (v1.69.x branch) ──────────────────────
+  autoplan: {
+    skill: 'autoplan',
+    expectedSections: ['ceo-phase.md', 'design-phase.md', 'eng-phase.md', 'dx-phase.md', 'tasks-aggregator.md'],
+    requiredReads: ['ceo-phase.md', 'eng-phase.md', 'tasks-aggregator.md'],
+    scenario:
+      'Run the /autoplan pipeline against the plan in PLAN.md. Codex and subagent tools are unavailable — note both voices unavailable (single-reviewer mode) and keep going. The plan has no UI scope and no developer-facing scope, so Phase 2 and Phase 3.5 are skipped (do not read their sections). Execute Phase 1 (CEO) and Phase 3 (Eng) at full depth, run the Phase 4 aggregator step, and produce the Final Approval Gate summary as the report.',
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## The 6 Decision Principles',
+        '## Sequential Execution — MANDATORY',
+        '## Decision Classification',
+        '## Filesystem Boundary — Codex Prompts',
+        '## Phase 0.5: Codex auth + version preflight',
+        '## Pre-Gate Verification',
+        '## Phase 2: Design Review (conditional — skip if no UI scope)',
+        '## Phase 3.5: DX Review (conditional — skip if no developer-facing scope)',
+        '- Scope gate (the plan under review is already the target)',
+      ],
+      mustPrecedeStop: ['## The 6 Decision Principles', '## Sequential Execution — MANDATORY', '## Decision Classification'],
+      mustMoveToSection: [
+        'CEO DUAL VOICES — CONSENSUS TABLE:',
+        'CODEX SAYS (design — UX challenge)',
+        'ENG DUAL VOICES — CONSENSUS TABLE:',
+        'DX DUAL VOICES — CONSENSUS TABLE:',
+        '## Implementation Tasks aggregator',
+      ],
+      gateAfterStop: 'AskUserQuestion options:',
+    },
+    behavioral: 'external',
+    externalTest: 'test/skill-e2e-autoplan-chain.test.ts', // phase-complete markers live ONLY in sections — its assertions ARE section-read proof
+    maxSkeletonBytes: 59_300, // Phase 4 wave 2; measured 58,696
+    minUnionBytes: 85_000, // measured union 86,926
+    mustContain: ['6 Decision Principles', 'TASTE DECISION', 'USER CHALLENGE', 'consensus', 'Restore Point'],
+  },
+  spec: {
+    skill: 'spec',
+    expectedSections: ['gate-and-file.md'],
+    requiredReads: ['gate-and-file.md'],
+    scenario:
+      "The user already completed Phases 1-4 of /spec for the request 'add a --json output flag to the CLI status command'. Treat the five Phase 1 answers, the scope lock, and the technical interrogation as settled, and the Phase 4 draft as CONFIRMED by the user. Continue from that point in file-only mode (--no-execute is set): run the Phase 4.5 sequence and Phase 5, simulating every external command (codex, gh, the redaction bin) by stating what you would run and the expected outcome instead of executing it. Do NOT use AskUserQuestion.",
+    staticInvariants: {
+      mustStayInSkeleton: [
+        'HARD GATE',
+        '### Phase 1: Understand the "Why"',
+        '### Phase 3: Technical Interrogation',
+        '### Phase 4: Draft Review',
+        'gstack-issue-guard',
+        '## Issue Structure Templates',
+      ],
+      mustPrecedeStop: ['## Flag Reference', '### Phase 1: Understand the "Why"'],
+      mustMoveToSection: [
+        '<<<USER_SPEC>>>',
+        'SEMANTIC_REVIEW: clean',
+        'gh issue create --title',
+        'PIN_SHA=$(git rev-parse HEAD)',
+      ],
+      gateAfterStop: undefined,
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 51_200, // Phase 4 wave 2: Phases 4.5-5 carved at the post-confirmation boundary; measured 50,681
+    minUnionBytes: 64_500, // measured union 67,430
+    mustContain: ['HARD GATE', 'dedupe', 'quality gate', 'acceptance criteria', 'archive'],
+  },
+  'setup-gbrain': {
+    skill: 'setup-gbrain',
+    expectedSections: ['engine-remediation.md', 'brain-init.md', 'transcript-gate.md', 'claude-md-persist.md'],
+    requiredReads: ['brain-init.md', 'claude-md-persist.md'],
+    scenario:
+      "Walk /setup-gbrain in SIMULATION — do not execute any bash, install anything, or register MCP; for each step state the exact commands you WOULD run. Treat Step 1 detect as: gbrain_on_path=false, gbrain_local_status=missing-config, no shortcut flags. Treat Path 3 (PGLite local) as already picked at Step 2 — do not use AskUserQuestion. Walk Steps 3, 4 (Path 3 init), 5, 5a, and 8: read each step's pointed section before doing it, and write out the exact CLAUDE.md block Step 8 would persist. Skip Steps 6, 7, 7.5, 9, 9.5, and 10. End with a one-paragraph setup summary.",
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## Step 2: Pick a path (AskUserQuestion)',
+        '## Step 1: Detect current state',
+        'gbrain_mcp_mode=remote-http',
+        'claude mcp add --scope user --transport http gbrain',
+        'SKIP entirely on Path 4 (Remote MCP)',
+        '<YOUR_TOKEN>',
+      ],
+      mustPrecedeStop: ['## Step 1: Detect current state'],
+      mustMoveToSection: [
+        '### Path 1 (Supabase, existing URL)',
+        'read_secret_to_env GBRAIN_MCP_TOKEN',
+        'Mode: remote-http',
+        'gstack-memory-ingest.ts --probe',
+      ],
+      gateAfterStop: undefined,
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 57_600, // Phase 4 wave 2; measured 56,954
+    minUnionBytes: 78_300, // measured union 79,139
+    mustContain: ['PGLite', 'Supabase', 'claude mcp add', 'read_secret_to_env', 'pooler'],
+    maxSizeRatio: 1.07, // measured 1.051 vs the branch monolith: index + stubs + 4 STOP pointers
+  },
 };
 
 /** Sorted carved-skill names. Consumers derive their lists from this — no parallel lists. */

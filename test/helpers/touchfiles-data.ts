@@ -175,13 +175,13 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Agent SDK. Gate-tier (deterministic stub server, fixed inputs); fires
   // when the skill template, the verify helper, the artifacts-init helper,
   // or the detect script changes.
-  'setup-gbrain-remote':          ['setup-gbrain/SKILL.md.tmpl', 'bin/gstack-gbrain-mcp-verify', 'bin/gstack-artifacts-init', 'bin/gstack-gbrain-detect', 'test/helpers/agent-sdk-runner.ts', 'test/skill-e2e-setup-gbrain-remote.test.ts'],
-  'setup-gbrain-bad-token':       ['setup-gbrain/SKILL.md.tmpl', 'bin/gstack-gbrain-mcp-verify', 'test/helpers/agent-sdk-runner.ts', 'test/skill-e2e-setup-gbrain-bad-token.test.ts'],
+  'setup-gbrain-remote':          ['setup-gbrain/sections/brain-init.md.tmpl', 'setup-gbrain/sections/claude-md-persist.md.tmpl', 'setup-gbrain/sections/manifest.json', 'test/helpers/setup-gbrain-fixture.ts', 'setup-gbrain/SKILL.md.tmpl', 'bin/gstack-gbrain-mcp-verify', 'bin/gstack-artifacts-init', 'bin/gstack-gbrain-detect', 'test/helpers/agent-sdk-runner.ts', 'test/skill-e2e-setup-gbrain-remote.test.ts'],
+  'setup-gbrain-bad-token':       ['setup-gbrain/sections/brain-init.md.tmpl', 'setup-gbrain/sections/manifest.json', 'test/helpers/setup-gbrain-fixture.ts', 'setup-gbrain/SKILL.md.tmpl', 'bin/gstack-gbrain-mcp-verify', 'test/helpers/agent-sdk-runner.ts', 'test/skill-e2e-setup-gbrain-bad-token.test.ts'],
   // v1.34.0.0 split-engine Path 4 + Step 4.5 Yes (local PGLite for code).
   // Periodic-tier per codex #12 (AgentSDK harness is non-deterministic).
   // Fires when the setup-gbrain template, install/verify/init helpers, or
   // the agent-sdk-runner harness changes.
-  'setup-gbrain-path4-local-pglite': ['setup-gbrain/SKILL.md.tmpl', 'bin/gstack-gbrain-mcp-verify', 'bin/gstack-gbrain-install', 'bin/gstack-gbrain-detect', 'lib/gbrain-local-status.ts', 'test/helpers/agent-sdk-runner.ts', 'test/skill-e2e-setup-gbrain-path4-local-pglite.test.ts'],
+  'setup-gbrain-path4-local-pglite': ['setup-gbrain/sections/brain-init.md.tmpl', 'setup-gbrain/sections/claude-md-persist.md.tmpl', 'setup-gbrain/sections/manifest.json', 'test/helpers/setup-gbrain-fixture.ts', 'setup-gbrain/SKILL.md.tmpl', 'bin/gstack-gbrain-mcp-verify', 'bin/gstack-gbrain-install', 'bin/gstack-gbrain-detect', 'lib/gbrain-local-status.ts', 'test/helpers/agent-sdk-runner.ts', 'test/skill-e2e-setup-gbrain-path4-local-pglite.test.ts'],
 
   // AskUserQuestion format regression (RECOMMENDATION + Completeness: N/10)
   // Fires when either template OR the two preamble resolvers change.

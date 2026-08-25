@@ -1,10 +1,10 @@
 {
   "tag": "v1.69.1.0",
-  "capturedAt": "2026-08-25T16:33:17.541Z",
-  "capturedFromCommit": "c7488f7e",
+  "capturedAt": "2026-08-25T16:58:29.504Z",
+  "capturedFromCommit": "2877b63a",
   "capturedFromBranch": "prompt-token-load-reduction",
   "totalSkills": 53,
-  "totalCorpusBytes": 2798083,
+  "totalCorpusBytes": 2807143,
   "estTotalCatalogTokens": 4195,
   "topHeaviest": [
     {
@@ -98,23 +98,23 @@
       "hasPeriodicEval": false
     },
     {
-      "skill": "codex",
-      "skillMdBytes": 84304,
-      "skillMdLines": 886,
-      "estTokens": 21076,
-      "tmplBytes": 16072,
-      "descriptionLen": 187,
+      "skill": "autoplan",
+      "skillMdBytes": 86921,
+      "skillMdLines": 1046,
+      "estTokens": 21730,
+      "tmplBytes": 23529,
+      "descriptionLen": 336,
       "hasGateEval": true,
-      "hasPeriodicEval": false
+      "hasPeriodicEval": true
     }
   ],
   "skills": {
     "autoplan": {
       "skill": "autoplan",
-      "skillMdBytes": 83714,
-      "skillMdLines": 1487,
-      "estTokens": 20929,
-      "tmplBytes": 46355,
+      "skillMdBytes": 86921,
+      "skillMdLines": 1046,
+      "estTokens": 21730,
+      "tmplBytes": 23529,
       "descriptionLen": 336,
       "hasGateEval": true,
       "hasPeriodicEval": true
@@ -581,10 +581,10 @@
     },
     "setup-gbrain": {
       "skill": "setup-gbrain",
-      "skillMdBytes": 75311,
-      "skillMdLines": 1501,
-      "estTokens": 18828,
-      "tmplBytes": 48298,
+      "skillMdBytes": 79139,
+      "skillMdLines": 1060,
+      "estTokens": 19785,
+      "tmplBytes": 27628,
       "descriptionLen": 325,
       "hasGateEval": true,
       "hasPeriodicEval": false
@@ -611,10 +611,10 @@
     },
     "spec": {
       "skill": "spec",
-      "skillMdBytes": 65405,
-      "skillMdLines": 1229,
-      "estTokens": 16351,
-      "tmplBytes": 32196,
+      "skillMdBytes": 67430,
+      "skillMdLines": 901,
+      "estTokens": 16858,
+      "tmplBytes": 19784,
       "descriptionLen": 282,
       "hasGateEval": true,
       "hasPeriodicEval": false

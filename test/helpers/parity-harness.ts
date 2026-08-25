@@ -206,7 +206,7 @@ export function runParityChecks(opts: {
  */
 const MONOLITH_INVARIANTS: ParityInvariant[] = [
   // cso is now carved — its invariant is generated from CARVE_GUARDS below.
-  // review, codex, and land-and-deploy carved in token-reduction Phase 4
+  // review, codex, land-and-deploy (wave 1) and autoplan (wave 2) carved in token-reduction Phase 4
   // wave 1 (v1.69.x branch) — their invariants generate from CARVE_GUARDS too.
   {
     skill: 'qa',
@@ -236,16 +236,6 @@ const MONOLITH_INVARIANTS: ParityInvariant[] = [
     // directive adds ~0.45KB to every tier-2+ skill. Measured values noted.
     maxSizeRatio: 1.12, // D1 measured
     minBytes: 30_000,
-  },
-  {
-    skill: 'autoplan',
-    mustContain: ['ceo', 'eng', 'design'],
-    mustHaveHeadings: ['## Preamble', '## When to invoke'],
-    // v1.2.0 activation lift: shared first-run-guidance preamble section.
-        // Fork port wave 2 (D1): the evidence-before-claimed-limitations preamble
-    // directive adds ~0.45KB to every tier-2+ skill. Measured values noted.
-    maxSizeRatio: 1.09, // D1 measured
-    minBytes: 70_000,
   },
 ];
 
