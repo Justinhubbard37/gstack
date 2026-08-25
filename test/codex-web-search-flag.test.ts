@@ -67,10 +67,16 @@ describe('deprecated codex web-search flag is gone (#2525)', () => {
     }
   });
 
-  test('rendered autoplan skill resolves the token at every inline site', () => {
-    const rendered = fs.readFileSync(path.join(ROOT, 'autoplan', 'SKILL.md'), 'utf-8');
-    const count = rendered.split(CODEX_WEB_SEARCH_FLAG).length - 1;
-    expect(count).toBeGreaterThanOrEqual(4);
-    expect(rendered).not.toContain('{{CODEX_WEB_SEARCH_FLAG}}');
+  test('rendered autoplan phase sections resolve the token at every inline site', () => {
+    // The four phase bodies (and their codex invocations) are carved into
+    // autoplan/sections/*-phase.md — each generated section must carry the
+    // live flag, never the unresolved token.
+    for (const file of ['ceo-phase.md', 'design-phase.md', 'eng-phase.md', 'dx-phase.md']) {
+      const rendered = fs.readFileSync(path.join(ROOT, 'autoplan', 'sections', file), 'utf-8');
+      expect(rendered, `${file} lost the web-search flag`).toContain(CODEX_WEB_SEARCH_FLAG);
+      expect(rendered).not.toContain('{{CODEX_WEB_SEARCH_FLAG}}');
+    }
+    const skeleton = fs.readFileSync(path.join(ROOT, 'autoplan', 'SKILL.md'), 'utf-8');
+    expect(skeleton).not.toContain('{{CODEX_WEB_SEARCH_FLAG}}');
   });
 });

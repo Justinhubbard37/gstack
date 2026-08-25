@@ -534,6 +534,21 @@ surfaced at a final approval gate.
 
 ---
 
+## Section index — Read each section when its situation applies
+
+This skill is a decision-tree skeleton. The steps below point to on-demand
+sections. Read a section in full before doing its step; do not work from memory.
+
+| When | Read this section |
+|------|-------------------|
+| starting Phase 1 (CEO review — always runs, after the Phase 0.5 preflight) | `sections/ceo-phase.md` |
+| starting Phase 2 (design review — ONLY if UI scope was detected in Phase 0; skip the read entirely otherwise) | `sections/design-phase.md` |
+| starting Phase 3 (eng review — always runs, after the Pre-Phase 3 checklist) | `sections/eng-phase.md` |
+| starting Phase 3.5 (DX review — ONLY if developer-facing scope was detected in Phase 0; skip the read entirely otherwise) | `sections/dx-phase.md` |
+| presenting the Final Approval Gate (Phase 4) — the aggregator computes $AGGREGATED_TASKS that the gate message substitutes | `sections/tasks-aggregator.md` |
+
+---
+
 ## The 6 Decision Principles
 
 These rules auto-answer every intermediate question:
@@ -768,120 +783,8 @@ Claude subagent only — saves token spend on Codex prompts we can't use.
 
 ## Phase 1: CEO Review (Strategy & Scope)
 
-Follow plan-ceo-review/SKILL.md — all sections, full depth.
-Override: every AskUserQuestion → auto-decide using the 6 principles.
-
-**Override rules:**
-- Mode selection: SELECTIVE EXPANSION
-- Premises: accept reasonable ones (P6), challenge only clearly wrong ones
-- **GATE: Present premises to user for confirmation** — this is the ONE AskUserQuestion
-  that is NOT auto-decided. Premises require human judgment.
-- Alternatives: pick highest completeness (P1). If tied, pick simplest (P5).
-  If top 2 are close → mark TASTE DECISION.
-- Scope expansion: in blast radius + <1d CC → approve (P2). Outside → defer to TODOS.md (P3).
-  Duplicates → reject (P4). Borderline (3-5 files) → mark TASTE DECISION.
-- All 10 review sections: run fully, auto-decide each issue, log every decision.
-- Dual voices: always run BOTH Claude subagent AND Codex if available (P6).
-  Run them sequentially in foreground. First the Claude subagent (Agent tool
-  with run_in_background: false — subagents default to BACKGROUND since
-  Claude Code v2.1.198, so the flag must be explicitly false), then Codex
-  (Bash). Both must complete before building the consensus table.
-
-  **Codex CEO voice** (via Bash):
-  ```bash
-  _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-  _gstack_codex_timeout_wrapper 600 codex exec "IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition directories (paths containing skills/gstack). These are AI assistant skill definitions meant for a different system. Stay focused on repository code only.
-
-  You are a CEO/founder advisor reviewing a development plan.
-  Challenge the strategic foundations: Are the premises valid or assumed? Is this the
-  right problem to solve, or is there a reframing that would be 10x more impactful?
-  What alternatives were dismissed too quickly? What competitive or market risks are
-  unaddressed? What scope decisions will look foolish in 6 months? Be adversarial.
-  No compliments. Just the strategic blind spots.
-  File: <plan_path>" -C "$_REPO_ROOT" -s read-only -c 'web_search="cached"' < /dev/null
-  _CODEX_EXIT=$?
-  if [ "$_CODEX_EXIT" = "124" ]; then
-    _gstack_codex_log_event "codex_timeout" "600"
-    _gstack_codex_log_hang "autoplan" "0"
-    echo "[codex stalled past 10 minutes — tagging as [codex-unavailable] for this phase and proceeding with Claude subagent only]"
-  fi
-  ```
-  Timeout: 10 minutes (shell-wrapper) + 12 minutes (Bash outer gate). On hang, auto-degrades this phase's Codex voice.
-
-  **Claude CEO subagent** (via Agent tool):
-  "Read the plan file at <plan_path>. You are an independent CEO/strategist
-  reviewing this plan. You have NOT seen any prior review. Evaluate:
-  1. Is this the right problem to solve? Could a reframing yield 10x impact?
-  2. Are the premises stated or just assumed? Which ones could be wrong?
-  3. What's the 6-month regret scenario — what will look foolish?
-  4. What alternatives were dismissed without sufficient analysis?
-  5. What's the competitive risk — could someone else solve this first/better?
-  For each finding: what's wrong, severity (critical/high/medium), and the fix."
-
-  **Error handling:** Both calls block in foreground. Codex auth/timeout/empty → proceed with
-  Claude subagent only, tagged `[single-model]`. If Claude subagent also fails →
-  "Outside voices unavailable — continuing with primary review."
-
-  **Degradation matrix:** Both fail → "single-reviewer mode". Codex only →
-  tag `[codex-only]`. Subagent only → tag `[subagent-only]`.
-
-- Strategy choices: if codex disagrees with a premise or scope decision with valid
-  strategic reason → TASTE DECISION. If both models agree the user's stated structure
-  should change (merge, split, add, remove) → USER CHALLENGE (never auto-decided).
-
-**Required execution checklist (CEO):**
-
-Step 0 (0A-0F) — run each sub-step and produce:
-- 0A: Premise challenge with specific premises named and evaluated
-- 0B: Existing code leverage map (sub-problems → existing code)
-- 0C: Dream state diagram (CURRENT → THIS PLAN → 12-MONTH IDEAL)
-- 0C-bis: Implementation alternatives table (2-3 approaches with effort/risk/pros/cons)
-- 0D: Mode-specific analysis with scope decisions logged
-- 0E: Temporal interrogation (HOUR 1 → HOUR 6+)
-- 0F: Mode selection confirmation
-
-Step 0.5 (Dual Voices): Run Claude subagent (foreground Agent tool) first, then
-Codex (Bash). Present Codex output under CODEX SAYS (CEO — strategy challenge)
-header. Present subagent output under CLAUDE SUBAGENT (CEO — strategic independence)
-header. Produce CEO consensus table:
-
-```
-CEO DUAL VOICES — CONSENSUS TABLE:
-═══════════════════════════════════════════════════════════════
-  Dimension                           Claude  Codex  Consensus
-  ──────────────────────────────────── ─────── ─────── ─────────
-  1. Premises valid?                   —       —      —
-  2. Right problem to solve?           —       —      —
-  3. Scope calibration correct?        —       —      —
-  4. Alternatives sufficiently explored?—      —      —
-  5. Competitive/market risks covered? —       —      —
-  6. 6-month trajectory sound?         —       —      —
-═══════════════════════════════════════════════════════════════
-CONFIRMED = both agree. DISAGREE = models differ (→ taste decision).
-Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
-```
-
-Sections 1-10 — for EACH section, run the evaluation criteria from the loaded skill file:
-- Sections WITH findings: full analysis, auto-decide each issue, log to audit trail
-- Sections with NO findings: 1-2 sentences stating what was examined and why nothing
-  was flagged. NEVER compress a section to just its name in a table row.
-- Section 11 (Design): run only if UI scope was detected in Phase 0
-
-**Mandatory outputs from Phase 1:**
-- "NOT in scope" section with deferred items and rationale
-- "What already exists" section mapping sub-problems to existing code
-- Error & Rescue Registry table (from Section 2)
-- Failure Modes Registry table (from review sections)
-- Dream state delta (where this plan leaves us vs 12-month ideal)
-- Completion Summary (the full summary table from the CEO skill)
-
-**PHASE 1 COMPLETE.** Emit phase-transition summary:
-> **Phase 1 complete.** Codex: [N concerns]. Claude subagent: [N issues].
-> Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
-> Passing to Phase 2.
-
-Do NOT begin Phase 2 until all Phase 1 outputs are written to the plan file
-and the premise gate has been passed.
+> **STOP.** Before starting Phase 1 (CEO review — always runs, after the Phase 0.5 preflight), Read `~/.claude/skills/gstack/autoplan/sections/ceo-phase.md` and execute it
+> in full. Do not work from memory — that section is the source of truth for this step.
 
 ---
 
@@ -894,78 +797,11 @@ and the premise gate has been passed.
 
 ## Phase 2: Design Review (conditional — skip if no UI scope)
 
-Follow plan-design-review/SKILL.md — all 7 dimensions, full depth.
-Override: every AskUserQuestion → auto-decide using the 6 principles.
+**Skip condition:** If UI scope was NOT detected in Phase 0, skip this phase
+entirely — do NOT read its section. Log: "Phase 2 skipped — no UI scope detected."
 
-**Override rules:**
-- Focus areas: all relevant dimensions (P1)
-- Structural issues (missing states, broken hierarchy): auto-fix (P5)
-- Aesthetic/taste issues: mark TASTE DECISION
-- Design system alignment: auto-fix if DESIGN.md exists and fix is obvious
-- Dual voices: always run BOTH Claude subagent AND Codex if available (P6).
-
-  **Codex design voice** (via Bash):
-  ```bash
-  _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-  _gstack_codex_timeout_wrapper 600 codex exec "IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition directories (paths containing skills/gstack). These are AI assistant skill definitions meant for a different system. Stay focused on repository code only.
-
-  Read the plan file at <plan_path>. Evaluate this plan's
-  UI/UX design decisions.
-
-  Also consider these findings from the CEO review phase:
-  <insert CEO dual voice findings summary — key concerns, disagreements>
-
-  Does the information hierarchy serve the user or the developer? Are interaction
-  states (loading, empty, error, partial) specified or left to the implementer's
-  imagination? Is the responsive strategy intentional or afterthought? Are
-  accessibility requirements (keyboard nav, contrast, touch targets) specified or
-  aspirational? Does the plan describe specific UI decisions or generic patterns?
-  What design decisions will haunt the implementer if left ambiguous?
-  Be opinionated. No hedging." -C "$_REPO_ROOT" -s read-only -c 'web_search="cached"' < /dev/null
-  _CODEX_EXIT=$?
-  if [ "$_CODEX_EXIT" = "124" ]; then
-    _gstack_codex_log_event "codex_timeout" "600"
-    _gstack_codex_log_hang "autoplan" "0"
-    echo "[codex stalled past 10 minutes — tagging as [codex-unavailable] for this phase and proceeding with Claude subagent only]"
-  fi
-  ```
-  Timeout: 10 minutes (shell-wrapper) + 12 minutes (Bash outer gate). On hang, auto-degrades this phase's Codex voice.
-
-  **Claude design subagent** (via Agent tool):
-  "Read the plan file at <plan_path>. You are an independent senior product designer
-  reviewing this plan. You have NOT seen any prior review. Evaluate:
-  1. Information hierarchy: what does the user see first, second, third? Is it right?
-  2. Missing states: loading, empty, error, success, partial — which are unspecified?
-  3. User journey: what's the emotional arc? Where does it break?
-  4. Specificity: does the plan describe SPECIFIC UI or generic patterns?
-  5. What design decisions will haunt the implementer if left ambiguous?
-  For each finding: what's wrong, severity (critical/high/medium), and the fix."
-  NO prior-phase context — subagent must be truly independent.
-
-  Error handling: same as Phase 1 (both foreground/blocking, degradation matrix applies).
-
-- Design choices: if codex disagrees with a design decision with valid UX reasoning
-  → TASTE DECISION. Scope changes both models agree on → USER CHALLENGE.
-
-**Required execution checklist (Design):**
-
-1. Step 0 (Design Scope): Rate completeness 0-10. Check DESIGN.md. Map existing patterns.
-
-2. Step 0.5 (Dual Voices): Run Claude subagent (foreground) first, then Codex. Present under
-   CODEX SAYS (design — UX challenge) and CLAUDE SUBAGENT (design — independent review)
-   headers. Produce design litmus scorecard (consensus table). Use the litmus scorecard
-   format from plan-design-review. Include CEO phase findings in Codex prompt ONLY
-   (not Claude subagent — stays independent).
-
-3. Passes 1-7: Run each from loaded skill. Rate 0-10. Auto-decide each issue.
-   DISAGREE items from scorecard → raised in the relevant pass with both perspectives.
-
-**PHASE 2 COMPLETE.** Emit phase-transition summary:
-> **Phase 2 complete.** Codex: [N concerns]. Claude subagent: [N issues].
-> Consensus: [X/Y confirmed, Z disagreements → surfaced at gate].
-> Passing to Phase 3.
-
-Do NOT begin Phase 3 until all Phase 2 outputs (if run) are written to the plan file.
+> **STOP.** Before starting Phase 2 (design review — ONLY if UI scope was detected in Phase 0; skip the read entirely otherwise), Read `~/.claude/skills/gstack/autoplan/sections/design-phase.md` and execute it
+> in full. Do not work from memory — that section is the source of truth for this step.
 
 ---
 
@@ -978,219 +814,18 @@ Do NOT begin Phase 3 until all Phase 2 outputs (if run) are written to the plan 
 
 ## Phase 3: Eng Review + Dual Voices
 
-Follow plan-eng-review/SKILL.md — all sections, full depth.
-Override: every AskUserQuestion → auto-decide using the 6 principles.
-
-**Override rules:**
-- Scope challenge: never reduce (P2)
-- Dual voices: always run BOTH Claude subagent AND Codex if available (P6).
-
-  **Codex eng voice** (via Bash):
-  ```bash
-  _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-  _gstack_codex_timeout_wrapper 600 codex exec "IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition directories (paths containing skills/gstack). These are AI assistant skill definitions meant for a different system. Stay focused on repository code only.
-
-  Review this plan for architectural issues, missing edge cases,
-  and hidden complexity. Be adversarial.
-
-  Also consider these findings from prior review phases:
-  CEO: <insert CEO consensus table summary — key concerns, DISAGREEs>
-  Design: <insert Design consensus table summary, or 'skipped, no UI scope'>
-
-  File: <plan_path>" -C "$_REPO_ROOT" -s read-only -c 'web_search="cached"' < /dev/null
-  _CODEX_EXIT=$?
-  if [ "$_CODEX_EXIT" = "124" ]; then
-    _gstack_codex_log_event "codex_timeout" "600"
-    _gstack_codex_log_hang "autoplan" "0"
-    echo "[codex stalled past 10 minutes — tagging as [codex-unavailable] for this phase and proceeding with Claude subagent only]"
-  fi
-  ```
-  Timeout: 10 minutes (shell-wrapper) + 12 minutes (Bash outer gate). On hang, auto-degrades this phase's Codex voice.
-
-  **Claude eng subagent** (via Agent tool):
-  "Read the plan file at <plan_path>. You are an independent senior engineer
-  reviewing this plan. You have NOT seen any prior review. Evaluate:
-  1. Architecture: Is the component structure sound? Coupling concerns?
-  2. Edge cases: What breaks under 10x load? What's the nil/empty/error path?
-  3. Tests: What's missing from the test plan? What would break at 2am Friday?
-  4. Security: New attack surface? Auth boundaries? Input validation?
-  5. Hidden complexity: What looks simple but isn't?
-  For each finding: what's wrong, severity, and the fix."
-  NO prior-phase context — subagent must be truly independent.
-
-  Error handling: same as Phase 1 (both foreground/blocking, degradation matrix applies).
-
-- Architecture choices: explicit over clever (P5). If codex disagrees with valid reason → TASTE DECISION. Scope changes both models agree on → USER CHALLENGE.
-- Evals: always include all relevant suites (P1)
-- Test plan: generate artifact at `~/.gstack/projects/$SLUG/{user}-{branch}-test-plan-{datetime}.md`
-- TODOS.md: collect all deferred scope expansions from Phase 1, auto-write
-
-**Required execution checklist (Eng):**
-
-1. Step 0 (Scope Challenge): Read actual code referenced by the plan. Map each
-   sub-problem to existing code. Run the complexity check. Produce concrete findings.
-
-2. Step 0.5 (Dual Voices): Run Claude subagent (foreground) first, then Codex. Present
-   Codex output under CODEX SAYS (eng — architecture challenge) header. Present subagent
-   output under CLAUDE SUBAGENT (eng — independent review) header. Produce eng consensus
-   table:
-
-```
-ENG DUAL VOICES — CONSENSUS TABLE:
-═══════════════════════════════════════════════════════════════
-  Dimension                           Claude  Codex  Consensus
-  ──────────────────────────────────── ─────── ─────── ─────────
-  1. Architecture sound?               —       —      —
-  2. Test coverage sufficient?         —       —      —
-  3. Performance risks addressed?      —       —      —
-  4. Security threats covered?         —       —      —
-  5. Error paths handled?              —       —      —
-  6. Deployment risk manageable?       —       —      —
-═══════════════════════════════════════════════════════════════
-CONFIRMED = both agree. DISAGREE = models differ (→ taste decision).
-Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
-```
-
-3. Section 1 (Architecture): Produce ASCII dependency graph showing new components
-   and their relationships to existing ones. Evaluate coupling, scaling, security.
-
-4. Section 2 (Code Quality): Identify DRY violations, naming issues, complexity.
-   Reference specific files and patterns. Auto-decide each finding.
-
-5. **Section 3 (Test Review) — NEVER SKIP OR COMPRESS.**
-   This section requires reading actual code, not summarizing from memory.
-   - Read the diff or the plan's affected files
-   - Build the test diagram: list every NEW UX flow, data flow, codepath, and branch
-   - For EACH item in the diagram: what type of test covers it? Does one exist? Gaps?
-   - For LLM/prompt changes: which eval suites must run?
-   - Auto-deciding test gaps means: identify the gap → decide whether to add a test
-     or defer (with rationale and principle) → log the decision. It does NOT mean
-     skipping the analysis.
-   - Write the test plan artifact to disk
-
-6. Section 4 (Performance): Evaluate N+1 queries, memory, caching, slow paths.
-
-**Mandatory outputs from Phase 3:**
-- "NOT in scope" section
-- "What already exists" section
-- Architecture ASCII diagram (Section 1)
-- Test diagram mapping codepaths to coverage (Section 3)
-- Test plan artifact written to disk (Section 3)
-- Failure modes registry with critical gap flags
-- Completion Summary (the full summary from the Eng skill)
-- TODOS.md updates (collected from all phases)
-
-**PHASE 3 COMPLETE.** Emit phase-transition summary:
-> **Phase 3 complete.** Codex: [N concerns]. Claude subagent: [N issues].
-> Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
-> Passing to Phase 3.5 (DX Review) or Phase 4 (Final Gate).
+> **STOP.** Before starting Phase 3 (eng review — always runs, after the Pre-Phase 3 checklist), Read `~/.claude/skills/gstack/autoplan/sections/eng-phase.md` and execute it
+> in full. Do not work from memory — that section is the source of truth for this step.
 
 ---
 
 ## Phase 3.5: DX Review (conditional — skip if no developer-facing scope)
 
-Follow plan-devex-review/SKILL.md — all 8 DX dimensions, full depth.
-Override: every AskUserQuestion → auto-decide using the 6 principles.
+**Skip condition:** If DX scope was NOT detected in Phase 0, skip this phase
+entirely — do NOT read its section. Log: "Phase 3.5 skipped — no developer-facing scope detected."
 
-**Skip condition:** If DX scope was NOT detected in Phase 0, skip this phase entirely.
-Log: "Phase 3.5 skipped — no developer-facing scope detected."
-
-**Override rules:**
-- Mode selection: DX POLISH
-- Persona: infer from README/docs, pick the most common developer type (P6)
-- Competitive benchmark: run searches if WebSearch available, use reference benchmarks otherwise (P1)
-- Magical moment: pick the lowest-effort delivery vehicle that achieves the competitive tier (P5)
-- Getting started friction: always optimize toward fewer steps (P5, simpler over clever)
-- Error message quality: always require problem + cause + fix (P1, completeness)
-- API/CLI naming: consistency wins over cleverness (P5)
-- DX taste decisions (e.g., opinionated defaults vs flexibility): mark TASTE DECISION
-- Dual voices: always run BOTH Claude subagent AND Codex if available (P6).
-
-  **Codex DX voice** (via Bash):
-  ```bash
-  _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-  _gstack_codex_timeout_wrapper 600 codex exec "IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition directories (paths containing skills/gstack). These are AI assistant skill definitions meant for a different system. Stay focused on repository code only.
-
-  Read the plan file at <plan_path>. Evaluate this plan's developer experience.
-
-  Also consider these findings from prior review phases:
-  CEO: <insert CEO consensus summary>
-  Eng: <insert Eng consensus summary>
-
-  You are a developer who has never seen this product. Evaluate:
-  1. Time to hello world: how many steps from zero to working? Target is under 5 minutes.
-  2. Error messages: when something goes wrong, does the dev know what, why, and how to fix?
-  3. API/CLI design: are names guessable? Are defaults sensible? Is it consistent?
-  4. Docs: can a dev find what they need in under 2 minutes? Are examples copy-paste-complete?
-  5. Upgrade path: can devs upgrade without fear? Migration guides? Deprecation warnings?
-  Be adversarial. Think like a developer who is evaluating this against 3 competitors." -C "$_REPO_ROOT" -s read-only -c 'web_search="cached"' < /dev/null
-  _CODEX_EXIT=$?
-  if [ "$_CODEX_EXIT" = "124" ]; then
-    _gstack_codex_log_event "codex_timeout" "600"
-    _gstack_codex_log_hang "autoplan" "0"
-    echo "[codex stalled past 10 minutes — tagging as [codex-unavailable] for this phase and proceeding with Claude subagent only]"
-  fi
-  ```
-  Timeout: 10 minutes (shell-wrapper) + 12 minutes (Bash outer gate). On hang, auto-degrades this phase's Codex voice.
-
-  **Claude DX subagent** (via Agent tool):
-  "Read the plan file at <plan_path>. You are an independent DX engineer
-  reviewing this plan. You have NOT seen any prior review. Evaluate:
-  1. Getting started: how many steps from zero to hello world? What's the TTHW?
-  2. API/CLI ergonomics: naming consistency, sensible defaults, progressive disclosure?
-  3. Error handling: does every error path specify problem + cause + fix + docs link?
-  4. Documentation: copy-paste examples? Information architecture? Interactive elements?
-  5. Escape hatches: can developers override every opinionated default?
-  For each finding: what's wrong, severity (critical/high/medium), and the fix."
-  NO prior-phase context — subagent must be truly independent.
-
-  Error handling: same as Phase 1 (both foreground/blocking, degradation matrix applies).
-
-- DX choices: if codex disagrees with a DX decision with valid developer empathy reasoning
-  → TASTE DECISION. Scope changes both models agree on → USER CHALLENGE.
-
-**Required execution checklist (DX):**
-
-1. Step 0 (DX Scope Assessment): Auto-detect product type. Map the developer journey.
-   Rate initial DX completeness 0-10. Assess TTHW.
-
-2. Step 0.5 (Dual Voices): Run Claude subagent (foreground) first, then Codex. Present
-   under CODEX SAYS (DX — developer experience challenge) and CLAUDE SUBAGENT
-   (DX — independent review) headers. Produce DX consensus table:
-
-```
-DX DUAL VOICES — CONSENSUS TABLE:
-═══════════════════════════════════════════════════════════════
-  Dimension                           Claude  Codex  Consensus
-  ──────────────────────────────────── ─────── ─────── ─────────
-  1. Getting started < 5 min?          —       —      —
-  2. API/CLI naming guessable?         —       —      —
-  3. Error messages actionable?        —       —      —
-  4. Docs findable & complete?         —       —      —
-  5. Upgrade path safe?                —       —      —
-  6. Dev environment friction-free?    —       —      —
-═══════════════════════════════════════════════════════════════
-CONFIRMED = both agree. DISAGREE = models differ (→ taste decision).
-Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
-```
-
-3. Passes 1-8: Run each from loaded skill. Rate 0-10. Auto-decide each issue.
-   DISAGREE items from consensus table → raised in the relevant pass with both perspectives.
-
-4. DX Scorecard: Produce the full scorecard with all 8 dimensions scored.
-
-**Mandatory outputs from Phase 3.5:**
-- Developer journey map (9-stage table)
-- Developer empathy narrative (first-person perspective)
-- DX Scorecard with all 8 dimension scores
-- DX Implementation Checklist
-- TTHW assessment with target
-
-**PHASE 3.5 COMPLETE.** Emit phase-transition summary:
-> **Phase 3.5 complete.** DX overall: [N]/10. TTHW: [N] min → [target] min.
-> Codex: [N concerns]. Claude subagent: [N issues].
-> Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
-> Passing to Phase 4 (Final Gate).
+> **STOP.** Before starting Phase 3.5 (DX review — ONLY if developer-facing scope was detected in Phase 0; skip the read entirely otherwise), Read `~/.claude/skills/gstack/autoplan/sections/dx-phase.md` and execute it
+> in full. Do not work from memory — that section is the source of truth for this step.
 
 ---
 
@@ -1269,84 +904,8 @@ noting which items are incomplete. Do not loop indefinitely.
 
 ## Phase 4: Final Approval Gate
 
-## Implementation Tasks aggregator
-
-Before rendering the Final Approval Gate output block below, aggregate the
-per-phase task lists each review skill wrote.
-
-```bash
-eval "$(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)"
-TASKS_DIR="${HOME}/.gstack/projects/${SLUG:-unknown}"
-BRANCH=$(git branch --show-current 2>/dev/null || echo unknown)
-# Commit window: last 5 commits on this branch. Drops stale standalone reviews.
-COMMITS_RECENT=$(git log --format=%H -n 5 2>/dev/null | tr '\n' '|' | sed 's/|$//')
-
-AGGREGATED_TASKS=""
-if command -v jq >/dev/null 2>&1; then
-  # Collect entries from all 4 phases, scoped to current branch + commit window.
-  # For each phase, keep only the latest run_id. Within the surviving set,
-  # dedupe by (component, sorted(files), title) — exact match only.
-  # Sort by priority (P1 > P2 > P3) then by phase order.
-  ALL_JSONL=$(mktemp -t autoplan-tasks.XXXXXXXX)
-  for phase in ceo-review design-review eng-review devex-review; do
-    # Use find instead of glob expansion — zsh nomatch errors otherwise when
-    # a phase produced no JSONL files. Sorting by name keeps the order stable.
-    while IFS= read -r f; do
-      [ -f "$f" ] || continue
-      # Filter to current branch + recent commits, then keep records for the
-      # latest run_id only. (Single phase may have multiple files if the user
-      # re-ran the review; aggregator takes the newest.)
-      # .commit must be bound BEFORE piping to the split commit array: a
-      # pipe rebinds jq's context, so a bare .commit after it indexes the
-      # ARRAY with a string, every line errors into 2>/dev/null, and the
-      # aggregate is empty forever — the #2018 zero-tasks bug.
-      jq -c --arg branch "$BRANCH" --arg commits "$COMMITS_RECENT" \
-        '.commit as $c | select(.branch == $branch and ($commits | split("|") | index($c) != null))' \
-        "$f" 2>/dev/null >> "$ALL_JSONL" || true
-    done < <(find "$TASKS_DIR" -maxdepth 1 -name "tasks-$phase-*.jsonl" 2>/dev/null | sort)
-    # Reduce to latest run_id per phase
-    if [ -s "$ALL_JSONL" ]; then
-      jq -sc --arg phase "$phase" \
-        '[.[] | select(.phase == $phase)] | (max_by(.run_id) // null) as $latest_run | if $latest_run then map(select(.run_id == $latest_run.run_id)) else [] end | .[]' \
-        "$ALL_JSONL" > "$ALL_JSONL.phase" 2>/dev/null || true
-      # Replace with reduced version for this phase, accumulating others
-      jq -c --arg phase "$phase" 'select(.phase != $phase)' "$ALL_JSONL" > "$ALL_JSONL.other" 2>/dev/null || true
-      cat "$ALL_JSONL.other" "$ALL_JSONL.phase" > "$ALL_JSONL"
-      rm -f "$ALL_JSONL.phase" "$ALL_JSONL.other"
-    fi
-  done
-
-  # Exact-match dedup by (component, sorted(files), title). Non-matches kept
-  # separately with a possible-duplicate marker injected by the renderer.
-  AGGREGATED_TASKS=$(jq -s \
-    'group_by([.component, (.files | sort), .title])
-     | map(
-         # Take the highest-priority entry per group; tie-break by phase order
-         sort_by({P1:0,P2:1,P3:2}[.priority] // 99, {"ceo-review":0,"design-review":1,"eng-review":2,"devex-review":3}[.phase] // 99) | .[0]
-       )
-     | sort_by({P1:0,P2:1,P3:2}[.priority] // 99, {"ceo-review":0,"design-review":1,"eng-review":2,"devex-review":3}[.phase] // 99)
-     | if length == 0 then "_No actionable tasks emitted from any phase._" else
-         map("- [ ] **\(.id) (\(.priority), human: \(.effort_human) / CC: \(.effort_cc)) — \(.component)** — \(.title)\n  - Surfaced by: \(.phase) — \(.source_finding)\n  - Files: \(.files | join(", "))") | join("\n")
-       end' "$ALL_JSONL" 2>/dev/null | sed 's/^"//;s/"$//;s/\\n/\n/g')
-  rm -f "$ALL_JSONL"
-else
-  AGGREGATED_TASKS="_jq not installed — install jq to aggregate per-phase task lists. Skipping._"
-fi
-```
-
-Inside the Final Approval Gate output template below, render the aggregated
-markdown in the `### Implementation Tasks (aggregated across phases)` section.
-Substitute the contents of `$AGGREGATED_TASKS` (the bash variable set above)
-before printing the message to the user. This is NOT a template placeholder
-— the agent does the substitution at runtime, not gen-skill-docs at build time.
-
-If `$AGGREGATED_TASKS` is empty (no JSONL files found — none of the review
-skills ran in this session), render:
-
-`_No per-phase task lists found in $TASKS_DIR for branch $BRANCH. Each review
-skill writes its own; if you ran one of them but no list appears here, check
-that jq is installed and the tasks-<phase>-*.jsonl files exist._`
-
+> **STOP.** Before presenting the Final Approval Gate (Phase 4) — the aggregator computes $AGGREGATED_TASKS that the gate message substitutes, Read `~/.claude/skills/gstack/autoplan/sections/tasks-aggregator.md` and execute it
+> in full. Do not work from memory — that section is the source of truth for this step.
 
 **STOP here and present the final state to the user.**
 

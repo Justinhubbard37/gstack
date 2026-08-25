@@ -18,8 +18,10 @@ import * as path from 'path';
 const ROOT = path.resolve(import.meta.dir, '..');
 
 // review's specialist-dispatch guidance lives in its carved Review Army section
-// (Step 4.5 moved out of the skeleton), so the pin follows it there.
-const GENERATED_WITH_GUIDANCE = ['review/sections/review-army.md', 'autoplan/SKILL.md'];
+// (Step 4.5 moved out of the skeleton), so the pin follows it there. Same for
+// autoplan: the dual-voice dispatch (Phase 1 override rules) lives in its
+// carved CEO-phase section.
+const GENERATED_WITH_GUIDANCE = ['review/sections/review-army.md', 'autoplan/sections/ceo-phase.md'];
 
 // The inverted, post-2.1.198-inert phrasings. Checked across every generated
 // SKILL.md so the regression can't migrate to another skill unnoticed.
