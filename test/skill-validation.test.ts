@@ -277,14 +277,29 @@ describe('Update check preamble', () => {
 
   for (const skill of skillsWithUpdateCheck) {
     test(`${skill} update check line ends with || true`, () => {
+      // Token-reduction Phase 1: the inline `_UPD=$(gstack-update-check ...)`
+      // bash moved into bin/gstack-skill-start. The render must (a) invoke the
+      // script with the exact flag shape, (b) carry the exit-0 degraded-install
+      // fallback (the successor of the old `|| true` guard at the fence level),
+      // and (c) keep the UPGRADE_AVAILABLE interpretation prose that acts on
+      // the script's update-check STATUS output.
       const content = fs.readFileSync(path.join(ROOT, skill), 'utf-8');
-      // The second line of the bash block must end with || true
-      // to avoid exit code 1 when _UPD is empty (up to date)
-      const match = content.match(/\[ -n "\$_UPD" \].*$/m);
-      expect(match).not.toBeNull();
-      expect(match![0]).toContain('|| true');
+      expect(content).toContain('bin/gstack-skill-start');
+      expect(content).toMatch(/--skill "[^"]+" --model "[^"]+" --parent-pid "\$PPID"/);
+      expect(content).toContain('|| echo "SKILL_START: unavailable');
+      expect(content).toContain('UPGRADE_AVAILABLE');
     });
   }
+
+  test('bin/gstack-skill-start update check line ends with || true (new home of the inline guard)', () => {
+    // The `[ -n "$_UPD" ] ... || true` guard (empty _UPD must not exit 1 when
+    // up to date) moved verbatim into the consolidated preamble script. Pin it
+    // there so the invariant survives in its new home.
+    const script = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), 'utf-8');
+    const match = script.match(/\[ -n "\$_UPD" \].*$/m);
+    expect(match).not.toBeNull();
+    expect(match![0]).toContain('|| true');
+  });
 
   test('all skills with update check are generated from .tmpl', () => {
     for (const skill of skillsWithUpdateCheck) {
@@ -294,16 +309,19 @@ describe('Update check preamble', () => {
   });
 
   test('update check bash block exits 0 when up to date', () => {
-    // Simulate the exact preamble command from SKILL.md
+    // Simulate the exact update-check lines from bin/gstack-skill-start
+    // (per-line `|| true`, sanitize pipe included)
     const result = Bun.spawnSync(['bash', '-c',
-      '_UPD=$(echo "" || true); [ -n "$_UPD" ] && echo "$_UPD" || true'
+      '_sanitize() { sed "s/GSTACK_INSTRUCTION/GSTACK-INSTRUCTION-(stripped)/g"; }; ' +
+      '_UPD=$(echo "" || true); [ -n "$_UPD" ] && printf "%s\\n" "$_UPD" | _sanitize || true'
     ], { stdout: 'pipe', stderr: 'pipe' });
     expect(result.exitCode).toBe(0);
   });
 
   test('update check bash block exits 0 when upgrade available', () => {
     const result = Bun.spawnSync(['bash', '-c',
-      '_UPD=$(echo "UPGRADE_AVAILABLE 0.3.3 0.4.0" || true); [ -n "$_UPD" ] && echo "$_UPD" || true'
+      '_sanitize() { sed "s/GSTACK_INSTRUCTION/GSTACK-INSTRUCTION-(stripped)/g"; }; ' +
+      '_UPD=$(echo "UPGRADE_AVAILABLE 0.3.3 0.4.0" || true); [ -n "$_UPD" ] && printf "%s\\n" "$_UPD" | _sanitize || true'
     ], { stdout: 'pipe', stderr: 'pipe' });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString().trim()).toBe('UPGRADE_AVAILABLE 0.3.3 0.4.0');
@@ -617,10 +635,24 @@ describe('v0.4.1 preamble features', () => {
 
   for (const skill of skillsWithPreamble) {
     test(`${skill} contains session awareness`, () => {
+      // Token-reduction Phase 1: the inline `_SESSIONS=$(find ~/.gstack/sessions ...)`
+      // bash moved into bin/gstack-skill-start. The render still carries session
+      // identity (--parent-pid feeds the sessions dir with the harness pid) and
+      // the SESSION_KIND STATUS-line interpretation prose.
       const content = fs.readFileSync(path.join(ROOT, skill), 'utf-8');
-      expect(content).toContain('_SESSIONS');
+      expect(content).toMatch(/--parent-pid "\$PPID"/);
+      expect(content).toContain('SESSION_KIND');
     });
   }
+
+  test('bin/gstack-skill-start owns the session-tracking machinery (new home of _SESSIONS)', () => {
+    // The sessions-dir touch + stale-session cleanup that every preamble used
+    // to inline now lives in the consolidated script — pin it there.
+    const script = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), 'utf-8');
+    expect(script).toContain('mkdir -p "$_GH/sessions"');
+    expect(script).toContain('touch "$_GH/sessions/$PARENT_PID"');
+    expect(script).toContain('-mmin +120'); // 120-min freshness window survives the move
+  });
 
   for (const skill of skillsWithPreamble) {
     test(`${skill} contains escalation protocol`, () => {
@@ -1459,7 +1491,11 @@ describe('Codex skill', () => {
   });
 
   test('codex integration in /plan-eng-review offers plan critique', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'plan-eng-review', 'SKILL.md'), 'utf-8');
+    // Carved skill: the Codex outside-voice plan critique lives in
+    // sections/review-sections.md — read the skeleton+sections union. (The
+    // skeleton alone used to match "Codex" only via an inline-bash comment
+    // that the gstack-skill-start consolidation removed.)
+    const content = readSkillUnion('plan-eng-review');
     expect(content).toContain('Codex');
     expect(content).toContain('codex exec');
   });
@@ -1795,9 +1831,14 @@ describe('Codex skill validation', () => {
 
 describe('Repo mode preamble validation', () => {
   test('generated SKILL.md preamble contains REPO_MODE output', () => {
+    // Token-reduction Phase 1: the inline `gstack-repo-mode` call moved into
+    // bin/gstack-skill-start. The render pins the script invocation; the
+    // script pins the REPO_MODE echo + the gstack-repo-mode call.
     const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('REPO_MODE:');
-    expect(content).toContain('gstack-repo-mode');
+    expect(content).toContain('bin/gstack-skill-start');
+    const script = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), 'utf-8');
+    expect(script).toContain('REPO_MODE:');
+    expect(script).toContain('gstack-repo-mode');
   });
 
   test('tier 3+ skills contain See Something Say Something section', () => {

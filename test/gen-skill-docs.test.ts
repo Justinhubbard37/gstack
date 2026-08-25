@@ -28,6 +28,15 @@ function readShipUnion(): string {
   return readSkillUnion('ship');
 }
 
+// Token-reduction Phase 1: the preamble's inline bash (session bookkeeping,
+// config echoes, telemetry producers, artifacts sync) moved into
+// bin/gstack-skill-start / bin/gstack-skill-end. The render carries a one-line
+// invocation fence + interpretation prose. Assertions that pinned inline-bash
+// internals now pin the scripts (the new home); render-side assertions pin the
+// fence + prose. Script behavior is pinned by test/gstack-skill-start.test.ts.
+const SKILL_START_SCRIPT = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), 'utf-8');
+const SKILL_END_SCRIPT = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-end'), 'utf-8');
+
 function extractDescription(content: string): string {
   const fmEnd = content.indexOf('\n---', 4);
   expect(fmEnd).toBeGreaterThan(0);
@@ -315,7 +324,9 @@ describe('gen-skill-docs', () => {
     expect(content).not.toContain('contributor-logs');
     expect(content).toContain('Operational Self-Improvement');
     expect(content).toContain('gstack-learnings-log');
-    expect(content).toContain('gstack-learnings-search --limit 3');
+    // The learnings-resurface call moved from the inline preamble bash into
+    // the skill-start script (Phase 1) — same command, new home.
+    expect(SKILL_START_SCRIPT).toContain('gstack-learnings-search" --limit 3');
   });
 
   test('generated SKILL.md with LEARNINGS_LOG contains operational type', () => {
@@ -324,16 +335,20 @@ describe('gen-skill-docs', () => {
     expect(content).toContain('operational');
   });
 
-  test('generated SKILL.md contains session awareness', () => {
+  test('session awareness lives in gstack-skill-start (registry touch + stale cleanup)', () => {
+    // The sessions registry moved from inline preamble bash into the script:
+    // it records the harness pid (--parent-pid identity) and expires entries
+    // older than 120 minutes.
+    expect(SKILL_START_SCRIPT).toContain('sessions/$PARENT_PID');
+    expect(SKILL_START_SCRIPT).toContain('-mmin +120');
+    // The render keeps the completion-status protocol the sessions feed into.
     const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('_SESSIONS');
     expect(content).toContain('RECOMMENDATION');
   });
 
-  test('generated SKILL.md contains branch detection', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('_BRANCH');
-    expect(content).toContain('git branch --show-current');
+  test('branch detection lives in gstack-skill-start and is echoed as BRANCH', () => {
+    expect(SKILL_START_SCRIPT).toContain('_BRANCH=$(git branch --show-current');
+    expect(SKILL_START_SCRIPT).toContain('echo "BRANCH: $_BRANCH"');
   });
 
   // #2001: update_check: false silences the binary but the upgrade-handling
@@ -343,19 +358,22 @@ describe('gen-skill-docs', () => {
   // JUST_UPGRADED prose on it — the same echo-then-gate convention every other
   // flag (PROACTIVE, SKILL_PREFIX, EXPLAIN_LEVEL, QUESTION_TUNING) follows.
   test('update_check opt-out gates preamble echo and upgrade-handling prose (issue #2001)', () => {
+    // The config-echo cluster moved into gstack-skill-start: the flag must be
+    // read and echoed there so the render's instruction layer can act on it.
+    expect(SKILL_START_SCRIPT, 'script must read update_check config').toContain('_UPDATE_CHECK=$(');
+    expect(SKILL_START_SCRIPT, 'script must echo UPDATE_CHECK').toContain('echo "UPDATE_CHECK: $_UPDATE_CHECK"');
+    // Whenever a preamble-carrying render ships the upgrade-handling prose, it
+    // must gate on the echoed flag — same echo-then-gate convention as
+    // PROACTIVE/SKILL_PREFIX. (gstack-upgrade itself is out of scope: it has
+    // no preamble fence and handling UPGRADE_AVAILABLE is its whole job.)
     let checked = 0;
     for (const skill of CLAUDE_GENERATED_SKILLS) {
       const content = fs.readFileSync(path.join(ROOT, skill.dir, 'SKILL.md'), 'utf-8');
-      // Scope: only skills that render the runtime config-echo cluster.
-      if (!content.includes('echo "QUESTION_TUNING: $_QUESTION_TUNING"')) continue;
+      if (!content.includes('gstack-skill-start')) continue;
+      if (!content.includes('UPGRADE_AVAILABLE <old> <new>')) continue;
       checked++;
-      expect(content, `${skill.dir} must echo UPDATE_CHECK`).toContain('echo "UPDATE_CHECK: $_UPDATE_CHECK"');
-      expect(content, `${skill.dir} must read update_check config`).toContain('_UPDATE_CHECK=$(');
-      // Whenever the upgrade-handling prose ships, it must gate on the flag.
-      if (content.includes('UPGRADE_AVAILABLE <old> <new>')) {
-        expect(content, `${skill.dir} upgrade prose must gate on UPDATE_CHECK`)
-          .toContain('If `UPDATE_CHECK` is `"false"`');
-      }
+      expect(content, `${skill.dir} upgrade prose must gate on UPDATE_CHECK`)
+        .toContain('If `UPDATE_CHECK` is `"false"`');
     }
     // Guard against the scope filter silently matching nothing.
     expect(checked).toBeGreaterThan(0);
@@ -377,9 +395,12 @@ describe('gen-skill-docs', () => {
     expect(content).not.toContain('## Completeness Principle');
   });
 
-  test('generated SKILL.md contains telemetry line', () => {
+  test('telemetry producer lives in the scripts; render documents the analytics sink', () => {
+    // The skill-usage.jsonl producers moved into the scripts (Phase 1).
+    expect(SKILL_START_SCRIPT).toContain('analytics/skill-usage.jsonl');
+    expect(SKILL_END_SCRIPT).toContain('analytics/skill-usage.jsonl');
+    // The render still tells the model where telemetry lands.
     const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('skill-usage.jsonl');
     expect(content).toContain('~/.gstack/analytics');
   });
 
@@ -499,7 +520,13 @@ describe('gen-skill-docs', () => {
     ];
     for (const skill of PREAMBLE_SKILLS) {
       const content = fs.readFileSync(path.join(ROOT, skill.dir, 'SKILL.md'), 'utf-8');
-      expect(content).toContain(`"skill":"${skill.name}"`);
+      // The skill name now travels as --skill into gstack-skill-start (the
+      // preamble fence) and gstack-skill-end (the telemetry epilogue) — the
+      // scripts write it into the JSONL events.
+      expect(content, `${skill.dir} preamble fence must pass its own name`)
+        .toMatch(new RegExp(`--skill "${skill.name}" --model`));
+      expect(content, `${skill.dir} epilogue must pass its own name`)
+        .toContain(`gstack-skill-end --skill "${skill.name}"`);
     }
   });
 
@@ -1563,11 +1590,13 @@ describe('parameterized resolver support', () => {
 describe('preamble routing injection', () => {
   const shipContent = readShipUnion();
 
-  test('preamble bash checks for routing section in CLAUDE.md and AGENTS.md', () => {
+  test('routing probe checks CLAUDE.md and AGENTS.md (now in gstack-skill-start)', () => {
     // #2500: the probe iterates CLAUDE.md AND AGENTS.md — non-Claude hosts
-    // route skills via AGENTS.md, the cross-harness convention file.
-    expect(shipContent).toContain('for _RF in CLAUDE.md AGENTS.md');
-    expect(shipContent).toContain('grep -q "## Skill routing" "$_RF"');
+    // route skills via AGENTS.md, the cross-harness convention file. The bash
+    // moved into gstack-skill-start; the render acts on the echoed HAS_ROUTING.
+    expect(SKILL_START_SCRIPT).toContain('for _RF in CLAUDE.md AGENTS.md');
+    expect(SKILL_START_SCRIPT).toContain('grep -q "## Skill routing" "$_RF"');
+    expect(SKILL_START_SCRIPT).toContain('echo "HAS_ROUTING: $_HAS_ROUTING"');
     expect(shipContent).toContain('HAS_ROUTING');
   });
 
@@ -2114,7 +2143,9 @@ describe('Codex generation (--host codex)', () => {
       expect(override.exitCode).toBe(0);
       const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
       expect(content).toContain('Model-Specific Behavioral Patch (claude)');
-      expect(content).toContain('MODEL_OVERLAY: claude');
+      // The overlay now travels as --model into gstack-skill-start, which
+      // echoes MODEL_OVERLAY at runtime.
+      expect(content).toContain('--model "claude"');
     } finally {
       // Restore the host-default render — later tests and the host-config
       // golden read this tree.
@@ -2127,6 +2158,7 @@ describe('Codex generation (--host codex)', () => {
     }
     const restored = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
     expect(restored).toContain('Model-Specific Behavioral Patch (gpt)');
+    expect(restored).toContain('--model "gpt"');
   });
 });
 
@@ -2813,13 +2845,18 @@ describe('discover-skills hidden directory filtering', () => {
 });
 
 describe('telemetry', () => {
-  test('generated SKILL.md contains telemetry start block', () => {
+  test('telemetry start block lives in gstack-skill-start; render notes the handoff keys', () => {
+    // The start-block bash moved into the script (Phase 1): it reads the
+    // config, mints the session identity, and echoes the STATUS keys.
+    expect(SKILL_START_SCRIPT).toContain('_TEL_START=$(date +%s)');
+    expect(SKILL_START_SCRIPT).toContain('_SESSION_ID=');
+    expect(SKILL_START_SCRIPT).toContain('echo "TELEMETRY:');
+    expect(SKILL_START_SCRIPT).toContain('echo "TEL_PROMPTED:');
+    expect(SKILL_START_SCRIPT).toMatch(/gstack-config" get telemetry/);
+    // The render must tell the model to carry SESSION_ID/TEL_START to skill end.
     const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('_TEL_START');
-    expect(content).toContain('_SESSION_ID');
-    expect(content).toContain('TELEMETRY:');
-    expect(content).toContain('TEL_PROMPTED:');
-    expect(content).toContain('gstack-config get telemetry');
+    expect(content).toContain('SESSION_ID');
+    expect(content).toContain('TEL_START');
   });
 
   test('generated SKILL.md contains telemetry opt-in prompt', () => {
@@ -2831,21 +2868,26 @@ describe('telemetry', () => {
     expect(content).toContain('gstack-config set telemetry off');
   });
 
-  test('generated SKILL.md contains telemetry epilogue', () => {
+  test('generated SKILL.md contains telemetry epilogue (one gstack-skill-end call)', () => {
     const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
     expect(content).toContain('Telemetry (run last)');
-    expect(content).toContain('gstack-telemetry-log');
-    expect(content).toContain('_TEL_END');
-    expect(content).toContain('_TEL_DUR');
-    expect(content).toContain('SKILL_NAME');
-    expect(content).toContain('OUTCOME');
+    expect(content).toContain('gstack-skill-end --skill "gstack" --outcome OUTCOME');
+    expect(content).toContain('--tel-start "TEL_START"');
     expect(content).toContain('PLAN MODE EXCEPTION');
+    // The duration math + remote-log dispatch moved into gstack-skill-end.
+    expect(SKILL_END_SCRIPT).toContain('_TEL_END');
+    expect(SKILL_END_SCRIPT).toContain('_TEL_DUR');
+    expect(SKILL_END_SCRIPT).toContain('SKILL_NAME');
+    expect(SKILL_END_SCRIPT).toContain('OUTCOME');
+    expect(SKILL_END_SCRIPT).toContain('gstack-telemetry-log');
   });
 
-  test('generated SKILL.md contains pending marker handling', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('.pending');
-    expect(content).toContain('_pending_finalize');
+  test('pending marker handling lives in the scripts', () => {
+    // gstack-skill-start finalizes stale markers; gstack-skill-end clears the
+    // session's own marker.
+    expect(SKILL_START_SCRIPT).toContain("-name '.pending-*'");
+    expect(SKILL_START_SCRIPT).toContain('_pending_finalize');
+    expect(SKILL_END_SCRIPT).toContain('.pending-$SESSION_ID');
   });
 
   test('telemetry blocks appear in all skill files that use PREAMBLE', () => {
@@ -2854,8 +2896,9 @@ describe('telemetry', () => {
       const skillPath = path.join(ROOT, skill, 'SKILL.md');
       if (fs.existsSync(skillPath)) {
         const content = fs.readFileSync(skillPath, 'utf-8');
-        expect(content).toContain('_TEL_START');
         expect(content).toContain('Telemetry (run last)');
+        expect(content).toContain(`gstack-skill-end --skill "${skill}"`);
+        expect(content).toContain('--tel-start "TEL_START"');
       }
     }
   });
@@ -3701,7 +3744,11 @@ describe('PREAMBLE resolution requires declared preamble-tier', () => {
 // user scope, so a correctly configured project-scoped brain was invisible.
 // ---------------------------------------------------------------------------
 describe('brain-sync block reads project-scoped MCP registrations (#2499)', () => {
-  const rendered = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
+  // Phase 1: the artifacts-sync bash (including the MCP-scope jq probe) moved
+  // from the rendered SKILL.md into bin/gstack-skill-start. Pin the LIVE
+  // script bytes — same assertions, new home. The render carries only the
+  // ARTIFACTS_SYNC interpretation prose.
+  const rendered = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), 'utf-8');
 
   test('rendered _GBRAIN_MCP_ENTRY jq resolves project scope with nearest-ancestor cwd match', () => {
     const line = rendered.split('\n').find((l) => l.includes('_GBRAIN_MCP_ENTRY=$('));

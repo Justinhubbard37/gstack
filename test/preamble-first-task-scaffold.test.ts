@@ -153,8 +153,13 @@ describe('first-run-guidance preamble wiring (generated)', () => {
   const md = fs.readFileSync(path.join(ROOT, 'ship', 'SKILL.md'), 'utf-8');
 
   test('detection is gated to the first-ever run only (ACTIVATED=no, not headless)', () => {
-    expect(md).toContain('if [ "$_ACTIVATED" = "no" ] && [ "$_SESSION_KIND" != "headless" ]');
-    expect(md).toContain('gstack-first-task-detect');
+    // Token-reduction Phase 1: the gating bash moved from the rendered
+    // preamble into bin/gstack-skill-start — same gate, new home. The render
+    // acts on the echoed FIRST_TASK/ACTIVATED keys (asserted below).
+    const script = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), 'utf-8');
+    expect(script).toContain('if [ "$_ACTIVATED" = "no" ] && [ "$_SESSION_KIND" != "headless" ]');
+    expect(script).toContain('gstack-first-task-detect');
+    expect(md).toContain('FIRST_TASK:');
   });
 
   test('emits the unified first-run guidance section branching on ACTIVATED', () => {
