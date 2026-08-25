@@ -35,9 +35,19 @@ export const BUDGET_FIXTURE_PATH = path.join(REPO_ROOT, 'test', 'fixtures', 'con
 export const ALWAYS_ON_HEADROOM = 1.05;
 export const EAGER_HEADROOM = 1.10;
 
+/**
+ * Skill names come from path.relative in buildBill, which yields backslash
+ * separators on Windows. The fixture keys are POSIX. Normalize once here so
+ * the filter, the fixture keys, and checkBudget's name matching agree on
+ * every platform (the ratchet test runs in the curated Windows lane).
+ */
+export function toPosixName(name: string): string {
+  return name.split(path.sep).join('/');
+}
+
 /** Skills that exist only as context-bill test data — never budgeted. */
 export function isFixtureSkill(name: string): boolean {
-  return name.startsWith('test/');
+  return toPosixName(name).startsWith('test/fixtures/');
 }
 
 export interface ContextBudget {
@@ -46,20 +56,32 @@ export interface ContextBudget {
   eagerPerInvocation: Record<string, number>;
 }
 
-/** The bill the ratchet grades: repo tree minus test-fixture skill dirs. */
+/**
+ * The bill the ratchet grades: repo tree minus test-fixture skill dirs, with
+ * POSIX-normalized names and ALL totals rebuilt from the filtered list (a
+ * partially-updated totals object would hand fixture-polluted numbers to any
+ * future consumer of the perInvocation/totalMd fields).
+ */
 export function buildRatchetBill(root: string = REPO_ROOT): Bill {
   const bill = buildBill(root);
-  const skills = bill.skills.filter((s) => !isFixtureSkill(s.name));
+  const skills = bill.skills
+    .map((s) => ({ ...s, name: toPosixName(s.name) }))
+    .filter((s) => !isFixtureSkill(s.name));
   return {
     ...bill,
     skills,
     totals: {
-      ...bill.totals,
       skillCount: skills.length,
       alwaysOnBytes: skills.reduce((n, s) => n + s.frontmatterBytes, 0),
       alwaysOnTokens: skills.reduce((n, s) => n + s.frontmatterTokens, 0),
       eagerBytesBySkill: Object.fromEntries(skills.map((s) => [s.name, s.eagerBytes])),
       eagerTokensBySkill: Object.fromEntries(skills.map((s) => [s.name, Math.round(s.eagerTokens)])),
+      perInvocationBytesBySkill: Object.fromEntries(skills.map((s) => [s.name, s.perInvocationBytes])),
+      perInvocationTokensBySkill: Object.fromEntries(
+        skills.map((s) => [s.name, Math.round(s.perInvocationTokens)]),
+      ),
+      totalMdBytes: skills.reduce((n, s) => n + s.totalMdBytes, 0),
+      totalMdTokens: skills.reduce((n, s) => n + s.totalMdTokens, 0),
     },
   };
 }

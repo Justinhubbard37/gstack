@@ -26,10 +26,16 @@
  */
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
+import * as path from 'path';
 import { checkBudget } from '../lib/context-bill';
 import {
   buildRatchetBill,
+  captureContextBudget,
+  isFixtureSkill,
+  toPosixName,
   BUDGET_FIXTURE_PATH,
+  ALWAYS_ON_HEADROOM,
+  EAGER_HEADROOM,
   type ContextBudget,
 } from './helpers/capture-context-budget';
 
@@ -43,10 +49,13 @@ const bill = buildRatchetBill();
 
 describe('context-budget ratchet', () => {
   test('always-on + eager ledgers stay under the fixture ceilings', () => {
+    // actual === null means "fixture names a skill missing from the tree" —
+    // the dedicated stale-fixture test below owns that case with a clearer
+    // message; filtering here keeps one failure from producing two reports.
     const violations = checkBudget(bill, {
       alwaysOnTotal: budget.alwaysOnTotal,
       eagerPerInvocation: budget.eagerPerInvocation,
-    });
+    }).filter((v) => v.actual !== null);
     const detail = violations
       .map((v) => `  ${v.ceiling}: ${v.actual} tok > limit ${v.limit}\n    ${v.files.join('\n    ')}`)
       .join('\n');
@@ -74,5 +83,31 @@ describe('context-budget ratchet', () => {
       stale,
       `Fixture carries ceilings for removed skills: ${stale.join(', ')}. Re-run the capture.`,
     ).toEqual([]);
+  });
+
+  // Windows lane: skill names arrive backslash-separated from path.relative;
+  // the normalization must make the filter and the POSIX fixture keys agree.
+  test('name normalization handles Windows separators', () => {
+    expect(toPosixName(['test', 'fixtures', 'context-bill', 'tree-a', 'alpha'].join(path.sep))).toBe(
+      'test/fixtures/context-bill/tree-a/alpha',
+    );
+    expect(isFixtureSkill(['test', 'fixtures', 'x'].join(path.sep))).toBe(true);
+    expect(isFixtureSkill('test/fixtures/context-bill/tree-a/alpha')).toBe(true);
+    expect(isFixtureSkill('openclaw/skills/gstack-openclaw-retro')).toBe(false);
+    expect(bill.skills.every((s) => !s.name.includes('\\'))).toBe(true);
+  });
+
+  // Round-trip: a fresh capture must pass its own ratchet, and the headroom
+  // math must be exactly ceil(actual x headroom) — the recovery protocol is
+  // "re-run the capture", so a corrupt write side poisons every future fixture.
+  test('captureContextBudget round-trips against its own bill', () => {
+    const TREE_A = path.join(import.meta.dir, 'fixtures', 'context-bill', 'tree-a');
+    const capture = captureContextBudget(TREE_A);
+    const treeBill = buildRatchetBill(TREE_A);
+    expect(checkBudget(treeBill, capture)).toEqual([]);
+    for (const s of treeBill.skills) {
+      expect(capture.eagerPerInvocation[s.name]).toBe(Math.ceil(s.eagerTokens * EAGER_HEADROOM));
+    }
+    expect(capture.alwaysOnTotal).toBe(Math.ceil(treeBill.totals.alwaysOnTokens * ALWAYS_ON_HEADROOM));
   });
 });

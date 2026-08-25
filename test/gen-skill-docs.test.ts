@@ -3295,6 +3295,29 @@ describe('voice-triggers processing', () => {
     const frontmatter = content.slice(0, fmEnd);
     expect(frontmatter).not.toContain('voice-triggers:');
   });
+
+  // Gen-time-only keys: interactive + benefits-from are read from the .tmpl by
+  // buildContext; the generated copy has no reader (the host reads name/
+  // description/allowed-tools/hooks; gbrain: is runtime-read and NOT stripped).
+  // Pin the strip so a stripFields refactor can't silently re-add the always-on
+  // frontmatter weight — mirrors the voice-triggers pins above.
+  test('generated SKILL.md strips gen-time-only keys the .tmpl still declares', () => {
+    const tmpl = fs.readFileSync(path.join(ROOT, 'plan-ceo-review', 'SKILL.md.tmpl'), 'utf-8');
+    const tmplFm = tmpl.slice(0, tmpl.indexOf('\n---', 4));
+    expect(tmplFm).toContain('interactive:');
+    expect(tmplFm).toContain('benefits-from:');
+
+    const generated = fs.readFileSync(path.join(ROOT, 'plan-ceo-review', 'SKILL.md'), 'utf-8');
+    const genFm = generated.slice(0, generated.indexOf('\n---', 4));
+    expect(genFm).not.toContain('interactive:');
+    expect(genFm).not.toContain('benefits-from:');
+
+    // The runtime-read and host-read keys survive the strip.
+    const investigate = fs.readFileSync(path.join(ROOT, 'investigate', 'SKILL.md'), 'utf-8');
+    const invFm = investigate.slice(0, investigate.indexOf('\n---', 4));
+    expect(invFm).toContain('hooks:');
+    expect(invFm).toContain('gbrain:');
+  });
 });
 
 describe('plan-mode-info resolver (handshake-replacement)', () => {
