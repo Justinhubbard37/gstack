@@ -629,6 +629,66 @@ then roll corpus-wide.
 **Effort estimate:** L (human team) → M (CC+gstack)
 **Priority:** P3
 **Depends on / blocked by:** The section pipeline (shipped v1.54). No hard blocker.
+**Status update (2026-08-25):** IN FLIGHT — superseded by the approved token-reduction
+program on branch `prompt-token-load-reduction` (plan reviewed via CEO + eng + 2x
+outside voice). Phases 1-3 of that program implement this carve in a stronger form
+(bash → `bin/gstack-skill-start`/`-end`, conditional onboarding echo, AUQ slim).
+Phase 0 (context-budget ratchet, dead-key strip) already landed on the branch.
+
+### P3: Output-template carve wave — REVIEW_DASHBOARD + PLAN_FILE_REVIEW_REPORT
+
+**What:** Carve the two output-format resolver blocks — the review dashboard table
+shape and the plan-file report skeleton — out of the six skills that inline them
+(`{{REVIEW_DASHBOARD}}` 5,940B ×6 + `{{PLAN_FILE_REVIEW_REPORT}}` 5,989B ×6,
+~71.6KB total) into on-demand sections or a shared reference doc.
+
+**Why:** Largest remaining duplicated block after the preamble program lands. These
+are output TEMPLATES (table shapes, markdown skeletons), not behavioral steps — the
+classic carve candidate.
+
+**Pros:** ~1.4KB×2 saved per invocation across 6 review-family skills; single source
+for the dashboard/report format.
+**Cons:** Both blocks are partially pinned (`test/skill-e2e-review-attribution.test.ts`
+slices `## Review Readiness Dashboard`; `test/skill-validation.test.ts:1566` asserts a
+specific row) — needs a pin-relocation design first, which is why it was deferred from
+the main program.
+
+**Context:** Deferred from the token-reduction program's Phase 4 (plan on branch
+`prompt-token-load-reduction`, "NOT carving" list). The carve pipeline and guard
+registry to use are the same as carve wave 4. Start by mapping every test that slices
+or asserts dashboard/report text, then decide skeleton-vs-section placement per pin.
+
+**Effort estimate:** M (human team) → S (CC+gstack)
+**Priority:** P3
+**Depends on / blocked by:** Token-reduction program Phases 1-4 landing (carve
+machinery churn would conflict).
+
+### P3: Revisit plan-ceo-review doctrine carve after the preamble program lands
+
+**What:** Re-evaluate carving plan-ceo-review's ~13KB of always-loaded doctrine
+(`## Prerequisite Skill Offer` 7,125B + `## Cognitive Patterns` 3,336B +
+`## Philosophy` 2,535B) into its existing sections/ dir.
+
+**Why:** Deferred from the token-reduction program because the skeleton had only
+~555B of headroom under its carve-guard ceiling and the doctrine is behavior-core.
+The preamble phases shrink the skeleton by ~22KB, which changes the tradeoff: the
+ceiling gets recomputed and the doctrine becomes the dominant remaining always-loaded
+block in the skill.
+
+**Pros:** ~3.2K tokens off every /plan-ceo-review invocation if the doctrine reads
+lazily without behavior loss.
+**Cons:** The Cognitive Patterns section shapes the review voice throughout — a
+requiredReads guard + A/B eval (same design as the design-doctrine carve) is mandatory,
+and the answer may legitimately be "keep it inline."
+
+**Context:** Filed from the token-reduction program's CEO review ("NOT carving" list).
+Measure with `bin/gstack-context-bill --skill plan-ceo-review` after Phase 3 lands;
+use the carve-guards registry + a behavioral loading eval if carved.
+
+**Effort estimate:** S (human team) → S (CC+gstack)
+**Priority:** P3
+**Depends on / blocked by:** Token-reduction program Phase 3 (re-baseline + recomputed
+carve ceilings).
 
 ## gbrowser memory follow-ups (filed via /plan-eng-review + /codex on the v1.49 leak-fix PR)
 
