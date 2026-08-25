@@ -297,6 +297,9 @@ echo "PRS_REFERENCED: $(printf '%s' "$_PRS" | wc -w | tr -d ' ')"
 [ -n "$_PRS" ] && echo "PR_REFS: $_PRS" || true
 
 # ── Test health (repo-wide + window) ─────────────────────────────────────────
+# Deliberately suffix-only (narrower than is_test's dir-based patterns): the
+# repo-wide census counts conventional test FILES; is_test additionally counts
+# dir-homed helpers toward test-insertion ratios.
 _TF_TOTAL=$(git ls-files 2>/dev/null | grep -cE '(\.test\.|\.spec\.|_test\.|_spec\.)' || true)
 case "$_TF_TOTAL" in ''|*[!0-9]*) _TF_TOTAL=0 ;; esac
 echo "TEST_FILES_TOTAL: $_TF_TOTAL"

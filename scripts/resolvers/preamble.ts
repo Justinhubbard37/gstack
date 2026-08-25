@@ -28,8 +28,6 @@ import {
   generatePlanModeInfo,
 } from './preamble/generate-completion-status';
 
-// One-time onboarding prompts
-
 // Host-specific instructions
 import { generateBrainHealthInstruction } from './preamble/generate-brain-health-instruction';
 
