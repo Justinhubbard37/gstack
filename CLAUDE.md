@@ -226,12 +226,13 @@ conversation. The failure message carries the re-measure + ratchet protocol.
 tree (always-on vs per-invocation, `--diff`, `--budget`; `--exact` opts into the
 real tokenizer and POSTs file text to api.anthropic.com with an egress receipt).
 
-A third enforced ceiling is the context-budget ratchet:
-`test/context-budget-ratchet.test.ts` (free, runs in `bun run test`) grades the
-two ledgers the other guards don't cover — the always-on FULL-frontmatter
-aggregate and each skill's per-invocation eager tokens (SKILL.md + forced-read
-references) — against `test/fixtures/context-budget.json`. A skill that grows
-past its ceiling fails; a new skill fails until it's consciously budgeted. For
+The context-budget ratchet (`test/context-budget-ratchet.test.ts`, free, runs
+in `bun run test`) pins ABSOLUTE ceilings on two more ledgers: the always-on
+FULL-frontmatter aggregate (catalog-budget counts only name+description) and
+each skill's per-invocation eager tokens (SKILL.md + forced-read references —
+size floors and parity ratios guard these relatively, not absolutely), graded
+against `test/fixtures/context-budget.json`. A skill that grows past its
+ceiling fails; a new skill fails until it's consciously budgeted. For
 legitimate growth or a landed reduction, re-run
 `bun test/helpers/capture-context-budget.ts` and commit the refreshed fixture
 in the same commit, so ceilings ratchet down and every win is locked.
