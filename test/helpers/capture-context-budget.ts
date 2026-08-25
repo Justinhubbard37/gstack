@@ -57,16 +57,49 @@ export interface ContextBudget {
 }
 
 /**
+ * The root SKILL.md's bill name falls back to the checkout directory's
+ * basename (path.relative gives '' at the root), which is machine-specific:
+ * a Conductor worktree named anything but "gstack" would mismatch the fixture
+ * key, and the documented "re-run the capture" recovery would then bake the
+ * local dirname INTO the committed fixture. Pin it to the skill's frontmatter
+ * name instead — stable across every clone.
+ */
+export const ROOT_SKILL_KEY = 'gstack';
+
+/**
  * The bill the ratchet grades: repo tree minus test-fixture skill dirs, with
- * POSIX-normalized names and ALL totals rebuilt from the filtered list (a
- * partially-updated totals object would hand fixture-polluted numbers to any
- * future consumer of the perInvocation/totalMd fields).
+ * POSIX-normalized names, the root skill pinned to ROOT_SKILL_KEY, symlink
+ * aliases deduped by realpath (connect-chrome -> open-gstack-browser; on
+ * Windows checkouts the symlink materializes as a plain file and the alias
+ * dir vanishes, so budgeting it would make the stale-ceiling test
+ * platform-dependent — same dedupe the skill census uses), and ALL totals
+ * rebuilt from the filtered list (a partially-updated totals object would
+ * hand fixture-polluted numbers to any future consumer of the
+ * perInvocation/totalMd fields).
  */
 export function buildRatchetBill(root: string = REPO_ROOT): Bill {
   const bill = buildBill(root);
-  const skills = bill.skills
-    .map((s) => ({ ...s, name: toPosixName(s.name) }))
+  const candidates = bill.skills
+    .map((s) => ({
+      ...s,
+      name: s.dir === bill.root ? ROOT_SKILL_KEY : toPosixName(s.name),
+    }))
     .filter((s) => !isFixtureSkill(s.name));
+  // One ceiling per PHYSICAL skill: group by realpath, prefer the entry whose
+  // dir IS the realpath (the real dir) over symlink aliases.
+  const byReal = new Map<string, (typeof candidates)[number]>();
+  for (const s of candidates) {
+    let real: string;
+    try {
+      real = fs.realpathSync(s.dir);
+    } catch {
+      real = s.dir;
+    }
+    const cur = byReal.get(real);
+    if (!cur || (s.dir === real && cur.dir !== real)) byReal.set(real, s);
+  }
+  const kept = new Set(byReal.values());
+  const skills = candidates.filter((s) => kept.has(s));
   return {
     ...bill,
     skills,
@@ -102,10 +135,13 @@ export function captureContextBudget(root: string = REPO_ROOT): ContextBudget {
   };
 }
 
-// CLI: write the fixture.
+// CLI: write the fixture atomically (temp + rename) — an interrupted capture
+// must never leave truncated JSON that breaks the suite at module load.
 if (import.meta.main) {
   const budget = captureContextBudget();
-  fs.writeFileSync(BUDGET_FIXTURE_PATH, JSON.stringify(budget, null, 2) + '\n');
+  const tmp = `${BUDGET_FIXTURE_PATH}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(budget, null, 2) + '\n');
+  fs.renameSync(tmp, BUDGET_FIXTURE_PATH);
   const n = Object.keys(budget.eagerPerInvocation).length;
   console.log(
     `Wrote ${path.relative(REPO_ROOT, BUDGET_FIXTURE_PATH)}: alwaysOnTotal=${budget.alwaysOnTotal} tok, ${n} eager ceilings`,

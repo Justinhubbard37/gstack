@@ -27,7 +27,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { checkBudget } from '../lib/context-bill';
+import { buildBill, checkBudget } from '../lib/context-bill';
 import {
   buildRatchetBill,
   captureContextBudget,
@@ -48,6 +48,28 @@ const budget: ContextBudget = JSON.parse(fs.readFileSync(BUDGET_FIXTURE_PATH, 'u
 const bill = buildRatchetBill();
 
 describe('context-budget ratchet', () => {
+  // checkBudget only enforces alwaysOnTotal when it is typeof number — a
+  // string or missing value from a hand edit or bad merge would silently
+  // turn the always-on ceiling OFF while every test stays green. Validate
+  // the fixture shape so the guard cannot be disabled by a typo.
+  test('fixture shape is valid (a malformed fixture must not silently disable ceilings)', () => {
+    expect(typeof budget.alwaysOnTotal).toBe('number');
+    expect(Number.isFinite(budget.alwaysOnTotal)).toBe(true);
+    const bad = Object.entries(budget.eagerPerInvocation).filter(
+      ([, v]) => typeof v !== 'number' || !Number.isFinite(v),
+    );
+    expect(bad, `Non-numeric ceilings: ${bad.map(([k]) => k).join(', ')}. Re-run the capture.`).toEqual([]);
+  });
+
+  // Mutation pin: the fixture-skill filter must actually shrink the
+  // always-on sum vs the raw bill (deleting the totals recompute would leak
+  // fixture tokens under the headroom and never fail a ceiling).
+  test('filtering fixture skills shrinks the always-on ledger vs the raw bill', () => {
+    const raw = buildBill(path.join(import.meta.dir, '..'));
+    expect(bill.skills.some((s) => s.name.startsWith('test/'))).toBe(false);
+    expect(bill.totals.skillCount).toBeLessThan(raw.totals.skillCount);
+    expect(bill.totals.alwaysOnTokens).toBeLessThan(raw.totals.alwaysOnTokens);
+  });
   test('always-on + eager ledgers stay under the fixture ceilings', () => {
     // actual === null means "fixture names a skill missing from the tree" —
     // the dedicated stale-fixture test below owns that case with a clearer

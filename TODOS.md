@@ -691,6 +691,32 @@ or asserts dashboard/report text, then decide skeleton-vs-section placement per 
 **Depends on / blocked by:** Token-reduction program Phases 1-4 landing (carve
 machinery churn would conflict).
 
+### P3: Anchor transformFrontmatter's denylist strip to the frontmatter block
+
+**What:** `transformFrontmatter` (scripts/gen-skill-docs.ts:525-530, denylist branch)
+deletes the FIRST line matching `^<field>:` anywhere in the file, not just inside
+the frontmatter block, and would orphan continuation lines of a block-style YAML
+value. Slice the frontmatter, strip within it, reassemble.
+
+**Why:** Latent mis-strip class: a skill body line beginning `interactive:` or
+`benefits-from:` (e.g. a skill documenting the frontmatter contract) would be
+silently deleted from the render. Zero live collisions today (verified across all
+tracked SKILL.md bodies during the v1.69.x token-reduction Phase 0 review), but
+each new stripFields entry widens the exposure.
+
+**Pros:** Kills the whole latent class; makes stripFields safe to grow.
+**Cons:** Touches the generator hot path — needs a full regen + the per-host
+golden fixtures re-checked; deserves its own small PR, not a rider.
+
+**Context:** Found by the Phase 0 adversarial review on branch
+`prompt-token-load-reduction` (finding ADV4). The gen-side parser reads only
+inline `[...]` array form (gen-skill-docs.ts:751), so block-form YAML for these
+keys fails silently twice — worth a validation error at the same time.
+
+**Effort estimate:** S (human team) → S (CC+gstack)
+**Priority:** P3
+**Depends on / blocked by:** none.
+
 ### P3: Revisit plan-ceo-review doctrine carve after the preamble program lands
 
 **What:** Re-evaluate carving plan-ceo-review's ~13KB of always-loaded doctrine
