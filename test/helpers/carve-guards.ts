@@ -550,6 +550,77 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     mustContain: ['PGLite', 'Supabase', 'claude mcp add', 'read_secret_to_env', 'pooler'],
     maxSizeRatio: 1.07, // measured 1.051 vs the branch monolith: index + stubs + 4 STOP pointers
   },
+  // ── Token-reduction Phase 4 wave 3 (v1.69.x branch) ──────────────────────
+  qa: {
+    skill: 'qa',
+    expectedSections: ['test-bootstrap.md', 'qa-patterns.md'],
+    requiredReads: ['qa-patterns.md'],
+    scenario:
+      'Walk /qa in SIMULATION — do not launch a browser, run any $B command, or execute bash; treat the working tree as clean, the tier as Quick, and the target app as http://localhost:3000 with a small feature-branch diff touching one page. Skip the test-framework bootstrap (assume CLAUDE.md documents the test command). Read each pointed section before doing its step, then produce the QA plan as the report: the mode you selected and why, the Phase 1-6 steps you would run, and a worked health-score computation from the rubric. Do NOT use AskUserQuestion.',
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## Setup',
+        '## SETUP (run this check BEFORE any browse command)',
+        '## Phases 1-6: QA Baseline',
+        '## Phase 7: Triage',
+        '## Phase 8: Fix Loop',
+        '8e.5. Regression Test',
+        'WTF-LIKELIHOOD',
+        '## Additional Rules (qa-specific)',
+        '## Output Structure',
+      ],
+      mustPrecedeStop: ['## Setup'],
+      mustMoveToSection: [
+        '## Test Framework Bootstrap',
+        'BOOTSTRAP_DECLINED',
+        '## Health Score Rubric',
+        '### Diff-aware (automatic when on a feature branch with no URL)',
+        'Never refuse to use the browser',
+      ],
+      gateAfterStop: undefined,
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 48_750, // Phase 4 wave 3; measured 48,151
+    minUnionBytes: 69_500, // measured union 70,385
+    mustContain: ['bug', 'browse', 'fix', 'Health Score Rubric', 'regression'],
+  },
+  browse: {
+    skill: 'browse',
+    expectedSections: ['command-list.md'],
+    requiredReads: ['command-list.md'],
+    scenario:
+      'QA a static page: before driving it, plan the full audit — enumerate which browse commands and snapshot flags you would use, including extraction/tab/dialog commands beyond the Most-Used table, reading the full command reference first. Do not launch the browser or run any $B command; produce the command plan as the report.',
+    staticInvariants: {
+      mustStayInSkeleton: ['## SETUP', '## Core QA Patterns', '## CSS Inspector', '## Most-Used Commands'],
+      mustPrecedeStop: ['## SETUP'],
+      mustMoveToSection: ['## Full Command List', '## Snapshot Flags', '### Navigation'],
+      gateAfterStop: undefined,
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 27_500, // Phase 4 wave 3; measured 26,875
+    minUnionBytes: 39_500, // measured union 41,115
+    // 'BEGIN/END UNTRUSTED EXTERNAL' pins the untrusted-content warning; the full
+    // envelope phrase wraps across lines in the rendered blockquote, so the
+    // contiguous-substring check needs the single-line prefix form.
+    mustContain: ['BEGIN/END UNTRUSTED EXTERNAL', 'snapshot -i', '@e refs', 'deviceScaleFactor', 'handoff'],
+  },
+  retro: {
+    skill: 'retro',
+    expectedSections: ['report-format.md'],
+    requiredReads: ['report-format.md'],
+    scenario:
+      'Run the repo-scoped weekly retrospective for the last 7 days on this repo. There is no origin remote — proceed with the local branch per the guard disclosure rules. The gstack-retro-metrics script is not installed, so follow the degraded path (compute the metrics manually with git). Skip any AskUserQuestion calls — this is non-interactive. Produce the full narrative retrospective report.',
+    staticInvariants: {
+      mustStayInSkeleton: ['gstack-retro-metrics', '### Step 2: Compute Metrics', '### Step 13: Save Retro History'],
+      mustPrecedeStop: ['### Step 2: Compute Metrics'],
+      mustMoveToSection: ['## Engineering Retro: [date range]', '### Team Breakdown', 'Plan Completion This Period'],
+      gateAfterStop: undefined,
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 69_500, // Phase 4 wave 3; measured 68,483 (script absorption -5.4KB)
+    minUnionBytes: 66_000, // measured union 73,496
+    mustContain: ['retrospective', '45-minute gap', 'Ship of the week', 'Praise'],
+  },
 };
 
 /** Sorted carved-skill names. Consumers derive their lists from this — no parallel lists. */

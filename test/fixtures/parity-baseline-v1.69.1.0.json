@@ -1,10 +1,10 @@
 {
   "tag": "v1.69.1.0",
-  "capturedAt": "2026-08-25T16:58:29.504Z",
-  "capturedFromCommit": "2877b63a",
+  "capturedAt": "2026-08-25T17:36:29.077Z",
+  "capturedFromCommit": "706091cb",
   "capturedFromBranch": "prompt-token-load-reduction",
   "totalSkills": 53,
-  "totalCorpusBytes": 2807143,
+  "totalCorpusBytes": 2810742,
   "estTotalCatalogTokens": 4195,
   "topHeaviest": [
     {
@@ -141,10 +141,10 @@
     },
     "browse": {
       "skill": "browse",
-      "skillMdBytes": 39081,
-      "skillMdLines": 678,
-      "estTokens": 9770,
-      "tmplBytes": 15864,
+      "skillMdBytes": 41115,
+      "skillMdLines": 537,
+      "estTokens": 10279,
+      "tmplBytes": 16895,
       "descriptionLen": 181,
       "hasGateEval": true,
       "hasPeriodicEval": false
@@ -511,10 +511,10 @@
     },
     "qa": {
       "skill": "qa",
-      "skillMdBytes": 68403,
-      "skillMdLines": 1326,
-      "estTokens": 17101,
-      "tmplBytes": 12701,
+      "skillMdBytes": 70385,
+      "skillMdLines": 883,
+      "estTokens": 17596,
+      "tmplBytes": 12792,
       "descriptionLen": 218,
       "hasGateEval": true,
       "hasPeriodicEval": false
@@ -531,10 +531,10 @@
     },
     "retro": {
       "skill": "retro",
-      "skillMdBytes": 73913,
-      "skillMdLines": 1426,
-      "estTokens": 18478,
-      "tmplBytes": 42589,
+      "skillMdBytes": 73496,
+      "skillMdLines": 1214,
+      "estTokens": 18374,
+      "tmplBytes": 36523,
       "descriptionLen": 838,
       "hasGateEval": true,
       "hasPeriodicEval": false

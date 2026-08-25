@@ -206,21 +206,8 @@ export function runParityChecks(opts: {
  */
 const MONOLITH_INVARIANTS: ParityInvariant[] = [
   // cso is now carved — its invariant is generated from CARVE_GUARDS below.
-  // review, codex, land-and-deploy (wave 1) and autoplan (wave 2) carved in token-reduction Phase 4
+  // review, codex, land-and-deploy (w1), autoplan (w2), qa (w3) carved in token-reduction Phase 4
   // wave 1 (v1.69.x branch) — their invariants generate from CARVE_GUARDS too.
-  {
-    skill: 'qa',
-    mustContain: ['bug', 'browse', 'fix'],
-    mustHaveHeadings: ['## Preamble', '## When to invoke'],
-    // v1.2.0 activation lift: the unified first-run-guidance section (P4 scaffold +
-    // P3 loop tip) is added to every skill's shared preamble — intentional, ~1KB.
-    // Fork port wave 2: the shared coverage-audit detection block gained the
-    // multi-ecosystem markers (Django/JVM, script/target/test-file census —
-    // e3259078 port); measured 1.111x. v1.64+v1.65 merge sums both waves'
-    // preamble growth; measured 1.125.
-    maxSizeRatio: 1.13,
-    minBytes: 50_000,
-  },
   {
     skill: 'investigate',
     mustContain: ['root cause', 'hypothes'],

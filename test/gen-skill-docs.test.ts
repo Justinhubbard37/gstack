@@ -126,8 +126,11 @@ const CLAUDE_SKIPPED = new Set(__getHostConfig('claude').generation.skipSkills ?
 const CLAUDE_GENERATED_SKILLS = ALL_SKILLS.filter(s => !CLAUDE_SKIPPED.has(s.dir));
 
 describe('gen-skill-docs', () => {
+  // Browse carve (token-reduction Phase 4): the command reference + snapshot
+  // flags render into browse/sections/command-list.md now — read the
+  // skeleton+sections union so these pins hold across the carve.
   test('generated SKILL.md contains all command categories', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('browse');
     const categories = new Set(Object.values(COMMAND_DESCRIPTIONS).map(d => d.category));
     for (const cat of categories) {
       expect(content).toContain(`### ${cat}`);
@@ -135,7 +138,7 @@ describe('gen-skill-docs', () => {
   });
 
   test('generated SKILL.md contains all commands', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('browse');
     for (const [cmd, meta] of Object.entries(COMMAND_DESCRIPTIONS)) {
       const display = meta.usage || cmd;
       expect(content).toContain(display);
@@ -143,7 +146,7 @@ describe('gen-skill-docs', () => {
   });
 
   test('command table is sorted alphabetically within categories', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('browse');
     // Extract command names from the Navigation section as a test
     const navSection = content.match(/### Navigation\n\|.*\n\|.*\n([\s\S]*?)(?=\n###|\n## )/);
     expect(navSection).not.toBeNull();
@@ -168,7 +171,7 @@ describe('gen-skill-docs', () => {
   });
 
   test('snapshot flags section contains all flags', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('browse');
     for (const flag of SNAPSHOT_FLAGS) {
       expect(content).toContain(flag.short);
       expect(content).toContain(flag.description);
@@ -311,10 +314,19 @@ describe('gen-skill-docs', () => {
     expect(rootTmpl).not.toContain('{{COMMAND_REFERENCE}}');
     expect(rootTmpl).not.toContain('{{SNAPSHOT_FLAGS}}');
 
+    // Browse carve: the reference resolvers moved into the on-demand section
+    // template (so gen-skill-docs keeps them fresh from browse/src); the
+    // skeleton points at the section instead of inlining the reference.
     const browseTmpl = fs.readFileSync(path.join(ROOT, 'browse', 'SKILL.md.tmpl'), 'utf-8');
-    expect(browseTmpl).toContain('{{COMMAND_REFERENCE}}');
-    expect(browseTmpl).toContain('{{SNAPSHOT_FLAGS}}');
+    expect(browseTmpl).not.toContain('{{COMMAND_REFERENCE}}');
+    expect(browseTmpl).not.toContain('{{SNAPSHOT_FLAGS}}');
+    expect(browseTmpl).toContain('{{SECTION:command-list}}');
     expect(browseTmpl).toContain('{{PREAMBLE}}');
+
+    const browseSectionTmpl = fs.readFileSync(
+      path.join(ROOT, 'browse', 'sections', 'command-list.md.tmpl'), 'utf-8');
+    expect(browseSectionTmpl).toContain('{{COMMAND_REFERENCE}}');
+    expect(browseSectionTmpl).toContain('{{SNAPSHOT_FLAGS}}');
   });
 
   test('generated SKILL.md contains operational self-improvement (replaced contributor mode)', () => {
@@ -526,15 +538,20 @@ describe('gen-skill-docs', () => {
   });
 
   test('qa and qa-only templates use QA_METHODOLOGY placeholder', () => {
-    const qaTmpl = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md.tmpl'), 'utf-8');
-    expect(qaTmpl).toContain('{{QA_METHODOLOGY}}');
+    // qa carve: the macro moved into the section template (the skeleton
+    // carries the STOP-Read pointer); qa-only remains an inline monolith.
+    const qaSkeletonTmpl = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md.tmpl'), 'utf-8');
+    expect(qaSkeletonTmpl).toContain('{{SECTION:qa-patterns}}');
+    expect(qaSkeletonTmpl).not.toContain('{{QA_METHODOLOGY}}');
+    const qaSectionTmpl = fs.readFileSync(path.join(ROOT, 'qa', 'sections', 'qa-patterns.md.tmpl'), 'utf-8');
+    expect(qaSectionTmpl).toContain('{{QA_METHODOLOGY}}');
 
     const qaOnlyTmpl = fs.readFileSync(path.join(ROOT, 'qa-only', 'SKILL.md.tmpl'), 'utf-8');
     expect(qaOnlyTmpl).toContain('{{QA_METHODOLOGY}}');
   });
 
   test('QA_METHODOLOGY appears expanded in both qa and qa-only generated files', () => {
-    const qaContent = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const qaContent = readSkillUnion('qa'); // carved: methodology lives in qa/sections/qa-patterns.md
     const qaOnlyContent = fs.readFileSync(path.join(ROOT, 'qa-only', 'SKILL.md'), 'utf-8');
 
     // Both should contain the health score rubric
@@ -651,8 +668,9 @@ describe('GitLab support in generated skills', () => {
  */
 describe('description quality evals', () => {
   // Regression: snapshot flags lost value hints (-d <N>, -s <sel>, -o <path>)
+  // Browse carve: the flag reference renders into browse/sections/command-list.md.
   test('snapshot flags with values include value hints in output', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('browse');
     for (const flag of SNAPSHOT_FLAGS) {
       if (flag.takesValue) {
         expect(flag.valueHint).toBeDefined();
@@ -1199,7 +1217,9 @@ describe('Plan file discovery shared helper', () => {
 // --- Retro plan completion ---
 
 describe('Retro plan completion section', () => {
-  const retroSkill = fs.readFileSync(path.join(ROOT, 'retro', 'SKILL.md'), 'utf-8');
+  // Carved: the narrative report format (incl. Plan Completion) lives in
+  // retro/sections/report-format.md — read the skeleton+sections union.
+  const retroSkill = readSkillUnion('retro');
 
   test('retro SKILL.md contains plan completion section', () => {
     expect(retroSkill).toContain('### Plan Completion');

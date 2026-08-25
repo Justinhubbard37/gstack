@@ -65,6 +65,25 @@ describe('SKILL.md command validation', () => {
     expect(result.snapshotFlagErrors).toHaveLength(0);
   });
 
+  // qa carve: the Phases 1-6 methodology (with its $B command examples) moved
+  // into qa/sections/*.md — validate the section files too so browse-command
+  // coverage doesn't silently shrink with the carve.
+  test('all $B commands and snapshot flags in qa/sections/*.md are valid', () => {
+    const secDir = path.join(ROOT, 'qa', 'sections');
+    if (!fs.existsSync(secDir)) return; // pre-carve checkout
+    const sectionMds = fs.readdirSync(secDir).filter(f => f.endsWith('.md') && !f.endsWith('.md.tmpl'));
+    expect(sectionMds.length).toBeGreaterThan(0);
+    let validTotal = 0;
+    for (const f of sectionMds) {
+      const result = validateSkill(path.join(secDir, f));
+      expect({ file: f, invalid: result.invalid }).toEqual({ file: f, invalid: [] });
+      expect({ file: f, snapshotFlagErrors: result.snapshotFlagErrors }).toEqual({ file: f, snapshotFlagErrors: [] });
+      validTotal += result.valid.length;
+    }
+    // Non-empty guard: the carved methodology must still carry $B examples.
+    expect(validTotal).toBeGreaterThan(0);
+  });
+
   test('all $B commands in qa-only/SKILL.md are valid browse commands', () => {
     const qaOnlySkill = path.join(ROOT, 'qa-only', 'SKILL.md');
     if (!fs.existsSync(qaOnlySkill)) return;
@@ -416,7 +435,9 @@ describe('Cross-skill path consistency', () => {
 // --- Part 7: QA skill structure validation (A2) ---
 
 describe('QA skill structure validation', () => {
-  const qaContent = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+  // qa carve: modes, Phases 1-6, and the health rubric moved into
+  // qa/sections/qa-patterns.md — validate the skeleton+sections union.
+  const qaContent = readSkillUnion('qa');
 
   test('qa/SKILL.md has all 11 phases', () => {
     const phases = [
@@ -1090,8 +1111,10 @@ describe('gstack-slug', () => {
 // --- Test Bootstrap validation ---
 
 describe('Test Bootstrap ({{TEST_BOOTSTRAP}}) integration', () => {
+  // qa carve: the rendered TEST_BOOTSTRAP body lives in
+  // qa/sections/test-bootstrap.md — read the skeleton+sections union.
   test('TEST_BOOTSTRAP resolver produces valid content', () => {
-    const qaContent = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const qaContent = readSkillUnion('qa');
     expect(qaContent).toContain('Test Framework Bootstrap');
     expect(qaContent).toContain('RUNTIME:ruby');
     expect(qaContent).toContain('RUNTIME:node');
@@ -1101,7 +1124,7 @@ describe('Test Bootstrap ({{TEST_BOOTSTRAP}}) integration', () => {
   });
 
   test('TEST_BOOTSTRAP appears in qa/SKILL.md', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('qa');
     expect(content).toContain('Test Framework Bootstrap');
     expect(content).toContain('TESTING.md');
     expect(content).toContain('CLAUDE.md');
@@ -1127,7 +1150,7 @@ describe('Test Bootstrap ({{TEST_BOOTSTRAP}}) integration', () => {
   });
 
   test('bootstrap includes framework knowledge table', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('qa');
     expect(content).toContain('vitest');
     expect(content).toContain('minitest');
     expect(content).toContain('pytest');
@@ -1137,20 +1160,20 @@ describe('Test Bootstrap ({{TEST_BOOTSTRAP}}) integration', () => {
   });
 
   test('bootstrap includes CI/CD pipeline generation', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('qa');
     expect(content).toContain('.github/workflows/test.yml');
     expect(content).toContain('GitHub Actions');
   });
 
   test('bootstrap includes first real tests step', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('qa');
     expect(content).toContain('First real tests');
     expect(content).toContain('git log --since=30.days');
     expect(content).toContain('Prioritize by risk');
   });
 
   test('bootstrap includes vibe coding philosophy', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'qa', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('qa');
     expect(content).toContain('vibe coding');
     expect(content).toContain('100% test coverage');
   });
@@ -1325,28 +1348,43 @@ describe('ship step numbering', () => {
 // --- Retro test health validation ---
 
 describe('Retro test health tracking', () => {
-  test('retro/SKILL.md has test health data gathering commands', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'retro', 'SKILL.md'), 'utf-8');
-    expect(content).toContain('# 10. Test file count');
-    expect(content).toContain('# 11. Regression test commits');
-    expect(content).toContain('# 12. Test files changed');
+  // The inline git pipelines moved into bin/gstack-retro-metrics (retro
+  // token-reduction wave); the skill interprets its labeled METRIC lines.
+  test('gstack-retro-metrics gathers the test health data', () => {
+    const script = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-retro-metrics'), 'utf-8');
+    expect(script).toContain('TEST_FILES_TOTAL');
+    expect(script).toContain('REGRESSION_TEST_COMMITS');
+    expect(script).toContain('TEST_FILES_CHANGED');
+    // The historical grep targets survive the script absorption.
+    expect(script).toContain('test(qa):');
+    expect(script).toContain('test(design):');
+    expect(script).toContain('git ls-files');
+  });
+
+  test('retro skill interprets the test-health metric lines', () => {
+    // Template source, not the generated render: the pin must hold across the
+    // regen boundary (the generated file follows the template at gen time).
+    const content = fs.readFileSync(path.join(ROOT, 'retro', 'SKILL.md.tmpl'), 'utf-8');
+    expect(content).toContain('TEST_FILES_TOTAL');
+    expect(content).toContain('REGRESSION_TEST_COMMITS');
   });
 
   test('retro/SKILL.md has Test Health metrics row', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'retro', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('retro');
     expect(content).toContain('Test Health');
     expect(content).toContain('regression tests');
   });
 
   test('retro/SKILL.md has Test Health narrative section', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'retro', 'SKILL.md'), 'utf-8');
+    // Carved: the narrative report format lives in sections/report-format.md.
+    const content = readSkillUnion('retro');
     expect(content).toContain('### Test Health');
     expect(content).toContain('Total test files');
     expect(content).toContain('vibe coding safe');
   });
 
   test('retro JSON schema includes test_health field', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'retro', 'SKILL.md'), 'utf-8');
+    const content = readSkillUnion('retro');
     expect(content).toContain('test_health');
     expect(content).toContain('total_test_files');
     expect(content).toContain('regression_test_commits');
