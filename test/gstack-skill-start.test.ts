@@ -45,6 +45,11 @@ function runStart(args: string[] = [], env: Record<string, string> = {}): string
 beforeAll(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-home-'));
   tmpGstackHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-gh-'));
+  // Keep the free suite hermetic: with update_check unset, the child's
+  // gstack-update-check takes the slow path (a live git ls-remote + curl to
+  // github.com) on every `bun run test`. The config gate exits it before any
+  // network; the UPDATE_CHECK: contract key is still emitted (value "false").
+  fs.writeFileSync(path.join(tmpGstackHome, 'config.yaml'), 'update_check: false\n');
 });
 
 afterAll(() => {
@@ -170,16 +175,58 @@ describe('gstack-skill-start behavior', () => {
   });
 
   test('headless session suppresses first-task detection and Conductor line', () => {
-    const out = runStart([], { GSTACK_HEADLESS: '1', CONDUCTOR_WORKSPACE_PATH: '/x' });
-    // session-kind binary decides headless from env; if it does, FIRST_TASK
-    // stays empty and CONDUCTOR_SESSION is suppressed. If the binary reports
-    // interactive in this env, the guard still holds vacuously — assert the
-    // implication, not the env behavior.
-    if (/^SESSION_KIND: headless$/m.test(out)) {
-      expect(out).toMatch(/^FIRST_TASK: $/m);
-      expect(out).not.toContain('CONDUCTOR_SESSION: true');
-    } else {
-      expect(out).toContain('CONDUCTOR_SESSION: true');
+    // Fresh GSTACK_HOME per test: the shared home is already ACTIVATED by the
+    // contract test, which makes FIRST_TASK vacuously empty regardless of the
+    // headless gate — the suppression is only exercised from a cold home.
+    const freshGh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-fresh-'));
+    fs.writeFileSync(path.join(freshGh, 'config.yaml'), 'update_check: false\n');
+    try {
+      const out = runStart([], { GSTACK_HEADLESS: '1', CONDUCTOR_WORKSPACE_PATH: '/x', GSTACK_HOME: freshGh });
+      // session-kind binary decides headless from env; if it does, FIRST_TASK
+      // stays empty and CONDUCTOR_SESSION is suppressed. If the binary reports
+      // interactive in this env, the guard still holds vacuously — assert the
+      // implication, not the env behavior.
+      if (/^SESSION_KIND: headless$/m.test(out)) {
+        expect(out).toMatch(/^FIRST_TASK: $/m);
+        expect(out).not.toContain('CONDUCTOR_SESSION: true');
+      } else {
+        expect(out).toContain('CONDUCTOR_SESSION: true');
+      }
+    } finally {
+      fs.rmSync(freshGh, { recursive: true, force: true });
+    }
+  });
+
+  test('display-only tips ack at emit and never re-fire (OV6)', () => {
+    const freshGh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-refire-'));
+    fs.writeFileSync(path.join(freshGh, 'config.yaml'), 'update_check: false\n');
+    try {
+      const first = runStart([], { GSTACK_HOME: freshGh });
+      // Cold home: the script acks display gates at emit (.activated,
+      // .first-loop-tip-shown markers written by the script itself).
+      expect(fs.existsSync(path.join(freshGh, '.activated'))).toBe(true);
+      const second = runStart([], { GSTACK_HOME: freshGh });
+      // first-run-tip fires only on the activation run; first-loop-tip is
+      // DESIGNED to fire on a later run (activated, not yet shown) and acks
+      // at emit — so it may appear here but must never appear again below.
+      expect(second).not.toContain('GSTACK_INSTRUCTION_BEGIN: first-run-tip');
+      expect(fs.existsSync(path.join(freshGh, '.first-loop-tip-shown'))).toBe(true);
+      // Interactive gates are model-acked, so lake-intro (unacked) may still
+      // fire — but it must carry the run's own SESSION_ID, and only once.
+      const sid2 = second.match(/^SESSION_ID: (\S+)$/m)?.[1];
+      const headers2 = second.match(/^GSTACK_INSTRUCTION_BEGIN: .*$/gm) ?? [];
+      for (const h of headers2) expect(h.endsWith(` ${sid2}`)).toBe(true);
+      // Sequencing: telemetry-prompt is gated on the lake ack, so it must not
+      // appear while .completeness-intro-seen is absent.
+      expect(first).not.toContain('GSTACK_INSTRUCTION_BEGIN: telemetry-prompt');
+      fs.writeFileSync(path.join(freshGh, '.completeness-intro-seen'), '');
+      const third = runStart([], { GSTACK_HOME: freshGh });
+      expect(third).toContain('GSTACK_INSTRUCTION_BEGIN: telemetry-prompt');
+      expect(third).not.toContain('GSTACK_INSTRUCTION_BEGIN: lake-intro');
+      // Ack-at-emit means the loop tip from run 2 never re-fires.
+      expect(third).not.toContain('GSTACK_INSTRUCTION_BEGIN: first-loop-tip');
+    } finally {
+      fs.rmSync(freshGh, { recursive: true, force: true });
     }
   });
 
@@ -206,6 +253,14 @@ describe('gstack-skill-end', () => {
     expect(m).not.toBeNull();
     expect(Number(m![1])).toBeGreaterThanOrEqual(7);
     expect(Number(m![1])).toBeLessThan(60);
+  });
+
+  test('drains the artifacts queue (discover-new + once) — render prose promises it', () => {
+    // Every render says "do not run gstack-brain-sync separately — skill-end
+    // drains it"; dropping these lines would silently orphan the queue.
+    const s = fs.readFileSync(END, 'utf-8');
+    expect(s).toContain('gstack-brain-sync" --discover-new');
+    expect(s).toContain('gstack-brain-sync" --once');
   });
 
   test('cleans the pending analytics marker for the session', () => {

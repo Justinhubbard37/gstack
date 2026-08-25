@@ -220,6 +220,10 @@ export function getHermeticDirs(): HermeticDirs {
     for (const f of ['.activated', '.completeness-intro-seen', '.telemetry-prompted', '.proactive-prompted', '.first-loop-tip-shown']) {
       fs.writeFileSync(path.join(gstackHome, f), '');
     }
+    // The privacy stop-gate is config-keyed, not marker-keyed: on machines
+    // with gbrain installed it fires whenever artifacts_sync_mode is off and
+    // the consent prompt is unrecorded — same PTY-stall class as the markers.
+    fs.writeFileSync(path.join(gstackHome, 'config.yaml'), 'artifacts_sync_mode_prompted: true\n');
   } catch (err) {
     try { fs.rmSync(runRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
     throw err;
