@@ -829,7 +829,7 @@ describe('REVIEW_DASHBOARD resolver', () => {
 describe('TEST_COVERAGE_AUDIT placeholders', () => {
   const planSkill = readSkillUnion('plan-eng-review'); // carved
   const shipSkill = readShipUnion();
-  const reviewSkill = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+  const reviewSkill = readSkillUnion('review'); // carved: Review Army moved to sections/review-army.md
 
   test('plan and ship modes share codepath tracing methodology', () => {
     // Review mode delegates test coverage to the Testing specialist subagent (Review Army)
@@ -1050,7 +1050,7 @@ describe('PLAN_FILE_REVIEW_REPORT resolver', () => {
 
 describe('PLAN_COMPLETION_AUDIT placeholders', () => {
   const shipSkill = readShipUnion();
-  const reviewSkill = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+  const reviewSkill = readSkillUnion('review'); // carved: plan-completion audit moved to sections/plan-completion.md
 
   test('ship SKILL.md contains plan completion audit step', () => {
     expect(shipSkill).toContain('Plan Completion Audit');
@@ -1133,7 +1133,7 @@ describe('PLAN_VERIFICATION_EXEC placeholder', () => {
 
 describe('Coverage gate in ship', () => {
   const shipSkill = readShipUnion();
-  const reviewSkill = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+  const reviewSkill = readSkillUnion('review'); // carved: testing.md specialist ref lives in sections/review-army.md
 
   test('ship SKILL.md contains coverage gate with thresholds', () => {
     expect(shipSkill).toContain('Coverage gate');
@@ -1178,7 +1178,7 @@ describe('Plan file discovery shared helper', () => {
   // The shared helper should appear in ship (via PLAN_COMPLETION_AUDIT_SHIP)
   // and in review (via PLAN_COMPLETION_AUDIT_REVIEW)
   const shipSkill = readShipUnion();
-  const reviewSkill = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+  const reviewSkill = readSkillUnion('review'); // carved: plan-completion audit moved to sections/plan-completion.md
 
   test('plan file discovery appears in both ship and review', () => {
     expect(shipSkill).toContain('Plan File Discovery');
@@ -1410,8 +1410,9 @@ describe('Codex filesystem boundary', () => {
   });
 
   test('review.ts CODEX_BOUNDARY constant is interpolated into resolver output', () => {
-    // The adversarial step resolver should include boundary text in codex exec prompts
-    const reviewContent = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+    // The adversarial step resolver should include boundary text in codex exec
+    // prompts. Carved: the adversarial step lives in sections/adversarial.md.
+    const reviewContent = readSkillUnion('review');
     // Boundary should appear near codex exec invocations
     const boundaryIdx = reviewContent.indexOf(BOUNDARY_MARKER);
     const codexExecIdx = reviewContent.indexOf('codex exec');
@@ -3126,6 +3127,10 @@ describe('codex commands must not use inline $(git rev-parse --show-toplevel) fo
       'ship/SKILL.md',
       'codex/SKILL.md.tmpl',
       'codex/SKILL.md',
+      // codex's scoped invocations moved into the carved review-mode section
+      // (T9) — keep sweeping both the .tmpl source and the generated section.
+      'codex/sections/review-mode.md.tmpl',
+      'codex/sections/review-mode.md',
     ];
 
     const violations: string[] = [];
