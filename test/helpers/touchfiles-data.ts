@@ -31,8 +31,10 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'hermetic-sentinel': ['test/helpers/hermetic-env.ts', 'test/helpers/session-runner.ts', 'test/skill-e2e-hermetic-canary.test.ts', 'lib/conductor-env-shim.ts'],
 
   // P4 first-run scaffold (activation lift) — the detection binary end-to-end
-  // through the real runner, plus the preamble wiring that gates + maps it.
-  'first-task-scaffold': ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'bin/gstack-first-task-detect', 'scripts/resolvers/preamble/generate-first-run-guidance.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'test/skill-e2e-first-task-scaffold.test.ts', 'test/helpers/session-runner.ts'],
+  // through the real runner, plus the script wiring that gates + maps it
+  // (token-reduction Phase 2: generate-first-run-guidance.ts was deleted; the
+  // gate + token→tip map live in bin/gstack-skill-start's emission layer).
+  'first-task-scaffold': ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'bin/gstack-first-task-detect', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'test/skill-e2e-first-task-scaffold.test.ts', 'test/helpers/session-runner.ts'],
 
   // SKILL.md setup + preamble (depend on ROOT SKILL.md + gen-skill-docs)
   'skillmd-setup-discovery':  ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],

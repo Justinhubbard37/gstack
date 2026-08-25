@@ -352,31 +352,26 @@ describe('gen-skill-docs', () => {
   });
 
   // #2001: update_check: false silences the binary but the upgrade-handling
-  // instruction prose used to ship unconditionally. Every skill that carries
-  // the runtime config-echo cluster must (a) echo UPDATE_CHECK so the
-  // instruction layer can read it, and (b) gate the UPGRADE_AVAILABLE /
-  // JUST_UPGRADED prose on it — the same echo-then-gate convention every other
-  // flag (PROACTIVE, SKILL_PREFIX, EXPLAIN_LEVEL, QUESTION_TUNING) follows.
-  test('update_check opt-out gates preamble echo and upgrade-handling prose (issue #2001)', () => {
-    // The config-echo cluster moved into gstack-skill-start: the flag must be
-    // read and echoed there so the render's instruction layer can act on it.
+  // instruction prose used to ship unconditionally. Token-reduction Phase 2
+  // made the gate STRUCTURAL: the prose left the renders entirely (absence is
+  // pinned by test/onboarding-moved-literals.test.ts) and now emits from
+  // gstack-skill-start's instruction layer ONLY when the update-check binary
+  // produced output — and that binary silences itself on update_check=false.
+  // Opted-out installs can never see the prose, by construction.
+  test('update_check opt-out gates the update binary and upgrade-flow emission (issue #2001)', () => {
+    // The config-echo cluster lives in gstack-skill-start: the flag is still
+    // read and echoed as a STATUS line for the model.
     expect(SKILL_START_SCRIPT, 'script must read update_check config').toContain('_UPDATE_CHECK=$(');
     expect(SKILL_START_SCRIPT, 'script must echo UPDATE_CHECK').toContain('echo "UPDATE_CHECK: $_UPDATE_CHECK"');
-    // Whenever a preamble-carrying render ships the upgrade-handling prose, it
-    // must gate on the echoed flag — same echo-then-gate convention as
-    // PROACTIVE/SKILL_PREFIX. (gstack-upgrade itself is out of scope: it has
-    // no preamble fence and handling UPGRADE_AVAILABLE is its whole job.)
-    let checked = 0;
-    for (const skill of CLAUDE_GENERATED_SKILLS) {
-      const content = fs.readFileSync(path.join(ROOT, skill.dir, 'SKILL.md'), 'utf-8');
-      if (!content.includes('gstack-skill-start')) continue;
-      if (!content.includes('UPGRADE_AVAILABLE <old> <new>')) continue;
-      checked++;
-      expect(content, `${skill.dir} upgrade prose must gate on UPDATE_CHECK`)
-        .toContain('If `UPDATE_CHECK` is `"false"`');
-    }
-    // Guard against the scope filter silently matching nothing.
-    expect(checked).toBeGreaterThan(0);
+    // Gate half 1: the update-check binary exits silently when opted out.
+    const updateCheck = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-update-check'), 'utf-8');
+    expect(updateCheck, 'binary must read update_check config').toContain('get update_check');
+    expect(updateCheck, 'binary must exit silently on update_check=false')
+      .toMatch(/if \[ "\$_UC" = "false" \]; then\n\s*exit 0/);
+    // Gate half 2: the upgrade-flow instruction block emits only when the
+    // binary emitted something (empty when opted out, cached, or up to date).
+    expect(SKILL_START_SCRIPT, 'upgrade-flow must be gated on update-check output')
+      .toMatch(/if \[ -n "\$_UPD" \]; then\n\s*_emit_block upgrade-flow/);
   });
 
   test('tier 2+ skills contain ELI10 simplification rules (AskUserQuestion format)', () => {
@@ -800,7 +795,11 @@ describe('REVIEW_DASHBOARD resolver', () => {
   }
 
   test('plan-ceo-review chaining mentions eng and design reviews', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'plan-ceo-review', 'SKILL.md'), 'utf-8');
+    // Carved skill: the chaining prose lives in sections/*.md. (It used to
+    // pass against the skeleton only because the preamble's routing-injection
+    // rules incidentally named these skills — that prose moved into
+    // bin/gstack-skill-start in token-reduction Phase 2.)
+    const content = readSkillUnion('plan-ceo-review');
     expect(content).toContain('/plan-eng-review');
     expect(content).toContain('/plan-design-review');
   });
@@ -1587,57 +1586,66 @@ describe('parameterized resolver support', () => {
 
 // --- Preamble routing injection tests ---
 
-describe('preamble routing injection', () => {
-  const shipContent = readShipUnion();
+describe('preamble routing injection (bin/gstack-skill-start emission layer)', () => {
+  // Token-reduction Phase 2: the routing-injection prose left the rendered
+  // preamble entirely — bin/gstack-skill-start probes, gates, and emits the
+  // whole flow as a GSTACK_INSTRUCTION block (with the AUQ, the routing rules
+  // to append, and the decline ack all INSIDE the block). Absence from the
+  // renders is pinned by test/onboarding-moved-literals.test.ts (tombstone);
+  // this suite pins the gate structure and the emitted block's content.
+  const routingBlock = (() => {
+    const start = SKILL_START_SCRIPT.indexOf('_emit_block routing-injection');
+    expect(start).toBeGreaterThan(0);
+    return SKILL_START_SCRIPT.slice(start, SKILL_START_SCRIPT.indexOf('\nEOI', start));
+  })();
 
   test('routing probe checks CLAUDE.md and AGENTS.md (now in gstack-skill-start)', () => {
     // #2500: the probe iterates CLAUDE.md AND AGENTS.md — non-Claude hosts
-    // route skills via AGENTS.md, the cross-harness convention file. The bash
-    // moved into gstack-skill-start; the render acts on the echoed HAS_ROUTING.
+    // route skills via AGENTS.md, the cross-harness convention file.
     expect(SKILL_START_SCRIPT).toContain('for _RF in CLAUDE.md AGENTS.md');
     expect(SKILL_START_SCRIPT).toContain('grep -q "## Skill routing" "$_RF"');
     expect(SKILL_START_SCRIPT).toContain('echo "HAS_ROUTING: $_HAS_ROUTING"');
-    expect(shipContent).toContain('HAS_ROUTING');
   });
 
-  test('preamble bash reads routing_declined config', () => {
-    expect(shipContent).toContain('routing_declined');
-    expect(shipContent).toContain('ROUTING_DECLINED');
+  test('script reads and echoes routing_declined config', () => {
+    expect(SKILL_START_SCRIPT).toMatch(/_ROUTING_DECLINED=\$\("\$_BIN\/gstack-config" get routing_declined/);
+    expect(SKILL_START_SCRIPT).toContain('echo "ROUTING_DECLINED: $_ROUTING_DECLINED"');
   });
 
-  test('preamble includes routing injection AskUserQuestion', () => {
-    expect(shipContent).toContain('Add routing rules to CLAUDE.md');
-    expect(shipContent).toContain("I'll invoke skills manually");
+  test('emitted block carries the routing injection AskUserQuestion', () => {
+    expect(routingBlock).toContain('Add routing rules to CLAUDE.md');
+    expect(routingBlock).toContain("I'll invoke skills manually");
   });
 
-  test('routing injection respects prior decline', () => {
-    expect(shipContent).toContain('ROUTING_DECLINED');
-    expect(shipContent).toMatch(/routing_declined.*true/);
+  test('routing injection respects prior decline (gate + in-block ack)', () => {
+    expect(SKILL_START_SCRIPT).toContain('[ "$_ROUTING_DECLINED" = "false" ]');
+    expect(routingBlock).toMatch(/routing_declined.*true/);
+    expect(routingBlock).toContain('re-enable with `__BIN__/gstack-config set routing_declined false`');
   });
 
   test('routing injection only fires when all conditions met', () => {
     // Must be: HAS_ROUTING=no AND ROUTING_DECLINED=false AND PROACTIVE_PROMPTED=yes
-    expect(shipContent).toContain('HAS_ROUTING');
-    expect(shipContent).toContain('ROUTING_DECLINED');
-    expect(shipContent).toContain('PROACTIVE_PROMPTED');
+    expect(SKILL_START_SCRIPT).toContain(
+      'if [ "$_HAS_ROUTING" = "no" ] && [ "$_ROUTING_DECLINED" = "false" ] && [ "$_PROACTIVE_PROMPTED" = "yes" ]; then',
+    );
   });
 
   test('routing section content includes key routing rules', () => {
-    expect(shipContent).toContain('invoke /office-hours');
-    expect(shipContent).toContain('invoke /investigate');
-    expect(shipContent).toContain('invoke /ship');
-    expect(shipContent).toContain('invoke /qa');
+    expect(routingBlock).toContain('invoke /office-hours');
+    expect(routingBlock).toContain('invoke /investigate');
+    expect(routingBlock).toContain('invoke /ship');
+    expect(routingBlock).toContain('invoke /qa');
   });
 
   test('routing section uses renamed checkpoint skills (not stale /checkpoint)', () => {
-    expect(shipContent).toContain('invoke /context-save');
-    expect(shipContent).toContain('invoke /context-restore');
-    expect(shipContent).not.toContain('invoke checkpoint');
+    expect(routingBlock).toContain('invoke /context-save');
+    expect(routingBlock).toContain('invoke /context-restore');
+    expect(routingBlock).not.toContain('invoke checkpoint');
   });
 
   test('routing section uses soft "when in doubt" policy, not hard "ALWAYS invoke"', () => {
-    expect(shipContent).toContain('When in doubt, invoke the skill');
-    expect(shipContent).not.toContain('Do NOT answer directly');
+    expect(routingBlock).toContain('When in doubt, invoke the skill');
+    expect(routingBlock).not.toContain('Do NOT answer directly');
   });
 });
 
@@ -1980,8 +1988,16 @@ describe('Codex generation (--host codex)', () => {
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-review', 'SKILL.md'), 'utf-8');
     expect(content).toContain('GSTACK_ROOT');
     expect(content).toContain('$_ROOT/.agents/skills/gstack');
-    expect(content).toContain('$GSTACK_BIN/gstack-config');
-    expect(content).toContain('$GSTACK_ROOT/gstack-upgrade/SKILL.md');
+    // Phase 1/2: config reads moved into gstack-skill-start — the fence itself
+    // is the bin asset the preamble must resolve through $GSTACK_BIN, and the
+    // question-preference runtime call still resolves the same way.
+    expect(content).toContain('$GSTACK_BIN/gstack-skill-start');
+    expect(content).toContain('$GSTACK_BIN/gstack-question-preference');
+    // The upgrade-skill doc reference moved into the script's upgrade-flow
+    // block, resolved $0-relative ($_ROOT_DIR) — host-neutral by construction,
+    // so the Codex render no longer needs its own copy.
+    expect(SKILL_START_SCRIPT).toContain('$_ROOT_DIR/gstack-upgrade/SKILL.md');
+    expect(SKILL_START_SCRIPT).toContain('_ROOT_DIR=$(dirname "$_BIN")');
     expect(content).not.toContain('~/.codex/skills/gstack/bin/gstack-config get telemetry');
   });
 
@@ -2859,13 +2875,19 @@ describe('telemetry', () => {
     expect(content).toContain('TEL_START');
   });
 
-  test('generated SKILL.md contains telemetry opt-in prompt', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('.telemetry-prompted');
-    expect(content).toContain('Help gstack get better');
-    expect(content).toContain('gstack-config set telemetry community');
-    expect(content).toContain('gstack-config set telemetry anonymous');
-    expect(content).toContain('gstack-config set telemetry off');
+  test('telemetry opt-in prompt lives in gstack-skill-start (marker-gated emit)', () => {
+    // Token-reduction Phase 2: the one-time consent prompt left the renders
+    // (absence pinned by test/onboarding-moved-literals.test.ts); the script
+    // gates it on the marker files and emits it as a GSTACK_INSTRUCTION block
+    // with all three config-set outcomes and the ack INSIDE the block.
+    expect(SKILL_START_SCRIPT).toContain(
+      'if [ "$_TEL_PROMPTED" = "no" ] && [ "$_LAKE_SEEN" = "yes" ]; then',
+    );
+    expect(SKILL_START_SCRIPT).toContain('_emit_block telemetry-prompt');
+    expect(SKILL_START_SCRIPT).toContain('gstack-config set telemetry community');
+    expect(SKILL_START_SCRIPT).toContain('gstack-config set telemetry anonymous');
+    expect(SKILL_START_SCRIPT).toContain('gstack-config set telemetry off');
+    expect(SKILL_START_SCRIPT).toContain('touch "$_GH/.telemetry-prompted"');
   });
 
   test('generated SKILL.md contains telemetry epilogue (one gstack-skill-end call)', () => {
@@ -3436,12 +3458,16 @@ describe('plan-mode-info resolver (handshake-replacement)', () => {
   );
 
   test('plan-mode-info is wired BEFORE generateUpgradeCheck in preamble', () => {
+    // Token-reduction Phase 2: generateUpgradeCheck's render output is now
+    // ONLY the steady-state PROACTIVE-false + SKILL_PREFIX rules (the
+    // UPGRADE_AVAILABLE prose emits from bin/gstack-skill-start at runtime),
+    // so those rules are the resolver's order marker.
     const content = fs.readFileSync(
       path.join(ROOT, 'plan-ceo-review', 'SKILL.md'),
       'utf-8',
     );
     const planModeIdx = content.indexOf(PLAN_MODE_INFO_MARKER);
-    const upgradeIdx = content.indexOf('UPGRADE_AVAILABLE');
+    const upgradeIdx = content.indexOf('If `PROACTIVE` is `"false"`');
     expect(planModeIdx).toBeGreaterThan(0);
     expect(upgradeIdx).toBeGreaterThan(0);
     expect(planModeIdx).toBeLessThan(upgradeIdx);

@@ -52,7 +52,17 @@ afterAll(() => {
   fs.rmSync(tmpGstackHome, { recursive: true, force: true });
 });
 
-/** Extract the `KEY:` literals the rendered prose tells the model to read. */
+/**
+ * The STATUS-key contract. Post-Phase-2 these split into two consumers:
+ * keys the rendered prose still interprets directly (SESSION_KIND,
+ * CONDUCTOR_SESSION, SESSION_ID/TEL_START, EXPLAIN_LEVEL, QUESTION_TUNING,
+ * PROACTIVE, SKILL_PREFIX, REPO_MODE, CHECKPOINT_*, GSTACK_PLAN_MODE,
+ * ARTIFACTS_SYNC, ...) and keys the script's OWN emission gates consume
+ * (ACTIVATED, FIRST_TASK, LAKE_INTRO, TEL_PROMPTED, PROACTIVE_PROMPTED,
+ * HAS_ROUTING, ROUTING_DECLINED, VENDORED_GSTACK, ...). Both classes stay in
+ * the emitted contract: the echoes are the debugging surface for the gates,
+ * and prose in older installed renders may still read them.
+ */
 const PROSE_REFERENCED_KEYS = [
   'SKILL_START_PROTO',
   'BRANCH',
@@ -139,8 +149,16 @@ describe('gstack-skill-start behavior', () => {
         cwd: tmpHome,
         env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome },
       });
-      expect(out).not.toContain('GSTACK_INSTRUCTION_BEGIN');
+      // The poisoned marker must be neutralized...
+      expect(out).not.toContain('GSTACK_INSTRUCTION_BEGIN: evil');
       expect(out).toContain('GSTACK-INSTRUCTION-(stripped)');
+      // ...while the script's OWN emission layer (Phase 2) stays intact: every
+      // legitimate block header carries the SESSION_ID this run minted — the
+      // binding the fence prose enforces (F4/OV4).
+      const sid = out.match(/^SESSION_ID: (\S+)$/m)?.[1];
+      expect(sid).toBeTruthy();
+      const headers = out.match(/^GSTACK_INSTRUCTION_BEGIN: .*$/gm) ?? [];
+      for (const h of headers) expect(h.endsWith(` ${sid}`)).toBe(true);
     } finally {
       fs.rmSync(fakeBin, { recursive: true, force: true });
     }
