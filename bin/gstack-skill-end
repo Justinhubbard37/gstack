@@ -43,7 +43,7 @@ _TEL_DUR=$(( _TEL_END - TEL_START ))
 "$_BIN/gstack-brain-sync" --once 2>/dev/null || true
 
 # Session timeline: local-only, never sent anywhere.
-"$_BIN/gstack-timeline-log" '{"skill":"'"$SKILL_NAME"'","event":"completed","branch":"'"$(git branch --show-current 2>/dev/null || echo unknown)"'","outcome":"'"$OUTCOME"'","duration_s":"'"$_TEL_DUR"'","session":"'"$SESSION_ID"'"}' 2>/dev/null || true
+"$_BIN/gstack-timeline-log" '{"skill":"'"$SKILL_NAME"'","event":"completed","branch":"'"$(_b=$(git branch --show-current 2>/dev/null | tr -cd 'a-zA-Z0-9._/-'); echo "${_b:-unknown}")"'","outcome":"'"$OUTCOME"'","duration_s":"'"$_TEL_DUR"'","session":"'"$SESSION_ID"'"}' 2>/dev/null || true
 
 # Local analytics (gated on telemetry setting).
 if [ "$_TEL" != "off" ]; then

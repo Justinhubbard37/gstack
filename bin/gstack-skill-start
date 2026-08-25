@@ -55,8 +55,9 @@ _GH="${GSTACK_HOME:-$HOME/.gstack}"
 
 # OV4: strip instruction markers from any passthrough text before echoing it
 # into the blessed tool result. Prior-session/repo content must not be able to
-# mint directive blocks.
-_sanitize() { sed 's/GSTACK_INSTRUCTION/GSTACK-INSTRUCTION-(stripped)/g'; }
+# mint directive blocks — nor forge a SESSION_ID: status line (the token that
+# authenticates instruction blocks), so line-leading spoofs are neutralized too.
+_sanitize() { sed -e 's/GSTACK_INSTRUCTION/GSTACK-INSTRUCTION-(stripped)/g' -e 's/^SESSION_ID:/SESSION-ID-(stripped):/'; }
 
 echo "SKILL_START_PROTO: 1"
 
@@ -69,7 +70,10 @@ find "$_GH/sessions" -mmin +120 -type f -exec rm {} + 2>/dev/null || true
 
 _PROACTIVE=$("$_BIN/gstack-config" get proactive 2>/dev/null || echo "true")
 _PROACTIVE_PROMPTED=$([ -f "$_GH/.proactive-prompted" ] && echo "yes" || echo "no")
-_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+# Branch name is embedded in concatenated JSON below; strip anything outside
+# the gstack-slug BRANCH alphabet so a hostile ref name can't forge fields.
+_BRANCH=$(git branch --show-current 2>/dev/null | tr -cd 'a-zA-Z0-9._/-')
+_BRANCH=${_BRANCH:-unknown}
 echo "BRANCH: $_BRANCH"
 _SKILL_PREFIX=$("$_BIN/gstack-config" get skill_prefix 2>/dev/null || echo "false")
 echo "PROACTIVE: $_PROACTIVE"
@@ -103,7 +107,11 @@ echo "LAKE_INTRO: $_LAKE_SEEN"
 _TEL=$("$_BIN/gstack-config" get telemetry 2>/dev/null || true)
 _TEL_PROMPTED=$([ -f "$_GH/.telemetry-prompted" ] && echo "yes" || echo "no")
 _TEL_START=$(date +%s)
-_SESSION_ID="$PARENT_PID-$_TEL_START"
+# PID+epoch alone is guessable; a random suffix makes the block-binding token
+# unforgeable by content reflected into the same tool result. Falls back to
+# the plain form when urandom is unavailable.
+_SID_RAND=$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
+_SESSION_ID="$PARENT_PID-$_TEL_START${_SID_RAND:+-$_SID_RAND}"
 echo "TELEMETRY: ${_TEL:-off}"
 echo "TEL_PROMPTED: $_TEL_PROMPTED"
 echo "SESSION_ID: $_SESSION_ID"
@@ -126,6 +134,8 @@ for _PF in $(find "$_GH/analytics" -maxdepth 1 -name '.pending-*' 2>/dev/null); 
     fi
     rm -f "$_PF" 2>/dev/null || true
   fi
+  # Deliberate throttle: drain at most ONE orphaned pending file per skill
+  # start so a backlog can't stall the preamble.
   break
 done
 eval "$("$_BIN/gstack-slug" 2>/dev/null)" 2>/dev/null || true
@@ -176,7 +186,7 @@ echo "GSTACK_PLAN_MODE: $GSTACK_PLAN_MODE"
 
 # ---------------------------------------------------------------------------
 # Artifacts sync (the former "Artifacts Sync (skill start)" fence, verbatim
-# module GSTACK_HOME + $0-relative bins).
+# modulo GSTACK_HOME + $0-relative bins).
 # ---------------------------------------------------------------------------
 if [ -f "$HOME/.gstack-artifacts-remote.txt" ]; then
   _BRAIN_REMOTE_FILE="$HOME/.gstack-artifacts-remote.txt"
@@ -191,7 +201,7 @@ _BRAIN_CONFIG_BIN="$_BIN/gstack-config"
 # configured (zero context cost for non-gbrain users).
 _GBRAIN_CONFIG="$HOME/.gbrain/config.json"
 if [ -f "$_GBRAIN_CONFIG" ] && command -v gbrain >/dev/null 2>&1; then
-  _GBRAIN_VERSION_OK=$(gbrain --version 2>/dev/null | grep -c '^gbrain ' || echo 0)
+  _GBRAIN_VERSION_OK=$(gbrain --version 2>/dev/null | grep -c '^gbrain ' || true)
   if [ "$_GBRAIN_VERSION_OK" -gt 0 ] 2>/dev/null; then
     _GBRAIN_PIN_PATH=""
     _REPO_TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
@@ -220,7 +230,9 @@ _BRAIN_SYNC_MODE=$("$_BRAIN_CONFIG_BIN" get artifacts_sync_mode 2>/dev/null || e
 # separators (Windows project keys are backslash-formed).
 _GBRAIN_MCP_MODE="none"
 _GBRAIN_MCP_ENTRY=""
-if command -v jq >/dev/null 2>&1 && [ -f "$HOME/.claude.json" ]; then
+# Cheap substring pre-filter: ~/.claude.json can be megabytes on real installs;
+# skip the full jq parse when no gbrain server is registered at all.
+if command -v jq >/dev/null 2>&1 && [ -f "$HOME/.claude.json" ] && grep -q '"gbrain"' "$HOME/.claude.json" 2>/dev/null; then
   _GBRAIN_MCP_ENTRY=$(jq -c --arg cwd "$PWD" '((.projects // {}) | to_entries | map(select((.key as $k | $cwd == $k or ($cwd | startswith($k + "/")) or ($cwd | startswith($k + "\\"))) and ((try .value.mcpServers.gbrain catch null) != null))) | sort_by(.key | length) | last | .value.mcpServers.gbrain) // .mcpServers.gbrain // empty' "$HOME/.claude.json" 2>/dev/null)
   _GBRAIN_MCP_TYPE=$(printf '%s' "$_GBRAIN_MCP_ENTRY" | jq -r '.type // .transport // empty' 2>/dev/null)
   case "$_GBRAIN_MCP_TYPE" in
@@ -232,7 +244,7 @@ fi
 if [ -f "$_BRAIN_REMOTE_FILE" ] && [ ! -d "$_GH/.git" ] && [ "$_BRAIN_SYNC_MODE" = "off" ]; then
   _BRAIN_NEW_URL=$(head -1 "$_BRAIN_REMOTE_FILE" 2>/dev/null | tr -d '[:space:]')
   if [ -n "$_BRAIN_NEW_URL" ]; then
-    echo "ARTIFACTS_SYNC: artifacts repo detected: $_BRAIN_NEW_URL"
+    printf 'ARTIFACTS_SYNC: artifacts repo detected: %s\n' "$_BRAIN_NEW_URL" | _sanitize
     echo "ARTIFACTS_SYNC: run 'gstack-brain-restore' to pull your cross-machine artifacts (or 'gstack-config set artifacts_sync_mode off' to dismiss forever)"
   fi
 fi
@@ -253,10 +265,15 @@ if [ -d "$_GH/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
     . "$_BIN/gstack-egress-lib.sh" 2>/dev/null || true
     _PULL_HOST=$(cd "$_GH" 2>/dev/null && git remote get-url origin 2>/dev/null | sed -E 's|^[a-z+]+://([^/@]*@)?([^/:]+).*|\2|; s|^([^@]+@)?([^:]+):.*|\2|' | head -1)
     if command -v _receipted_git >/dev/null 2>&1; then
-      ( cd "$_GH" && GSTACK_HOME="$_GH" _receipted_git closed brain-sync "${_PULL_HOST:-unknown}" curated-memory-git-fetch "artifacts_sync_mode!=off" \
+      # Non-interactive + slow-network bounded (same guards as gstack-update-check):
+      # a hung remote or a credential prompt must not stall the preamble.
+      ( cd "$_GH" && GSTACK_HOME="$_GH" GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=5 \
+          _receipted_git closed brain-sync "${_PULL_HOST:-unknown}" curated-memory-git-fetch "artifacts_sync_mode!=off" \
           git fetch origin >/dev/null 2>&1 && git merge --ff-only "origin/$(git rev-parse --abbrev-ref HEAD)" >/dev/null 2>&1 ) || true
+      # Stamp only when the receipted path actually ran — a missing egress lib
+      # must surface as a retry next start, not a silent 24h suppression.
+      echo "$_BRAIN_NOW" > "$_BRAIN_LAST_PULL_FILE"
     fi
-    echo "$_BRAIN_NOW" > "$_BRAIN_LAST_PULL_FILE"
   fi
   "$_BRAIN_SYNC_BIN" --once 2>/dev/null || true
 fi
@@ -274,7 +291,10 @@ elif [ -d "$_GH/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
   [ -f "$_GH/.brain-queue.jsonl" ] && _BRAIN_QUEUE_DEPTH=$(( _BRAIN_QUEUE_DEPTH + $(wc -l < "$_GH/.brain-queue.jsonl" | tr -d ' ') ))
   [ -f "$_GH/.brain-queue.jsonl.migrating" ] && _BRAIN_QUEUE_DEPTH=$(( _BRAIN_QUEUE_DEPTH + $(wc -l < "$_GH/.brain-queue.jsonl.migrating" | tr -d ' ') ))
   _BRAIN_LAST_PUSH="never"
-  [ -f "$_GH/.brain-last-push" ] && _BRAIN_LAST_PUSH=$(cat "$_GH/.brain-last-push" 2>/dev/null || echo never)
+  # First line only + charset clamp: this file lives in a git checkout pulled
+  # from the artifacts remote, so its content is not trusted for STATUS output.
+  [ -f "$_GH/.brain-last-push" ] && _BRAIN_LAST_PUSH=$(head -1 "$_GH/.brain-last-push" 2>/dev/null | tr -cd 'A-Za-z0-9._:+-' || echo never)
+  _BRAIN_LAST_PUSH=${_BRAIN_LAST_PUSH:-never}
   echo "ARTIFACTS_SYNC: mode=$_BRAIN_SYNC_MODE | last_push=$_BRAIN_LAST_PUSH | queue=$_BRAIN_QUEUE_DEPTH"
 else
   echo "ARTIFACTS_SYNC: off"
@@ -455,8 +475,13 @@ fi
 
 # Privacy stop-gate (Phase 2, user-approved Q2: consent question surfaces only
 # when consent is actually pending; still fired through AskUserQuestion).
+# Interactive sessions ONLY: this block is emitted AFTER the spawned-session
+# block, so its "skip instruction blocks above" rule does not cover it — a
+# spawned session's auto-choose would accept data-sync consent no human gave.
+# Deferral is safe (EOV8): the config key stays unset, so the gate fires on
+# the next interactive run. Same reasoning suppresses it in headless runs.
 _ARTIFACTS_PROMPTED=$("$_BRAIN_CONFIG_BIN" get artifacts_sync_mode_prompted 2>/dev/null || echo "false")
-if [ "$_BRAIN_SYNC_MODE" = "off" ] && [ "$_ARTIFACTS_PROMPTED" != "true" ] && command -v gbrain >/dev/null 2>&1; then
+if [ "$_SESSION_KIND" = "interactive" ] && [ "$_BRAIN_SYNC_MODE" = "off" ] && [ "$_ARTIFACTS_PROMPTED" != "true" ] && command -v gbrain >/dev/null 2>&1; then
   _emit_block privacy-stop-gate <<EOI
 Privacy stop-gate — ask once via AskUserQuestion:
 
