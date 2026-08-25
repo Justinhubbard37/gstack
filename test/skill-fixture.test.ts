@@ -195,14 +195,24 @@ describe('real-skill pins: section lists used by E2E fixtures', () => {
     expect(army).toContain('MULTI-SPECIALIST CONFIRMED');
   });
 
-  test('RETRO_E2E_SECTIONS extracts from retro/SKILL.md', () => {
-    const out = extractSkillSections(path.join(ROOT, 'retro'), RETRO_E2E_SECTIONS);
+  test('RETRO_E2E_SECTIONS skeleton extracts from retro/SKILL.md + carved section', () => {
+    // Carved (retro wave): the '## Engineering Retro: [date range]' report
+    // format lives in retro/sections/report-format.md; the E2E fixture builds
+    // skeleton sections + the section file (see skill-e2e-retro.test.ts).
+    const skeletonSections = RETRO_E2E_SECTIONS.filter(
+      (s) => s !== 'Engineering Retro: [date range]',
+    );
+    const out = extractSkillSections(path.join(ROOT, 'retro'), skeletonSections);
     // Steps 0.5-14 live under Prior Learnings / Capture Learnings.
-    expect(out).toContain('### Step 1: Gather Raw Data');
+    expect(out).toContain('### Step 1: Gather');
     expect(out).toContain('### Step 14: Write the Narrative');
-    expect(out).toContain('## Engineering Retro: [date range]');
     expect(out).not.toContain('## Global Retrospective Mode');
     expect(out).not.toContain('## Telemetry (run last)');
+
+    const reportFormat = fs.readFileSync(
+      path.join(ROOT, 'retro', 'sections', 'report-format.md'), 'utf-8');
+    expect(reportFormat).toContain('## Engineering Retro: [date range]');
+    expect(reportFormat).toContain('### Team Breakdown');
   });
 
   test('CODEX_REVIEW_E2E_SECTIONS extracts from the Codex host variant when present', () => {
