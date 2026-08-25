@@ -27,6 +27,13 @@
 # Error style (F3): per-line `|| true`, never `set -e` — a mid-script failure
 # must not drop later STATUS lines.
 
+# Heredoc bodies in the 512B-64KiB window can deadlock bash 5.1+'s pipe-backed
+# heredoc path when the reader stalls; compat level 50 restores the tempfile
+# path. This script is bash-3.2-clean, so the compat level costs nothing
+# (same guard as bin/gstack-brain-sync; pinned by
+# test/heredoc-pipe-deadlock.test.ts).
+BASH_COMPAT=50
+
 SKILL_NAME=""
 MODEL_OVERLAY="none"
 PARENT_PID="$PPID"
@@ -271,6 +278,193 @@ elif [ -d "$_GH/.git" ] && [ "$_BRAIN_SYNC_MODE" != "off" ]; then
   echo "ARTIFACTS_SYNC: mode=$_BRAIN_SYNC_MODE | last_push=$_BRAIN_LAST_PUSH | queue=$_BRAIN_QUEUE_DEPTH"
 else
   echo "ARTIFACTS_SYNC: off"
+fi
+
+# ---------------------------------------------------------------------------
+# Instruction-emission layer (token-reduction Phase 2). One-time onboarding
+# text used to be inlined unconditionally in every SKILL.md (~7KB/skill);
+# it now appears ONLY when its runtime gate fires, wrapped in blocks the
+# preamble prose tells the model to follow. Security scoping (F4/OV4): each
+# header carries this run's SESSION_ID; the prose rule requires the match and
+# accepts blocks only from this command's direct tool result, so page/file
+# content cannot mint directives (passthrough output above is _sanitize-d).
+# Ack ownership (OV6): display-only tips write their done-marker here at
+# emit; interactive flows carry their ack commands inside the block for the
+# model to run after the interaction.
+# ---------------------------------------------------------------------------
+_ROOT_DIR=$(dirname "$_BIN")
+_emit_block() { echo "GSTACK_INSTRUCTION_BEGIN: $1 $_SESSION_ID"; cat; echo "GSTACK_INSTRUCTION_END"; }
+
+# Upgrade flow (gated: update-check emitted something above).
+if [ -n "$_UPD" ]; then
+  _emit_block upgrade-flow <<EOI
+The update-check output above applies. If it shows \`UPGRADE_AVAILABLE <old> <new>\`: read \`$_ROOT_DIR/gstack-upgrade/SKILL.md\` and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined). If it shows \`JUST_UPGRADED <from> <to>\`: print "Running gstack v{to} (just updated!)". If \`SPAWNED_SESSION\` is true, skip feature discovery. After upgrade prompts, continue the workflow.
+EOI
+fi
+# Feature discovery (one prompt per session, marker-gated).
+if [ ! -f "$_ROOT_DIR/.feature-prompted-continuous-checkpoint" ]; then
+  _emit_block feature-checkpoint <<EOI
+Feature discovery: AskUserQuestion for Continuous checkpoint auto-commits. If accepted, run \`$_BIN/gstack-config set checkpoint_mode continuous\`. Always run: \`touch "$_ROOT_DIR/.feature-prompted-continuous-checkpoint"\`.
+EOI
+elif [ ! -f "$_ROOT_DIR/.feature-prompted-model-overlay" ]; then
+  _emit_block feature-overlay <<EOI
+Feature discovery: inform "Model overlays are active. MODEL_OVERLAY shows the patch." Always run: \`touch "$_ROOT_DIR/.feature-prompted-model-overlay"\`.
+EOI
+fi
+
+# Writing-style migration (gate previously dormant: nothing echoed
+# WRITING_STYLE_PENDING; the script now computes it from the marker files).
+if [ -f "$_GH/.writing-style-prompt-pending" ] && [ ! -f "$_GH/.writing-style-prompted" ]; then
+  _emit_block writing-style-migration <<EOI
+Ask once about writing style:
+
+> v1 prompts are simpler: first-use jargon glosses, outcome-framed questions, shorter prose. Keep default or restore terse?
+
+Options:
+- A) Keep the new default (recommended — good writing helps everyone)
+- B) Restore V0 prose — set \`explain_level: terse\`
+
+If A: leave \`explain_level\` unset (defaults to \`default\`). If B: run \`$_BIN/gstack-config set explain_level terse\`.
+Always run (regardless of choice): \`rm -f "$_GH/.writing-style-prompt-pending" && touch "$_GH/.writing-style-prompted"\`.
+EOI
+fi
+
+# Lake intro (one-time; the offer is interactive, so the model acks).
+if [ "$_LAKE_SEEN" = "no" ]; then
+  _emit_block lake-intro <<EOI
+Say: "gstack follows the **Boil the Ocean** principle — do the complete thing when AI makes marginal cost near-zero. Read more: https://garryslist.org/posts/boil-the-ocean" and offer to open it. Only run \`open https://garryslist.org/posts/boil-the-ocean\` if the user says yes. Always run: \`touch "$_GH/.completeness-intro-seen"\`.
+EOI
+fi
+
+# Telemetry opt-in (interactive; consent — the model acks after answering).
+if [ "$_TEL_PROMPTED" = "no" ] && [ "$_LAKE_SEEN" = "yes" ]; then
+  _emit_block telemetry-prompt <<EOI
+Ask telemetry once via AskUserQuestion:
+
+> Help gstack get better. Share usage data only: skill, duration, crashes, stable device ID. No code or file paths. Your repo name is recorded locally only and stripped before any upload.
+
+Options:
+- A) Help gstack get better! (recommended)
+- B) No thanks
+
+If A: run \`$_BIN/gstack-config set telemetry community\`. If B, ask the follow-up:
+
+> Anonymous mode sends only aggregate usage, no unique ID.
+
+Options: A) Sure, anonymous is fine  B) No thanks, fully off
+If B→A: \`$_BIN/gstack-config set telemetry anonymous\`. If B→B: \`$_BIN/gstack-config set telemetry off\`.
+Always run: \`touch "$_GH/.telemetry-prompted"\`.
+EOI
+fi
+
+# Proactive-suggestions opt-in (interactive).
+if [ "$_PROACTIVE_PROMPTED" = "no" ] && [ "$_TEL_PROMPTED" = "yes" ]; then
+  _emit_block proactive-prompt <<EOI
+Ask once:
+
+> Let gstack proactively suggest skills, like /qa for "does this work?" or /investigate for bugs?
+
+Options: A) Keep it on (recommended)  B) Turn it off — I'll type /commands myself
+If A: \`$_BIN/gstack-config set proactive true\`. If B: \`$_BIN/gstack-config set proactive false\`.
+Always run: \`touch "$_GH/.proactive-prompted"\`.
+EOI
+fi
+
+# First-run guidance (display-only tips: marker + scaffold telemetry written
+# HERE at emit, per OV6 — a lost tip is acceptable; a re-firing loop is not).
+if [ "$_ACTIVATED" = "no" ]; then
+  _FT_TIP=""
+  case "$_FIRST_TASK" in
+    greenfield) _FT_TIP="Fresh repo — shape it first with \`/spec\` or \`/office-hours\`." ;;
+    code_node|code_python|code_rust|code_go|code_ruby|code_ios) _FT_TIP="There's code here — \`/qa\` to see it work, or \`/investigate\` if something's off." ;;
+    branch_ahead) _FT_TIP="Unshipped work on this branch — \`/review\` then \`/ship\`." ;;
+    dirty_default) _FT_TIP="Uncommitted changes — \`/review\` before committing." ;;
+    clean_default) _FT_TIP="Pick one: \`/spec\`, \`/investigate\`, or \`/qa\`." ;;
+  esac
+  if [ -n "$_FT_TIP" ]; then
+    _emit_block first-run-tip <<EOI
+Show this one project-specific line as a heads-up, then CONTINUE with whatever the user actually asked — do NOT halt their task: $_FT_TIP
+EOI
+    "$_BIN/gstack-telemetry-log" --event-type first_task_scaffold_shown --skill "$_FIRST_TASK" --outcome shown 2>/dev/null || true
+  fi
+  touch "$_GH/.activated" 2>/dev/null || true
+elif [ "$_FIRST_LOOP_SHOWN" = "no" ]; then
+  _emit_block first-loop-tip <<EOI
+Say once as a heads-up (then continue): Tip: gstack pays off when you complete one loop — **plan → review → ship**. A common first loop: \`/office-hours\` or \`/spec\` to shape it, \`/plan-eng-review\` to lock it, then \`/ship\`.
+EOI
+  touch "$_GH/.first-loop-tip-shown" 2>/dev/null || true
+fi
+
+# Routing injection (interactive: AUQ + CLAUDE.md append + commit). The body
+# is a quoted heredoc (markdown backticks must stay literal), so the resolved
+# bin path is substituted via sed on the __BIN__ placeholder.
+if [ "$_HAS_ROUTING" = "no" ] && [ "$_ROUTING_DECLINED" = "false" ] && [ "$_PROACTIVE_PROMPTED" = "yes" ]; then
+  sed "s|__BIN__|$_BIN|g" <<'EOI' | _emit_block routing-injection
+gstack works best when the project CLAUDE.md includes skill routing rules. If no CLAUDE.md exists in the project root, create it. Use AskUserQuestion:
+
+> gstack works best when your project's CLAUDE.md includes skill routing rules.
+
+Options: A) Add routing rules to CLAUDE.md (recommended)  B) No thanks, I'll invoke skills manually
+
+If A: append this section to the end of CLAUDE.md, then commit it (`git add CLAUDE.md && git commit -m "chore: add gstack skill routing rules to CLAUDE.md"`):
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
+
+If B: run `__BIN__/gstack-config set routing_declined true` and say they can re-enable with `__BIN__/gstack-config set routing_declined false`. This only happens once per project.
+EOI
+fi
+
+# Vendoring deprecation (interactive; slug-scoped marker).
+if [ "$_VENDORED" = "yes" ] && [ ! -f "$_GH/.vendoring-warned-${SLUG:-unknown}" ]; then
+  _emit_block vendoring-deprecation <<EOI
+This project has gstack vendored in \`.claude/skills/gstack/\`. Vendoring is deprecated. Warn once via AskUserQuestion:
+
+> Migrate to team mode?
+
+Options: A) Yes, migrate to team mode now  B) No, I'll handle it myself
+If A: 1) \`git rm -r .claude/skills/gstack/\` 2) \`echo '.claude/skills/gstack/' >> .gitignore\` 3) \`$_BIN/gstack-team-init required\` (or \`optional\`) 4) \`git add .claude/ .gitignore CLAUDE.md && git commit -m "chore: migrate gstack from vendored to team mode"\` 5) Tell the user: "Done. Each developer now runs: \`cd ~/.claude/skills/gstack && ./setup --team\`"
+If B: say "OK, you're on your own to keep the vendored copy up to date."
+Always run (regardless of choice): \`touch "$_GH/.vendoring-warned-${SLUG:-unknown}"\`.
+EOI
+fi
+
+# Spawned-session rules (NOT one-time — every spawned session gets the full
+# behavioral instruction, per plan OV6 move-with-care).
+if [ -n "${OPENCLAW_SESSION:-}" ]; then
+  _emit_block spawned-session <<EOI
+You are running inside a session spawned by an AI orchestrator (e.g., OpenClaw). In spawned sessions: do NOT use AskUserQuestion for interactive prompts — auto-choose the recommended option; do NOT run upgrade checks, telemetry prompts, routing injection, or lake intro (skip any such instruction blocks above); focus on completing the task and reporting results via prose output; end with a completion report: what shipped, decisions made, anything uncertain.
+EOI
+fi
+
+# Privacy stop-gate (Phase 2, user-approved Q2: consent question surfaces only
+# when consent is actually pending; still fired through AskUserQuestion).
+_ARTIFACTS_PROMPTED=$("$_BRAIN_CONFIG_BIN" get artifacts_sync_mode_prompted 2>/dev/null || echo "false")
+if [ "$_BRAIN_SYNC_MODE" = "off" ] && [ "$_ARTIFACTS_PROMPTED" != "true" ] && command -v gbrain >/dev/null 2>&1; then
+  _emit_block privacy-stop-gate <<EOI
+Privacy stop-gate — ask once via AskUserQuestion:
+
+> gstack can publish your artifacts (CEO plans, designs, reports) to a private GitHub repo that GBrain indexes across machines. How much should sync?
+
+Options: A) Everything allowlisted (recommended)  B) Only artifacts  C) Decline, keep everything local
+After answer run: \`$_BIN/gstack-config set artifacts_sync_mode <full|artifacts-only|off>\` and \`$_BIN/gstack-config set artifacts_sync_mode_prompted true\`. If A/B and \`~/.gstack/.git\` is missing, ask whether to run \`gstack-artifacts-init\`. Do not block the skill.
+EOI
 fi
 
 # BRAIN_HEALTH block: only for hosts whose render passes --brain-health
