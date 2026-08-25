@@ -206,19 +206,8 @@ export function runParityChecks(opts: {
  */
 const MONOLITH_INVARIANTS: ParityInvariant[] = [
   // cso is now carved — its invariant is generated from CARVE_GUARDS below.
-  {
-    skill: 'review',
-    mustContain: ['confidence', 'P1', 'P2'],
-    mustHaveHeadings: ['## Preamble', '## When to invoke'],
-    // The adversarial step swapped its bare `command -v codex` check for the shared
-    // codexPreflight() block (install + auth tri-state + CODEX_MODE branch prose),
-    // landing ~6.3% over the v1.53.0.0 baseline. Intentional: it adds proper
-    // not-installed vs not-authed handling, not slop.
-    // v1.64+v1.65 merge: both waves grew the shared preamble (evidence
-    // directive + telemetry failure flags); measured 1.094.
-    maxSizeRatio: 1.10,
-    minBytes: 70_000,
-  },
+  // review, codex, and land-and-deploy carved in token-reduction Phase 4
+  // wave 1 (v1.69.x branch) — their invariants generate from CARVE_GUARDS too.
   {
     skill: 'qa',
     mustContain: ['bug', 'browse', 'fix'],

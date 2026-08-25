@@ -371,6 +371,91 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // v1.64+v1.65 merge sums both waves' preamble growth; measured 1.073.
     maxSizeRatio: 1.08,
   },
+  // ── Token-reduction Phase 4 wave 1 (v1.69.x branch) ──────────────────────
+  review: {
+    skill: 'review',
+    expectedSections: ['plan-completion.md', 'review-army.md', 'adversarial.md'],
+    requiredReads: ['plan-completion.md', 'review-army.md'],
+    scenario:
+      "The working tree has a real diff against the base branch (assume Step 1's git checks passed; the diff implements the PLAN.md cache layer). Run the /review flow: the scope-drift and plan-completion deep pass against PLAN.md, then the critical pass, then the Review Army specialist dispatch — apply the specialist checklists yourself instead of launching subagents. Produce the review report. Do NOT commit, push, or create a PR.",
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## Step 0: Detect platform and base branch',
+        '## Step 1: Check branch',
+        '## Step 1.5: Scope Drift Detection',
+        '## Step 4: Critical pass (core review)',
+        '## Confidence Calibration',
+        '## Step 5: Fix-First Review',
+        '## Important Rules',
+        'Persist Eng Review result',
+      ],
+      mustPrecedeStop: ['## Step 0: Detect platform and base branch'],
+      mustMoveToSection: [
+        'Plan File Discovery',
+        'MULTI-SPECIALIST CONFIRMED',
+        'Cross-model synthesis',
+        'codex review --base',
+      ],
+      gateAfterStop: undefined, // operational multi-STOP skill, like ship
+    },
+    behavioral: 'plan',
+    maxSkeletonBytes: 55_600, // Phase 4 wave 1; measured 55,010
+    minUnionBytes: 89_000, // Phase 4 wave 1; measured union 93,357
+    mustContain: ['confidence', 'P1', 'P2', 'Review Army', 'adversarial'],
+  },
+  codex: {
+    skill: 'codex',
+    expectedSections: ['review-mode.md', 'challenge-mode.md', 'consult-mode.md'],
+    requiredReads: ['review-mode.md', 'consult-mode.md'],
+    scenario:
+      "Run the /codex skill twice: first Review mode against this branch's diff (produce the GATE verdict), then Consult mode with the follow-up 'is the strongest finding worth fixing before ship?'. Follow the Step 1 dispatch and read each selected mode's section before executing it; if the codex CLI is unavailable, still walk the mode instructions and report what you would run.",
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## Step 1: Detect mode',
+        '## Filesystem Boundary',
+        'Synthesis recommendation (REQUIRED)',
+        'Recommendation: <action> because',
+        'UNDER_CODEX',
+      ],
+      mustPrecedeStop: ['## Step 1: Detect mode', '## Filesystem Boundary'],
+      mustMoveToSection: [
+        'The gate FAILS CLOSED',
+        'Think like an attacker and a chaos engineer',
+        'codex exec resume',
+      ],
+      gateAfterStop: 'EXIT PLAN MODE GATE',
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 55_760, // Phase 4 wave 1; measured 55,155
+    minUnionBytes: 83_400, // Phase 4 wave 1; measured union 84,304
+    mustContain: ['GATE: PASS', 'CROSS-MODEL ANALYSIS', 'codex exec resume', 'sandbox_mode="read-only"', 'mktemp'],
+    maxSizeRatio: 1.06, // measured 1.040 vs the v1.64.1.0 parity baseline
+  },
+  'land-and-deploy': {
+    skill: 'land-and-deploy',
+    expectedSections: ['first-run-validation.md', 'readiness-gate.md', 'merge-and-deploy.md'],
+    requiredReads: ['readiness-gate.md', 'merge-and-deploy.md'],
+    scenario:
+      'This project has a confirmed prior /land-and-deploy run (treat the Step 1.5 check as CONFIRMED). A PR exists for this branch and CI is green. Simulate — do not run gh or actually merge: run the pre-merge readiness gate and produce the readiness report, then walk the merge and deploy-strategy steps, stating which merge path and deploy strategy you would take. Do NOT use AskUserQuestion.',
+    staticInvariants: {
+      mustStayInSkeleton: [
+        'land-deploy-confirmed',
+        '## Step 3.4: VERSION drift detection',
+        '## Step 6: Wait for deploy',
+      ],
+      mustPrecedeStop: ['land-deploy-confirmed'],
+      mustMoveToSection: [
+        'PRE-MERGE READINESS REPORT',
+        'gh pr merge --squash --auto --delete-branch',
+        'DEPLOY INFRASTRUCTURE VALIDATION',
+      ],
+      gateAfterStop: undefined, // operational skill
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 57_500, // Phase 4 wave 1; estimated ~56.2KB rendered — re-measured at regen
+    minUnionBytes: 91_000, // Phase 4 wave 1; estimated union ~94.9KB
+    mustContain: ['readiness', 'merge', 'canary', 'revert', 'staging'],
+  },
 };
 
 /** Sorted carved-skill names. Consumers derive their lists from this — no parallel lists. */
