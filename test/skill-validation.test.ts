@@ -1310,7 +1310,9 @@ describe('ship step numbering', () => {
   });
 
   test('review/SKILL.md step numbers unchanged (regression guard for resolver conditionals)', () => {
-    const skill = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+    // Carved skill: Step 4.5 lives in sections/review-army.md and Step 5.7 in
+    // sections/adversarial.md — read the skeleton+sections union.
+    const skill = readSkillUnion('review');
     // /review uses its own fractional numbering: 1.5, 2.5, 4.5, 5.5, 5.6, 5.7, 5.8
     // If the ship-side renumber accidentally touched the review-side of resolver conditionals,
     // these would vanish. This test catches that.
@@ -1373,28 +1375,34 @@ describe('Codex skill', () => {
     expect(content).toContain('allowed-tools:');
   });
 
-  test('codex/SKILL.md contains all three modes', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  // Carved skill (T9): the three mode bodies live in codex/sections/
+  // {review,challenge,consult}-mode.md. Content pins read the union; the
+  // mode DISPATCH must stay in the always-loaded skeleton.
+  test('codex union contains all three modes; skeleton keeps the dispatch', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('Step 2A: Review Mode');
     expect(content).toContain('Step 2B: Challenge');
     expect(content).toContain('Step 2C: Consult Mode');
+    const skeleton = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+    expect(skeleton).toContain('## Step 1: Detect mode');
+    expect(skeleton).toContain('MUTUALLY EXCLUSIVE');
   });
 
-  test('codex/SKILL.md contains gate verdict logic', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex union contains gate verdict logic', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('[P1]');
     expect(content).toContain('GATE: PASS');
     expect(content).toContain('GATE: FAIL');
   });
 
-  test('codex/SKILL.md contains session continuity', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex union contains session continuity', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('codex-session-id');
     expect(content).toContain('codex exec resume');
   });
 
-  test('codex/SKILL.md resume command only uses resume-supported flags', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex resume command only uses resume-supported flags', () => {
+    const content = readSkillUnion('codex');
     const match = content.match(/codex exec resume[^\n]+/);
     expect(match).not.toBeNull();
     const resumeCommand = match![0];
@@ -1403,26 +1411,26 @@ describe('Codex skill', () => {
     expect(resumeCommand).toContain("-c 'sandbox_mode=\"read-only\"'");
   });
 
-  test('codex/SKILL.md contains cost tracking', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex union contains cost tracking', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('tokens used');
     expect(content).toContain('Est. cost');
   });
 
-  test('codex/SKILL.md contains cross-model comparison', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex union contains cross-model comparison', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('CROSS-MODEL ANALYSIS');
     expect(content).toContain('Agreement rate');
   });
 
-  test('codex/SKILL.md contains review log persistence', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex union contains review log persistence', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('codex-review');
     expect(content).toContain('gstack-review-log');
   });
 
-  test('codex/SKILL.md uses command -v for binary discovery, not hardcoded path', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex uses command -v for binary discovery, not hardcoded path', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('command -v codex');
     expect(content).not.toContain('/opt/homebrew/bin/codex');
     // Defensive: catch any future regression that reintroduces `which codex`,
@@ -1437,16 +1445,25 @@ describe('Codex skill', () => {
     expect(content).toContain('codex login');
   });
 
-  test('codex/SKILL.md uses mktemp for temp files', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'codex', 'SKILL.md'), 'utf-8');
+  test('codex union uses mktemp for temp files', () => {
+    const content = readSkillUnion('codex');
     expect(content).toContain('mktemp');
   });
 
   test('codex JSON stream parser uses portable Python discovery', () => {
-    const files = ['codex/SKILL.md.tmpl', 'codex/SKILL.md'];
+    // The JSONL parsers live in the challenge + consult mode sections; sweep
+    // the tmpl union and the rendered union so neither side drifts.
+    const sectionsDir = path.join(ROOT, 'codex', 'sections');
+    const tmplUnion = ['codex/SKILL.md.tmpl']
+      .map((rel) => fs.readFileSync(path.join(ROOT, rel), 'utf-8'))
+      .concat(
+        fs.readdirSync(sectionsDir).sort()
+          .filter((f) => f.endsWith('.md.tmpl'))
+          .map((f) => fs.readFileSync(path.join(sectionsDir, f), 'utf-8')),
+      )
+      .join('\n');
 
-    for (const rel of files) {
-      const content = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+    for (const content of [tmplUnion, readSkillUnion('codex')]) {
       expect(content).toContain('PYTHON_CMD=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)');
       expect(content).toContain('PYTHONUNBUFFERED=1 "$PYTHON_CMD" -u -c');
       expect(content).not.toContain('PYTHONUNBUFFERED=1 python3 -u -c');
@@ -1454,7 +1471,8 @@ describe('Codex skill', () => {
   });
 
   test('adversarial review in /review always runs both passes', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'review', 'SKILL.md'), 'utf-8');
+    // Carved skill: the Step 5.7 adversarial body lives in sections/adversarial.md.
+    const content = readSkillUnion('review');
     expect(content).toContain('Adversarial review (always-on)');
     // Always-on: both Claude and Codex adversarial
     expect(content).toContain('Claude adversarial subagent (always runs)');
@@ -1580,8 +1598,11 @@ describe('Codex skill', () => {
     // the correct scoped form also contains — it could not tell the two apart,
     // so it effectively banned the fix.
     for (const rel of ['codex/SKILL.md', 'review/SKILL.md', 'ship/SKILL.md']) {
-      // ship's codex command moved into sections/adversarial.md (T9 carve).
-      const content = rel === 'ship/SKILL.md' ? readShipUnion() : fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      // ship's AND review's codex commands moved into sections/adversarial.md;
+      // codex's own scoped invocation lives in sections/review-mode.md (T9 carve).
+      const content = rel === 'ship/SKILL.md' ? readShipUnion()
+        : rel === 'review/SKILL.md' ? readSkillUnion('review')
+        : readSkillUnion('codex');
       expect(content).toMatch(/codex\s+review\s+--base\b/);
       const offending: string[] = [];
       for (const line of content.split('\n')) {
@@ -1612,8 +1633,10 @@ describe('Codex skill', () => {
     const boundaryLine =
       'Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/';
     for (const rel of ['codex/SKILL.md', 'review/SKILL.md', 'ship/SKILL.md']) {
-      // ship's codex/adversarial boundary line moved into sections/adversarial.md.
-      const content = rel === 'ship/SKILL.md' ? readShipUnion() : fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      // ship's AND review's codex/adversarial boundary lines moved into sections/adversarial.md.
+      const content = rel === 'ship/SKILL.md' ? readShipUnion()
+        : rel === 'review/SKILL.md' ? readSkillUnion('review')
+        : fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       expect(content).toContain(boundaryLine);
     }
   });
@@ -2072,4 +2095,19 @@ describe('Bundled browser-skills frontmatter contract', () => {
       expect(content).toMatch(/from\s+['"]\.\/_lib\/browse-client['"]/);
     }
   });
+});
+
+// Token-reduction Phase 5: the four ios skills demoted from preamble-tier 3
+// to 2 — they never consume the tier-3 sections (repo-mode ownership, search
+// before building) but DO fire AskUserQuestion, which tier >=2 provides.
+describe('ios tier demotion (Phase 5)', () => {
+  const iosSkills = ['ios-fix', 'ios-clean', 'ios-sync', 'ios-design-review'];
+  for (const skill of iosSkills) {
+    test(`${skill} render drops tier-3 sections, keeps AUQ format`, () => {
+      const content = fs.readFileSync(path.join(ROOT, skill, 'SKILL.md'), 'utf-8');
+      expect(content).not.toContain('## Repo Ownership');
+      expect(content).not.toContain('## Search Before Building');
+      expect(content).toContain('## AskUserQuestion Format');
+    });
+  }
 });
