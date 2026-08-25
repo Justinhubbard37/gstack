@@ -1,10 +1,10 @@
 {
   "tag": "v1.69.1.0",
-  "capturedAt": "2026-08-25T17:36:29.077Z",
-  "capturedFromCommit": "706091cb",
+  "capturedAt": "2026-08-25T18:01:18.758Z",
+  "capturedFromCommit": "3bc3b5d5",
   "capturedFromBranch": "prompt-token-load-reduction",
   "totalSkills": 53,
-  "totalCorpusBytes": 2810742,
+  "totalCorpusBytes": 2814663,
   "estTotalCatalogTokens": 4195,
   "topHeaviest": [
     {
@@ -29,10 +29,10 @@
     },
     {
       "skill": "office-hours",
-      "skillMdBytes": 116652,
-      "skillMdLines": 1322,
-      "estTokens": 29163,
-      "tmplBytes": 30566,
+      "skillMdBytes": 118175,
+      "skillMdLines": 1134,
+      "estTokens": 29544,
+      "tmplBytes": 15409,
       "descriptionLen": 860,
       "hasGateEval": true,
       "hasPeriodicEval": false
@@ -221,10 +221,10 @@
     },
     "design-html": {
       "skill": "design-html",
-      "skillMdBytes": 57411,
-      "skillMdLines": 1122,
-      "estTokens": 14353,
-      "tmplBytes": 22567,
+      "skillMdBytes": 58940,
+      "skillMdLines": 903,
+      "estTokens": 14735,
+      "tmplBytes": 17680,
       "descriptionLen": 235,
       "hasGateEval": true,
       "hasPeriodicEval": false
@@ -241,10 +241,10 @@
     },
     "design-shotgun": {
       "skill": "design-shotgun",
-      "skillMdBytes": 53700,
-      "skillMdLines": 984,
-      "estTokens": 13425,
-      "tmplBytes": 13331,
+      "skillMdBytes": 54569,
+      "skillMdLines": 915,
+      "estTokens": 13642,
+      "tmplBytes": 13378,
       "descriptionLen": 788,
       "hasGateEval": true,
       "hasPeriodicEval": false
@@ -431,10 +431,10 @@
     },
     "office-hours": {
       "skill": "office-hours",
-      "skillMdBytes": 116652,
-      "skillMdLines": 1322,
-      "estTokens": 29163,
-      "tmplBytes": 30566,
+      "skillMdBytes": 118175,
+      "skillMdLines": 1134,
+      "estTokens": 29544,
+      "tmplBytes": 15409,
       "descriptionLen": 860,
       "hasGateEval": true,
       "hasPeriodicEval": false

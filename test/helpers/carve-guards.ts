@@ -249,16 +249,17 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
   },
   'office-hours': {
     skill: 'office-hours',
-    expectedSections: ['design-and-handoff.md'],
+    expectedSections: ['design-and-handoff.md', 'phase-2a-startup-diagnostic.md', 'phase-2b-builder-brainstorm.md'],
+    // Phase sections are mode-exclusive (a session runs exactly one of 2A/2B),
+    // so only the always-reached design/handoff section is a deterministic read.
     requiredReads: ['design-and-handoff.md'],
     scenario:
       'Run office hours for this product idea through to the end: have the diagnostic conversation, explore alternatives, then write the design doc and run the relationship handoff (Phases 5-6).',
     staticInvariants: {
       mustStayInSkeleton: [],
-      mustMoveToSection: [],
-      // office-hours is conversational; the design-doc/handoff section has no
-      // post-STOP review gate in the skeleton.
-      gateAfterStop: undefined,
+      mustMoveToSection: ['### The Six Forcing Questions', '### Pushback Patterns', 'Anti-Sycophancy Rules', 'Wild exemplar'],
+      mustPrecedeStop: ['**Mode mapping:**'],
+      gateAfterStop: '## Section self-check',
     },
     behavioral: 'prompt',
     // v1.2.0 activation lift: first-run-guidance section in the shared preamble,
@@ -270,8 +271,8 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // the #538 opt-out + D1 evidence directive — ratio 1.104 measured.
     // #2499 project-scope MCP jq in the brain-sync block grew every tier-2+
     // skeleton ~1.5KB (entry resolution emitted once per SKILL.md).
-    maxSkeletonBytes: 82_900, // token-reduction Phases 1-2 (v1.69.x branch): preamble bash -> bin/gstack-skill-start, onboarding -> gated emission; measured 82,304
-    minUnionBytes: 106_000, // token-reduction Phases 1-2 (v1.69.x branch); measured union 117,855
+    maxSkeletonBytes: 68_200, // token-reduction Phase 4 wave 4 (v1.69.x branch): 2A/2B carved out; measured 66,852
+    minUnionBytes: 115_800, // Phase 4 wave 4; measured union 118,175
     mustContain: ['design doc', 'problem statement'],
     maxSizeRatio: 1.12,
   },
@@ -620,6 +621,65 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     maxSkeletonBytes: 69_500, // Phase 4 wave 3; measured 68,483 (script absorption -5.4KB)
     minUnionBytes: 66_000, // measured union 73,496
     mustContain: ['retrospective', '45-minute gap', 'Ship of the week', 'Praise'],
+  },
+
+  // ── Token-reduction Phase 4 wave 4 (v1.69.x branch): design doctrine carve ──
+  // (D3A: read-on-demand doctrine, requiredReads-guarded + loading eval)
+  'design-html': {
+    skill: 'design-html',
+    expectedSections: ['doctrine.md', 'pretext-patterns.md'],
+    requiredReads: ['doctrine.md', 'pretext-patterns.md'],
+    scenario:
+      'Walk /design-html in SIMULATION — do not run bash, start servers, launch a browser, or take screenshots. Treat Step 0 as already resolved: no CEO plan, no approved mockup, no variants, no DESIGN.md, no prior finalized.html — freeform mode (Case C option D), screen name "pricing", the user wants a pricing page for a developer-tools SaaS (dark, dense, three tiers, monospace-leaning). Do NOT use AskUserQuestion — proceed with the stated assumptions. Read each pointed section before doing its step, then execute Steps 1-3: produce the implementation spec, state the chosen Pretext tier and why, and generate the complete Pretext-native HTML — include the HTML in your report instead of writing files. Stop there: skip Step 3.5, Step 4, and Step 5.',
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## Step 0: Input Detection',
+        '## Step 2: Smart Pretext API Routing',
+        '### HTML Generation',
+        'AI slop blacklist',
+        '## Step 4: Preview + Refinement Loop',
+        '## Important Rules',
+      ],
+      mustPrecedeStop: ['## DESIGN SETUP'],
+      mustMoveToSection: [
+        '### The Three Laws of Usability',
+        '### The Goodwill Reservoir',
+        '### Pretext Wiring Patterns',
+        '### Pretext API Reference',
+      ],
+      gateAfterStop: undefined, // operational skill, no plan-mode gate
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 49_900, // Phase 4 wave 4; measured 48,886
+    minUnionBytes: 57_500, // Phase 4 wave 4; measured union 58,682
+    mustContain: ["Don't make me think", "Users scan, they don't read", 'The Goodwill Reservoir', 'PRETEXT API CHEATSHEET', 'Pattern 3: Text around obstacles'],
+  },
+  'design-shotgun': {
+    skill: 'design-shotgun',
+    expectedSections: ['doctrine.md'],
+    requiredReads: ['doctrine.md'],
+    scenario:
+      'Walk /design-shotgun in SIMULATION — do not run bash, launch a browser, call the design binary, or spawn agents. Treat Step 0 as NO_PREVIOUS_SESSIONS and Step 1 context as fully gathered: a landing page for an open-source CLI tool, audience = developers evaluating it from a GitHub README link, no DESIGN.md, no taste profile or prior approved.json (Step 2 finds nothing). Do NOT use AskUserQuestion — proceed with the stated assumptions. Read each pointed section before doing its step, then run Step 3a at full depth: write three distinct variant concepts with their full variant-specific generation briefs, apply the anti-convergence check, and produce the concept list plus briefs as the report. Stop before Step 3b.',
+    staticInvariants: {
+      mustStayInSkeleton: [
+        '## Step 0: Session Detection',
+        '## Step 2: Taste Memory',
+        'Anti-convergence directive',
+        '### Step 3b: Concept Confirmation',
+        '## Important Rules',
+      ],
+      mustPrecedeStop: ['## DESIGN SETUP'],
+      mustMoveToSection: [
+        '### The Three Laws of Usability',
+        '### The Goodwill Reservoir',
+        "Users scan, they don't read",
+      ],
+      gateAfterStop: undefined,
+    },
+    behavioral: 'prompt',
+    maxSkeletonBytes: 50_600, // Phase 4 wave 4; measured 49,578
+    minUnionBytes: 53_200, // Phase 4 wave 4; measured union 54,290
+    mustContain: ["Don't make me think", "Users scan, they don't read", 'trunk test', '44px minimum'],
   },
 };
 

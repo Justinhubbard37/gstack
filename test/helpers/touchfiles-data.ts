@@ -139,7 +139,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // devex, office-hours + future PR2 carves). One file iterating CARVE_GUARDS;
   // the selector sets GSTACK_CARVE_SKILL=<name> to scope cost to the changed
   // skill (D-CODEX A). Touching the registry/helper or sections.ts runs all.
-  'carve-section-loading':       ['qa/**', 'browse/**', 'retro/**', 'autoplan/**', 'spec/**', 'setup-gbrain/**', 'review/**', 'codex/**', 'land-and-deploy/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'office-hours/**', 'document-release/**', 'design-consultation/**', 'cso/**', 'test/helpers/carve-guards.ts', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts'],
+  'carve-section-loading':       ['design-html/**', 'design-shotgun/**', 'qa/**', 'browse/**', 'retro/**', 'autoplan/**', 'spec/**', 'setup-gbrain/**', 'review/**', 'codex/**', 'land-and-deploy/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'office-hours/**', 'document-release/**', 'design-consultation/**', 'cso/**', 'test/helpers/carve-guards.ts', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts'],
   'autoplan-chain-pty':          ['autoplan/**', 'plan-ceo-review/**', 'plan-design-review/**', 'plan-eng-review/**', 'plan-devex-review/**', 'test/fixtures/plans/ui-heavy-feature.md', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-autoplan-chain.test.ts'],
   'e2e-harness-audit':            ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'test/helpers/agent-sdk-runner.ts', 'test/helpers/claude-pty-runner.ts'],
 
@@ -415,7 +415,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // frontmatter. Touched by anything that changes resolver output, gen
   // pipeline, detection helper, refresh subcommand, or the on-demand
   // docs the resolver points to.
-  'office-hours-brain-writeback': [
+  'office-hours-brain-writeback': ['office-hours/sections/**', 
     'scripts/resolvers/gbrain.ts',
     'scripts/gen-skill-docs.ts',
     'bin/gstack-gbrain-detect',
