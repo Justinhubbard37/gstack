@@ -15,10 +15,10 @@ Source: `bin/gstack-context-bill` (offline, calibrated estimate) and `test/fixtu
 |---|---|
 | Always-on frontmatter, whole catalog | ~6.0K tokens actual, 6,344 ceiling (x1.05) |
 | Per-skill eager ceilings enforced | 59 (x1.10 headroom each) |
-| Heaviest skill today | `/review` at ~26.6K tokens per invocation |
+| Heaviest skills today | `/land-and-deploy` ~26.7K and `/review` ~26.6K tokens per invocation |
 | Dead frontmatter lines removed | 8 across 5 skills |
 
-That 26.6K number is the point. This release is the measurement-and-enforcement phase of a reviewed token-reduction program; the phases that follow move preamble bash into `bin/` scripts and carve the heavyweight skills, targeting ~13-15K for `/review`. The ratchet is what makes each of those wins permanent instead of aspirational.
+That ~26.7K number is the point. This release is the measurement-and-enforcement phase of a reviewed token-reduction program; the phases that follow move preamble bash into `bin/` scripts and carve the heavyweight skills, targeting ~13-15K for `/review`. The ratchet is what makes each of those wins permanent instead of aspirational.
 
 ### What this means for gstack users
 
