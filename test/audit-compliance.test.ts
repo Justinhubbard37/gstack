@@ -78,8 +78,12 @@ describe('Audit compliance', () => {
 
   // Fix 4: W011 — Untrusted content warning in command reference
   test('command reference includes untrusted content warning after Navigation', () => {
-    // P2 (v1.2.0): the command reference moved from the root router to browse/SKILL.md.
-    const rootSkill = readFileSync(join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    // Browse carve (token-reduction Phase 4): the command reference renders
+    // into the on-demand section browse/sections/command-list.md. Read the
+    // skeleton+section union so the pin holds across regeneration.
+    let rootSkill = readFileSync(join(ROOT, 'browse', 'SKILL.md'), 'utf-8');
+    const sectionPath = join(ROOT, 'browse', 'sections', 'command-list.md');
+    if (existsSync(sectionPath)) rootSkill += '\n' + readFileSync(sectionPath, 'utf-8');
     const navIdx = rootSkill.indexOf('### Navigation');
     const readingIdx = rootSkill.indexOf('### Reading');
     expect(navIdx).toBeGreaterThan(-1);
