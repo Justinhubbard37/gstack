@@ -628,40 +628,41 @@ output, then retire or simplify the guard. Effort: human ~half day / CC ~20 min.
 
 ## Token-reduction follow-ups (Phase B, filed via /plan-eng-review on the plan-ceo-review carve)
 
-### P3: Carve the always-loaded `{{PREAMBLE}}` reference blocks into an on-demand doc
+### P2: v1.70 ship-review deferrals (specialist + adversarial findings, each verified)
 
-**What:** The per-skill section carves (`/ship` v1.54, `/plan-ceo-review` v1.56) yield
-real but bounded wins (-42% to -59% on the carved skill) because the shared
-`{{PREAMBLE}}` (~40-50KB on every tier-3/4 skill) is the dominant always-loaded cost
-and stays inline. Move the rarely-needed preamble REFERENCE blocks (the AskUserQuestion
-split-rules and the CJK / lone-surrogate escaping reference) into an on-demand
-section-style doc the agent reads only when it hits those edge cases, leaving the hot
-path (voice, completeness principle, recommendation format) inline.
+**What:** Follow-ups deferred from the v1.70.0.0 pre-landing review, none ship-blocking:
 
-**Why:** Highest-ROI remaining token target. One preamble carve helps EVERY tier-≥2
-skill at once, not one skill per PR. The eng-review on the plan-ceo carve flagged that
-per-skill carves stay modest precisely because the preamble dominates the always-loaded
-surface.
+- **Batch the 11 `gstack-config get` forks in `bin/gstack-skill-start`** into one config
+  read (~60-250ms of preamble latency per skill invocation, worse on macOS). The
+  consolidation into one script is what makes batching trivial now.
+- **Cache the `gbrain --version` probe** (Node CLI cold start, 100-300ms per invocation
+  for gbrain users) keyed on binary path + mtime.
+- **`bin/gstack-retro-metrics`: single-pass diffs** — combine the `--numstat` and `-p`
+  passes (`git log --numstat -p`), unify the three test-file definitions (`is_test`,
+  the awk regex, the repo-wide grep), and cover the `origin/<base>` ref preference +
+  300-commit/40-coauthor truncation paths with tests.
+- **Rename `generate-upgrade-check.ts`** — it now emits only PROACTIVE/SKILL_PREFIX
+  rules; the name misleads anyone hunting for upgrade-prompt rendering.
+- **evals.yml gate matrix drift:** 9 pre-existing gate-tier files in `E2E_TIERS` are
+  absent from the static suite matrix, so they never run in PR CI. Add them (or prune
+  their tier), plus a free tripwire test diffing gate-tier `E2E_TIERS` against the
+  workflow matrix so the class can't recur.
+- **`_sanitize` case/separator variants:** the strip is exact-literal; make it
+  case-insensitive and separator-tolerant, with pinned variant cases.
+- **Telemetry unset-vs-off semantics:** `gstack-skill-start` treats an UNSET telemetry
+  key as enabled for the LOCAL analytics write (pre-consent recording, local-only);
+  `gstack-telemetry-log` maps unset to off. Decide one semantic and document it.
+- **Coverage gaps from the ship audit:** `--brain-health` block (zero tests), the
+  learnings `>5`-entries sanitize passthrough (poison test), session prune +
+  `.pending-*` finalize loop, and a shared `ONBOARDING_MARKERS` constant for the three
+  seed sites (hermetic-env, e2e-helpers, the script's gates).
 
-**Pros:** A single change reduces always-loaded cost across the whole skill pack.
-**Cons:** The preamble is load-bearing and shared; a botched carve regresses every skill.
-Needs the same union-parity + per-push freshness guards the section carves use, applied
-corpus-wide.
+**Why:** Each was found by the v1.70 review army with file:line evidence; all are quality
+or latency wins on the new runtime scripts, none change behavior contracts.
 
-**Context:** Builds on the v2 section pipeline (`scripts/resolvers/sections.ts`,
-`{{SECTION:id}}` / `{{SECTION_INDEX}}`). The preamble source is
-`scripts/resolvers/preamble.ts`. Measure which sub-blocks are cold (escaping reference,
-split-rules) vs hot (voice, recommendation format) before cutting. Validate on one skill,
-then roll corpus-wide.
-
-**Effort estimate:** L (human team) → M (CC+gstack)
-**Priority:** P3
-**Depends on / blocked by:** The section pipeline (shipped v1.54). No hard blocker.
-**Status update (2026-08-25):** IN FLIGHT — superseded by the approved token-reduction
-program on branch `prompt-token-load-reduction` (plan reviewed via CEO + eng + 2x
-outside voice). Phases 1-3 of that program implement this carve in a stronger form
-(bash → `bin/gstack-skill-start`/`-end`, conditional onboarding echo, AUQ slim).
-Phase 0 (context-budget ratchet, dead-key strip) already landed on the branch.
+**Effort estimate:** M (human team) → S (CC+gstack)
+**Priority:** P2
+**Depends on / blocked by:** v1.70.0.0 landing.
 
 ### P3: Output-template carve wave — REVIEW_DASHBOARD + PLAN_FILE_REVIEW_REPORT
 
@@ -2891,6 +2892,38 @@ needs one paid run to validate, so it didn't ride the ship.
 **Effort:** S (human ~2h, CC ~15min + one paid run).
 
 ## Completed
+
+### P3: Carve the always-loaded `{{PREAMBLE}}` reference blocks into an on-demand doc
+
+**What:** The per-skill section carves (`/ship` v1.54, `/plan-ceo-review` v1.56) yield
+real but bounded wins (-42% to -59% on the carved skill) because the shared
+`{{PREAMBLE}}` (~40-50KB on every tier-3/4 skill) is the dominant always-loaded cost
+and stays inline. Move the rarely-needed preamble REFERENCE blocks (the AskUserQuestion
+split-rules and the CJK / lone-surrogate escaping reference) into an on-demand
+section-style doc the agent reads only when it hits those edge cases, leaving the hot
+path (voice, completeness principle, recommendation format) inline.
+
+**Why:** Highest-ROI remaining token target. One preamble carve helps EVERY tier-≥2
+skill at once, not one skill per PR. The eng-review on the plan-ceo carve flagged that
+per-skill carves stay modest precisely because the preamble dominates the always-loaded
+surface.
+
+**Pros:** A single change reduces always-loaded cost across the whole skill pack.
+**Cons:** The preamble is load-bearing and shared; a botched carve regresses every skill.
+Needs the same union-parity + per-push freshness guards the section carves use, applied
+corpus-wide.
+
+**Context:** Builds on the v2 section pipeline (`scripts/resolvers/sections.ts`,
+`{{SECTION:id}}` / `{{SECTION_INDEX}}`). The preamble source is
+`scripts/resolvers/preamble.ts`. Measure which sub-blocks are cold (escaping reference,
+split-rules) vs hot (voice, recommendation format) before cutting. Validate on one skill,
+then roll corpus-wide.
+
+**Effort estimate:** L (human team) → M (CC+gstack)
+**Priority:** P3
+**Depends on / blocked by:** The section pipeline (shipped v1.54). No hard blocker.
+**Completed:** v1.70.0.0 (2026-08-25) — delivered in a stronger form by the token-reduction program: preamble bash moved to `bin/gstack-skill-start`/`-end`, one-time onboarding became gated instruction blocks, AUQ reference rules point at on-demand docs, and 12 more skills got section carves (20 total). Wins locked by the context-budget ratchet.
+
 
 ### ✅ DONE (v1.69.0.0): `./setup --host slate` accepted but installs nothing
 
