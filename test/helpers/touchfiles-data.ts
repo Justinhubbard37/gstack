@@ -540,7 +540,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   // Real-PTY E2E batch — tier classification:
   //   gate: cheap, deterministic, run on every PR
   //   periodic: long-running or expensive (>$3/run), run weekly
-  'preamble-script-ab':                      'gate',       // Phase 1-3 A/B: script vs inline preamble; demote to periodic after Phase 3 (OV7)
+  'preamble-script-ab':                      'periodic',   // Phase 1-3 A/B: script vs inline preamble; demoted post-Phase-3 (OV7)
   'auq-format-gate':                         'gate',       // ~$0.50/run, SDK capture, single skill probe
   'plan-ceo-mode-routing':     'periodic',   // ~$3/run, deep navigation through 8-12 prior AskUserQuestions
   'plan-design-with-ui-scope': 'gate',       // ~$0.80/run

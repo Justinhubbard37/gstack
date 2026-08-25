@@ -33,7 +33,7 @@ import {
   carvedSkill,
 } from './helpers/auq-sdk-capture';
 
-const describeE2E = describeE2ETier('gate');
+const describeE2E = describeE2ETier('periodic');
 const runId = `preamble-ab-${process.env.EVALS_RUN_ID ?? 'local'}`;
 const ROOT = path.resolve(import.meta.dir, '..');
 const INLINE_REF = '29785978'; // last pre-Phase-1 commit (v1.69.1.0 bump)
