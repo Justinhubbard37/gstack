@@ -68,7 +68,7 @@ return 403. SSE endpoints use a 30-minute HttpOnly `gstack_sse` cookie minted vi
 `POST /sse-session` (never valid against `/command`). Tunnel-surface rejections go
 to `~/.gstack/security/attempts.jsonl` via `tunnel-denial-log.ts`. Before editing
 `server.ts`, `sse-session-cookie.ts`, or `tunnel-denial-log.ts`, read
-[ARCHITECTURE.md](ARCHITECTURE.md#dual-listener-tunnel-architecture-v1600) —
+[ARCHITECTURE.md](../ARCHITECTURE.md#dual-listener-tunnel-architecture-v1600) —
 the module boundary (no imports from `token-registry.ts` into `sse-session-cookie.ts`)
 is load-bearing for scope isolation.
 
@@ -83,7 +83,7 @@ points today: `handleCommandInternal` (HTTP + batch via a sanitizing wrapper aro
 already escaped the surrogate before regex could match, so the replacer must run
 inside the encoding pipeline. Before adding a new SSE/WebSocket writer or HTTP
 response in `server.ts`, read
-[ARCHITECTURE.md](ARCHITECTURE.md#unicode-sanitization-at-server-egress-v13800).
+[ARCHITECTURE.md](../ARCHITECTURE.md#unicode-sanitization-at-server-egress-v13800).
 `browse/test/server-sanitize-surrogates.test.ts` pins the wiring with invariant
 tests, so bypasses fail CI.
 
