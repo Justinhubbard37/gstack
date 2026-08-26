@@ -2329,7 +2329,7 @@ Shipped as v0.5.0 on main. Includes `/plan-design-review` (report-only design au
 
 ### Auto-invoke /document-release from /ship — SHIPPED
 
-Shipped in v0.8.4; redesigned twice since. Current design (v0.18.1.0+, carved in
+Shipped in v0.8.4; redesigned twice since. Current design (v0.18.2.0+, carved in
 v1.54.0.0): `/ship` Step 18 (`ship/sections/pr-body.md`) dispatches
 `/document-release` as a general-purpose subagent AFTER Step 17 (push) and
 BEFORE Step 19 (PR creation); the subagent's JSON contract (`files_updated`,
@@ -2380,16 +2380,18 @@ pin) and `test/skill-e2e-ship-docsync.test.ts` (dispatch E2E, gate tier).
 
 ### Periodic paid-test shard census is one ungated file from the detach-timeout floor
 
-**What:** The periodic tier's shard census sits at exactly the 17×4 ceiling
-(68-file boundary). The next paid `skill-e2e-*` file WITHOUT a whole-file
-`describeE2ETier` self-gate counts in BOTH tier censuses, trips periodic to 18
-shards → 34,020s floor > the 32,400s configured detach timeout, and
+**What:** The periodic tier's shard census is 67 files — one ungated slot below
+the 68-file (17×4) ceiling. The next paid `skill-e2e-*` file WITHOUT a
+whole-file `describeE2ETier` self-gate lands at 68 (still 17 waves, floor
+32,130s ≤ 32,400s — passes); the SECOND ungated file trips 18 waves → 34,020s
+floor > the 32,400s configured detach timeout, and
 `test/eval-detach-timeout-floor.test.ts` fails with a confusing message.
 
-**Why:** Whoever adds the next periodic E2E gets a floor failure unrelated to
-their change. Fix options: raise the periodic detach timeout, or enforce
-whole-file tier self-gates on all paid files (upgrades them from the
-tier-alignment warn-only bucket to the hard invariant at the same time).
+**Why:** Whoever adds the second ungated periodic E2E gets a floor failure
+unrelated to their change. Fix options: raise the periodic detach timeout, or
+enforce whole-file tier self-gates on all paid files (upgrades them from the
+tier-alignment warn-only bucket to the hard invariant, and — bonus — restores
+tierless `bun run test:evals` coverage decisions to diff selection alone).
 
 **Context:** `scripts/test-paid-shards.ts` `classifyPaidTestFile` counts
 ungated files in both tiers; `ship-docsync` composed `describeE2ETier('gate')`

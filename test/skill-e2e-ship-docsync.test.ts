@@ -8,8 +8,11 @@
  *
  * Gating: whole-file gate-tier self-gate (describeE2ETier) COMPOSED with
  * diff-based selection (describeIfSelected). The self-gate keeps this file
- * out of the periodic shard census (which sits at its ceiling) and under
- * the hard tier-alignment invariant. Run locally with:
+ * out of the periodic shard census (near its ceiling) and under the hard
+ * tier-alignment invariant. DELIBERATE TRADEOFF: tierless runs (`bun run
+ * test:evals` / `test:e2e`) skip every tier-gated file, so this test does
+ * NOT run there even when ship/** changed — use the gate lane locally:
+ *   EVALS_TIER=gate bun run test:evals            # diff-selected gate lane
  *   EVALS=1 EVALS_TIER=gate EVALS_ALL=1 bun test test/skill-e2e-ship-docsync.test.ts
  *
  * Fixture layout (non-obvious — fake HOME + planted skill tree):
@@ -208,13 +211,19 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
       // (e.g. a PR-body drafter) must NOT count — that false-pass would mask
       // the exact regression this test exists to catch. Verified against
       // recorded burn-in transcripts: real dispatch inputs carry both markers.
-      const dispatchIdx = calls.findIndex(
-        (tc) =>
-          (tc.tool === 'Agent' || tc.tool === 'Task') &&
-          /document-release\/SKILL\.md|executing the \/document-release workflow/i.test(
-            JSON.stringify(tc.input ?? {})
-          )
-      );
+      // Section-paste exclusion: a subagent handed the WHOLE pr-body.md as
+      // context carries the markers too. The dictated Step 18 prompt never
+      // contains the section's scaffolding, so its presence disqualifies.
+      // Verified across all recorded runs: real dispatches match markers,
+      // zero contain scaffold strings.
+      const dispatchIdx = calls.findIndex((tc) => {
+        if (tc.tool !== 'Agent' && tc.tool !== 'Task') return false;
+        const input = JSON.stringify(tc.input ?? {});
+        return (
+          /document-release\/SKILL\.md|executing the \/document-release workflow/i.test(input) &&
+          !/## Step 19: Create PR\/MR|Parent processing:/.test(input)
+        );
+      });
       const prCreateIdx = calls.findIndex(
         (tc) =>
           tc.tool === 'Bash' &&

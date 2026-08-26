@@ -59,6 +59,12 @@ describe('/ship Step 18 dispatches /document-release (carve visibility)', () => 
       expect(content).toContain('"documentation_section"');
       // Deliberate design: docs sync never holds a ship hostage.
       expect(content).toContain('Do not block /ship on subagent failure');
+      // These two strings are the ship-docsync E2E's dispatch-matcher markers
+      // (test/skill-e2e-ship-docsync.test.ts) — they come verbatim from the
+      // dictated Step 18 subagent prompt. Rewording them in pr-body.md.tmpl
+      // silently decouples the paid matcher; update both in lockstep.
+      expect(content).toContain('You are executing the /document-release workflow');
+      expect(content).toContain('.claude/skills/gstack/document-release/SKILL.md');
     }
   });
 
