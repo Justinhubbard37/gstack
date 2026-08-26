@@ -1,5 +1,46 @@
 # Changelog
 
+## [1.70.1.0] - 2026-08-26
+
+**Ship names its documentation subagent at every decision point.**
+**The handoff is now pinned by tests that fail loud if it ever goes quiet.**
+
+`/ship` has dispatched `/document-release` as Step 18 since v0.18.2.0, but the v1.54.0.0 carve moved that step into an on-demand section and the always-loaded skeleton stopped saying "document-release" anywhere in the workflow body. The wiring was intact. The visibility was gone, and nothing tested the handoff. This release restores the visibility and locks it in: the section index, the STOP pointer, the Step 17 handoff line, and a new hoisted doc-sync invariant all name "the /document-release subagent" (subagent-framed on purpose, so an agent dispatches the isolated worker instead of running a weaker inline copy). A free tripwire pins the wording, carve-guard anchors pin each touchpoint independently, and a new gate-tier E2E proves a live agent actually fires the dispatch before creating the PR.
+
+### The numbers that matter
+
+Source: this branch's eval store (`~/.gstack/projects/<slug>/evals/`, runs of `test/skill-e2e-ship-docsync.test.ts`) and `wc -c ship/SKILL.md`.
+
+| Property | Before | After |
+|--------|--------|-------|
+| Doc-sync subagent named in the Claude-host ship workflow body | 0 mentions at any decision point | 4 (section index, STOP pointer, Step 17 handoff, hoisted invariant) |
+| Tests pinning the ship→document-release handoff | none | 6 free tripwire tests + 3 per-touchpoint carve anchors + 1 gate E2E |
+| Live dispatch proof | never measured | 9/9 runs fire the dispatch before PR creation ($0.59-1.04, 234-319s each, sonnet-4-6) |
+| Always-loaded skeleton cost | 91,267 B | 91,764 B (+497 B, cap raised to 92,300) |
+
+Nine out of nine live runs is the line that matters. The E2E asserts on the actual tool-call stream, with a dispatch-specific matcher that a subagent merely quoting section text cannot satisfy, and a timeout-tolerant exit check that never softens the dispatch assert itself.
+
+### What this means for gstack users
+
+When you run `/ship`, the docs sync step is no longer an invisible line in a file the agent may summarize past. It is named at the exact moments the agent decides what to do next, and a merge-blocking test fails if any future edit makes it invisible again. A failed docs subagent still never blocks your ship. Nothing to configure. Upgrade and ship.
+
+### Itemized changes
+
+#### Fixed
+
+- `/ship`'s Claude-host skeleton names "the /document-release subagent" at all three Step 18 decision points (manifest trigger rendering into the section index and STOP pointer, the Step 17 handoff line, and a hoisted doc-sync invariant beside the PR-title invariant). The invariant states the contract plainly: the dispatch itself is never skipped; only a failed subagent is non-blocking.
+
+#### Added
+
+- `test/ship-document-release-dispatch.test.ts`: free tripwire pinning the carved Step 18 contract (imperative, `subagent_type`, JSON return keys, non-blocking clause), the three skeleton touchpoints, the invariant-above-STOP ordering, the E2E matcher's four marker strings, and the inlined Step 18 → Step 19 ordering in the codex/factory goldens.
+- `test/skill-e2e-ship-docsync.test.ts` (`ship-docsync`, gate tier): a live agent runs the sliced Step 17→19 ship tail in a hermetic git fixture; hard assert that an Agent dispatch matching the Step 18 prompt markers appears in the tool-call stream before any `gh pr create`. Fixture fails loud on step-marker drift, pins its git branch against operator config, asserts every setup command, and neutralizes the credential pre-push guard's question branch.
+
+#### For contributors
+
+- Carve-guards ship entry: three non-overlapping per-touchpoint anchors (gerund, imperative, third-person: no anchor subsumes another, so each is independently enforced), the carved imperative pinned to stay carved, skeleton byte cap 91,600 → 92,300 with the measured value recorded.
+- `ship-docsync` registered in `E2E_TOUCHFILES` and `E2E_TIERS` (gate), with a whole-file `describeE2ETier('gate')` self-gate composed with diff selection so the file stays out of the periodic shard census; the tierless `test:evals` invisibility tradeoff is documented in the file header.
+- Internal backlog notes corrected to describe the current Step 18 design (the pre-v1.54 "Step 8.5" prose was still documented as current), plus three deferred follow-ups recorded: a machine-checkable dispatch receipt, the same dispatch-pin treatment for land-and-deploy→canary, and the periodic shard-census ceiling arithmetic.
+
 ## [1.69.0.0] - 2026-08-22
 
 **The silent-failure wave: tools that reported success while doing nothing —**
