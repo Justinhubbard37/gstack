@@ -937,7 +937,7 @@ sections. Read a section in full before doing its step; do not work from memory.
 | addressing Greptile review comments when a PR exists (Step 10) | `sections/greptile.md` |
 | the adversarial review and learnings capture (Step 11) | `sections/adversarial.md` |
 | writing the CHANGELOG entry (Step 13) | `sections/changelog.md` |
-| syncing docs and creating or updating the PR/MR (Steps 18-19) | `sections/pr-body.md` |
+| dispatching the /document-release subagent to sync docs (Step 18) and then creating or updating the PR/MR (Step 19) | `sections/pr-body.md` |
 
 ---
 
@@ -1417,13 +1417,15 @@ If `ALREADY_PUSHED`, skip the push but continue to Step 18. Otherwise push with 
 git push -u origin <branch-name>
 ```
 
-**You are NOT done.** The code is pushed but documentation sync and PR creation are mandatory final steps. Continue to Step 18.
+**You are NOT done.** The code is pushed but Step 18 (dispatch the /document-release subagent to sync docs) and Step 19 (create the PR/MR) are mandatory final steps. Continue to Step 18.
 
 ---
 
 **PR/MR title invariant (always applies — do not skip even if you don't open the section below):** Any PR or MR you create OR update in the next step MUST have a title that starts with `v$NEW_VERSION` (the version bumped in Step 12), in the format `v<NEW_VERSION> <type>: <summary>`. Never create or edit a PR/MR title without this prefix. Compute the correct title with the single source of truth helper: `~/.claude/skills/gstack/bin/gstack-pr-title-rewrite.sh "$NEW_VERSION" "<current title>"`. The full create/update procedure (idempotency, redaction scan, self-check) is in the section below.
 
-> **STOP.** Before syncing docs and creating or updating the PR/MR (Steps 18-19), Read `~/.claude/skills/gstack/ship/sections/pr-body.md` and execute it
+**Doc-sync invariant (always applies — do not skip even if you don't open the section below):** Step 18 dispatches the /document-release subagent BEFORE the PR/MR is created or updated in Step 19. Never skip the dispatch itself; only a failed subagent is non-blocking (proceed to Step 19 without a `## Documentation` section).
+
+> **STOP.** Before dispatching the /document-release subagent to sync docs (Step 18) and then creating or updating the PR/MR (Step 19), Read `~/.claude/skills/gstack/ship/sections/pr-body.md` and execute it
 > in full. Do not work from memory — that section is the source of truth for this step.
 
 ## Step 20: Persist ship metrics

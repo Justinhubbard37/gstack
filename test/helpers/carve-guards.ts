@@ -116,17 +116,38 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
       // The PR-title-version invariant MUST stay always-loaded: the v1.54.0.0
       // carve stranded it in pr-body.md and PRs started landing with bare titles
       // (CI backstop: test/pr-title-sync-workflow-safety.test.ts).
-      mustStayInSkeleton: ['v$NEW_VERSION', 'gstack-pr-title-rewrite'],
+      // Same carve also stranded the Step 18 /document-release dispatch out of
+      // sight — the skeleton never named it and the handoff "got lost" (#2666
+      // follow-up). The two subagent anchors pin the restored visibility:
+      // 'the /document-release subagent' matches all three touchpoints (trigger
+      // via section-index + STOP pointer, Step 17 handoff, hoisted invariant);
+      // 'dispatches the /document-release subagent' pins the invariant itself.
+      // Matching is case-sensitive String.includes — "dispatching the" does NOT
+      // contain "dispatch the" — so update anchors in lockstep with any
+      // touchpoint rewording.
+      mustStayInSkeleton: [
+        'v$NEW_VERSION',
+        'gstack-pr-title-rewrite',
+        'the /document-release subagent',
+        'dispatches the /document-release subagent',
+      ],
       // ...while the full create/update procedure stays carved into pr-body.md
       // (out of the skeleton, present in the union). Asserts BOTH PR paths
-      // survive: the create path and the idempotent update path.
-      mustMoveToSection: ['gh pr create --base', 'gh pr edit --title'],
+      // survive: the create path and the idempotent update path. The Step 18
+      // dispatch imperative stays carved too — pasting that literal into the
+      // skeleton (correctly) fails this guard; the skeleton speaks of "the
+      // /document-release subagent", never the carved imperative.
+      mustMoveToSection: [
+        'gh pr create --base',
+        'gh pr edit --title',
+        'Dispatch /document-release as a subagent',
+      ],
       // ship is operational (multi-STOP, not a plan review); no single post-STOP gate.
       gateAfterStop: undefined,
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-ship-section-loading.test.ts',
-    maxSkeletonBytes: 91_600, // v1.68 fix wave: unconditional learnings capture (#2402, ~450B/skill); measured 91,061
+    maxSkeletonBytes: 92_300, // document-release visibility restore: named trigger (renders twice) + Step 17 handoff + hoisted doc-sync invariant; measured 91,764
     minUnionBytes: 120_000,
     mustContain: ['VERSION', 'CHANGELOG', 'review', 'merge', 'PR'],
     // v1.58.5.0: pre-push-guard install (#2077) stacks on the shared first-run-guidance preamble.
