@@ -118,17 +118,20 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
       // (CI backstop: test/pr-title-sync-workflow-safety.test.ts).
       // Same carve also stranded the Step 18 /document-release dispatch out of
       // sight — the skeleton never named it and the handoff "got lost" (#2666
-      // follow-up). The two subagent anchors pin the restored visibility:
-      // 'the /document-release subagent' matches all three touchpoints (trigger
-      // via section-index + STOP pointer, Step 17 handoff, hoisted invariant);
-      // 'dispatches the /document-release subagent' pins the invariant itself.
+      // follow-up). Three NON-OVERLAPPING anchors pin the restored visibility,
+      // one per touchpoint (no anchor is a substring of another, so each is
+      // independently enforced — a subsumed anchor adds zero enforcement):
+      //   gerund form  → manifest trigger (renders 2x: section index + STOP)
+      //   imperative   → Step 17 handoff line
+      //   3rd person   → hoisted doc-sync invariant
       // Matching is case-sensitive String.includes — "dispatching the" does NOT
       // contain "dispatch the" — so update anchors in lockstep with any
       // touchpoint rewording.
       mustStayInSkeleton: [
         'v$NEW_VERSION',
         'gstack-pr-title-rewrite',
-        'the /document-release subagent',
+        'dispatching the /document-release subagent to sync docs',
+        'dispatch the /document-release subagent to sync docs',
         'dispatches the /document-release subagent',
       ],
       // ...while the full create/update procedure stays carved into pr-body.md

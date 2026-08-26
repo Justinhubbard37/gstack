@@ -91,10 +91,32 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
       // Bare remote + clone; Steps 0-16 "already done": feature branch with a
       // committed change, VERSION bumped, CHANGELOG entry written. Not pushed —
       // Step 17 (the slice's first step) does that.
-      spawnSync('git', ['init', '--bare'], { cwd: remoteDir, stdio: 'pipe' });
-      spawnSync('git', ['clone', remoteDir, repoDir], { stdio: 'pipe' });
+      // Branch pinned with -b main / -c init.defaultBranch=main so operator git
+      // config never leaks into the fixture (default-config machines would
+      // otherwise create master and the later `push -u origin main` would fail).
+      // Every setup command asserts status — a broken fixture must fail loud
+      // and free here, never burn a paid run downstream.
+      const assertOk = (r: ReturnType<typeof spawnSync>, what: string) => {
+        if (r.status !== 0) {
+          throw new Error(
+            `ship-docsync fixture setup failed: ${what} → exit ${r.status}\n${r.stderr?.toString() ?? ''}`
+          );
+        }
+        return r;
+      };
+      assertOk(
+        spawnSync('git', ['init', '--bare', '-b', 'main'], { cwd: remoteDir, stdio: 'pipe', timeout: 15000 }),
+        'git init --bare -b main'
+      );
+      assertOk(
+        spawnSync('git', ['-c', 'init.defaultBranch=main', 'clone', remoteDir, repoDir], { stdio: 'pipe', timeout: 15000 }),
+        'git clone'
+      );
       const run = (cmd: string, args: string[]) =>
-        spawnSync(cmd, args, { cwd: repoDir, stdio: 'pipe', timeout: 10000 });
+        assertOk(
+          spawnSync(cmd, args, { cwd: repoDir, stdio: 'pipe', timeout: 10000 }),
+          `${cmd} ${args.join(' ')}`
+        );
       run('git', ['config', 'user.email', 'test@test.com']);
       run('git', ['config', 'user.name', 'Test']);
       run('git', ['config', 'commit.gpgsign', 'false']);
@@ -180,10 +202,18 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
       // the transcript and would false-positive any transcript-wide match
       // (trap documented in skill-e2e-autoplan-dual-voice.test.ts).
       const calls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
+      // Matcher is dispatch-SPECIFIC, not mention-specific: both markers come
+      // verbatim from the Step 18 subagent prompt dictated by pr-body.md. A
+      // subagent that merely quotes section text mentioning "document-release"
+      // (e.g. a PR-body drafter) must NOT count — that false-pass would mask
+      // the exact regression this test exists to catch. Verified against
+      // recorded burn-in transcripts: real dispatch inputs carry both markers.
       const dispatchIdx = calls.findIndex(
         (tc) =>
           (tc.tool === 'Agent' || tc.tool === 'Task') &&
-          /document-release/i.test(JSON.stringify(tc.input ?? {}))
+          /document-release\/SKILL\.md|executing the \/document-release workflow/i.test(
+            JSON.stringify(tc.input ?? {})
+          )
       );
       const prCreateIdx = calls.findIndex(
         (tc) =>
