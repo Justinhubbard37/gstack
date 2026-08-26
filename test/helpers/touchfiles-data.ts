@@ -281,6 +281,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'review-coverage-audit': ['review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
   'plan-eng-coverage-audit': ['plan-eng-review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
   'ship-triage': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-triage.test.ts'],
+  'ship-docsync': ['ship/**', 'document-release/**', 'scripts/gen-skill-docs.ts', 'scripts/resolvers/sections.ts', 'test/skill-e2e-ship-docsync.test.ts'],
 
   // Plan completion audit + verification
   'ship-plan-completion': ['ship/**', 'scripts/gen-skill-docs.ts'],
@@ -642,6 +643,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'ship-local-workflow': 'gate',
   'ship-coverage-audit': 'gate',
   'ship-triage': 'gate',
+  'ship-docsync': 'gate',
   'ship-plan-completion': 'gate',
   'ship-plan-verification': 'gate',
 
