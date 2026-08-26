@@ -2378,6 +2378,34 @@ pin) and `test/skill-e2e-ship-docsync.test.ts` (dispatch E2E, gate tier).
 **Priority:** P3
 **Depends on:** None
 
+### CI gate-lane hollow-coverage burn-down (evals.yml matrix)
+
+**What:** `test/evals-workflow-matrix.test.ts` (added v1.70.1.0) ratchets two
+pre-existing CI coverage holes; burn them down. (1) Eight gate-hosting test
+files have no `evals.yml` matrix row, so CI never runs them
+(`KNOWN_MATRIX_GAPS` in the test enumerates them — notably the plan-mode and
+finding-floor smokes and the AUQ format-compliance gate). (2) Four matrix rows
+point at whole-file tier-gated files but set no row `tier:` property, so with
+`EVALS_TIER` unexported those suites self-skip: `codex-e2e`/`gemini-e2e` run
+ZERO tests and report green on every PR (vestigial rows; the periodic cron
+lane owns them — consider deleting the rows), and `e2e-pty-plan-smoke` spends
+~7 min on setup then skips every describe (hollow-green since the files
+adopted `describeE2ETier('gate')` — set `tier: gate` on the row to reactivate,
+after confirming the smokes still pass).
+
+**Why:** "Gate tier blocks merge" is silently false for these files. Each fix
+is a deliberate cost/flake decision (activating paid suites on every PR), so
+they're enumerated instead of drive-by-fixed. The mechanism already exists:
+per-row `tier:` property, exported as `EVALS_TIER` by the Run step.
+
+**Context:** Found 2026-08-26 on PR #2700 while adding the `ship-docsync` row.
+Fix = add/adjust the matrix row, then DELETE the corresponding burn-down entry
+(the tripwire fails on stale entries, so cleanup is enforced).
+
+**Effort:** S per file (mechanical) + one burn-in run each to confirm green
+**Priority:** P2
+**Depends on:** None
+
 ### Periodic paid-test shard census is one ungated file from the detach-timeout floor
 
 **What:** The periodic tier's shard census is 67 files — one ungated slot below
