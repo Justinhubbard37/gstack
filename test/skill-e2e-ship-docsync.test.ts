@@ -129,7 +129,11 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
         path.join(repoDir, 'CHANGELOG.md'),
         '# Changelog\n\n## [0.1.0.0] - 2026-01-01\n\n- Initial release\n'
       );
-      run('git', ['add', 'app.ts', 'VERSION', 'CHANGELOG.md']);
+      // The cwd-relative pr-body plant (below) lives inside this working tree;
+      // ignore it so the fixture repo stays clean and the agent never tries to
+      // commit test scaffolding.
+      fs.writeFileSync(path.join(repoDir, '.gitignore'), 'ship/\n');
+      run('git', ['add', 'app.ts', 'VERSION', 'CHANGELOG.md', '.gitignore']);
       run('git', ['commit', '-m', 'initial']);
       run('git', ['push', '-u', 'origin', 'main']);
       run('git', ['checkout', '-b', 'feature/docsync-test']);
@@ -167,6 +171,11 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
       fs.mkdirSync(path.join(plantedSkills, 'document-release'), { recursive: true });
       fs.writeFileSync(path.join(plantedSkills, 'ship', 'sections', 'pr-body.md'), prBody);
       fs.writeFileSync(path.join(workDir, 'ship', 'sections', 'pr-body.md'), prBody);
+      // Third plant: resolvable relative to the agent's cwd (repoDir), not just
+      // relative to SKILL-tail.md — saves a wasted turn if the agent tries a
+      // cwd-relative read before the ~ path.
+      fs.mkdirSync(path.join(repoDir, 'ship', 'sections'), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, 'ship', 'sections', 'pr-body.md'), prBody);
       fs.writeFileSync(
         path.join(plantedSkills, 'document-release', 'SKILL.md'),
         DOC_RELEASE_STUB

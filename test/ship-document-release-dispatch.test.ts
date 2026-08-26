@@ -59,12 +59,16 @@ describe('/ship Step 18 dispatches /document-release (carve visibility)', () => 
       expect(content).toContain('"documentation_section"');
       // Deliberate design: docs sync never holds a ship hostage.
       expect(content).toContain('Do not block /ship on subagent failure');
-      // These two strings are the ship-docsync E2E's dispatch-matcher markers
-      // (test/skill-e2e-ship-docsync.test.ts) — they come verbatim from the
-      // dictated Step 18 subagent prompt. Rewording them in pr-body.md.tmpl
-      // silently decouples the paid matcher; update both in lockstep.
+      // These four strings are the ship-docsync E2E's dispatch-matcher markers
+      // (test/skill-e2e-ship-docsync.test.ts): the first two are INCLUSION
+      // markers (verbatim from the dictated Step 18 subagent prompt); the last
+      // two are EXCLUSION markers (section scaffolding that disqualifies a
+      // whole-section paste). Rewording any of them in pr-body.md.tmpl silently
+      // deadens the paid matcher; update all four in lockstep.
       expect(content).toContain('You are executing the /document-release workflow');
       expect(content).toContain('.claude/skills/gstack/document-release/SKILL.md');
+      expect(content).toContain('## Step 19: Create PR/MR');
+      expect(content).toContain('Parent processing:');
     }
   });
 
@@ -86,6 +90,15 @@ describe('/ship Step 18 dispatches /document-release (carve visibility)', () => 
     expect(content).toMatch(
       /> \*\*STOP\.\*\*[^\n]*Read `[^`]*ship\/sections\/pr-body\.md`/
     );
+    // Ordering pin: the hoisted invariant must sit ABOVE the pr-body STOP
+    // pointer (mustStayInSkeleton asserts presence only — a future edit could
+    // drift the paragraph below the STOP with every registry check green).
+    const invariantIdx = content.indexOf('**Doc-sync invariant');
+    const stopIdx = content.indexOf(
+      '> **STOP.** Before dispatching the /document-release subagent'
+    );
+    expect(invariantIdx).toBeGreaterThan(-1);
+    expect(stopIdx).toBeGreaterThan(invariantIdx);
   });
 
   test('the dispatch imperative stays carved out of the claude skeleton', () => {
