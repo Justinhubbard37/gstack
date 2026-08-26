@@ -45,7 +45,8 @@
  * test would make the assert tautological (and the prompt echoes into the
  * transcript, which is why asserts only ever read result.toolCalls).
  *
- * Cost: ~$0.30-1/run. Gate tier (pending burn-in; see plan).
+ * Cost: observed $0.63-1.04/run, 234-319s (9/9 burn-in + review runs passed;
+ * gate tier confirmed).
  */
 import { expect, beforeAll, afterAll } from 'bun:test';
 import * as fs from 'fs';
