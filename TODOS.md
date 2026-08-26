@@ -2329,7 +2329,75 @@ Shipped as v0.5.0 on main. Includes `/plan-design-review` (report-only design au
 
 ### Auto-invoke /document-release from /ship — SHIPPED
 
-Shipped in v0.8.3. Step 8.5 added to `/ship` — after creating the PR, `/ship` automatically reads `document-release/SKILL.md` and executes the doc update workflow. Zero-friction doc updates.
+Shipped in v0.8.4; redesigned twice since. Current design (v0.18.1.0+, carved in
+v1.54.0.0): `/ship` Step 18 (`ship/sections/pr-body.md`) dispatches
+`/document-release` as a general-purpose subagent AFTER Step 17 (push) and
+BEFORE Step 19 (PR creation); the subagent's JSON contract (`files_updated`,
+`commit_sha`, `pushed`, `documentation_section`) is baked into the initial PR
+body. Subagent failure is non-blocking. The skeleton names "the
+/document-release subagent" at three touchpoints (section-index trigger + STOP
+pointer, Step 17 handoff, hoisted doc-sync invariant). Pinned by
+`test/ship-document-release-dispatch.test.ts` + carve-guards anchors; behavior
+proven by the `ship-docsync` gate E2E (`test/skill-e2e-ship-docsync.test.ts`).
+
+### Machine-checkable Step 18 dispatch receipt in /ship's Section self-check
+
+**What:** Make ship's "Section self-check" verify a document-release dispatch
+actually occurred (a machine-checkable marker/receipt), instead of relying on
+prompt-level invariants alone.
+
+**Why:** Prompt wording deters skipping but can't prove the dispatch happened.
+Two residual gaps from the v1.69 review are folded into this scope: (1) an
+agent invoking `/document-release` inline via the Skill tool bypasses the
+fresh-context subagent + JSON contract and no test can see it; (2) the ship
+RE-RUN path names document-release in the re-run list but no test asserts
+doc-sync on re-run.
+
+**Context:** The `ship-docsync` E2E asserts the dispatch tool-call on the
+primary path; this TODO is the enforcement layer beyond wording. Start from
+ship's Section self-check (ship/SKILL.md.tmpl) and the Step 18 parent
+processing in ship/sections/pr-body.md.tmpl.
+
+**Effort:** M (human) → S (CC+gstack)
+**Priority:** P3
+**Depends on:** ship-docsync E2E landed
+
+### Apply the dispatch-pin + E2E pattern to /land-and-deploy → /canary
+
+**What:** Same treatment ship→document-release got: name the handoff at the
+skeleton decision points, pin with carve-guards anchors + a free tripwire,
+prove with a toolCalls-assert E2E.
+
+**Why:** Identical failure class — a carve or reword can silently strand the
+canary handoff out of the always-loaded skeleton, and nothing tests it today.
+
+**Context:** Model files: `test/ship-document-release-dispatch.test.ts` (free
+pin) and `test/skill-e2e-ship-docsync.test.ts` (dispatch E2E, gate tier).
+
+**Effort:** M (human) → S (CC+gstack)
+**Priority:** P3
+**Depends on:** None
+
+### Periodic paid-test shard census is one ungated file from the detach-timeout floor
+
+**What:** The periodic tier's shard census sits at exactly the 17×4 ceiling
+(68-file boundary). The next paid `skill-e2e-*` file WITHOUT a whole-file
+`describeE2ETier` self-gate counts in BOTH tier censuses, trips periodic to 18
+shards → 34,020s floor > the 32,400s configured detach timeout, and
+`test/eval-detach-timeout-floor.test.ts` fails with a confusing message.
+
+**Why:** Whoever adds the next periodic E2E gets a floor failure unrelated to
+their change. Fix options: raise the periodic detach timeout, or enforce
+whole-file tier self-gates on all paid files (upgrades them from the
+tier-alignment warn-only bucket to the hard invariant at the same time).
+
+**Context:** `scripts/test-paid-shards.ts` `classifyPaidTestFile` counts
+ungated files in both tiers; `ship-docsync` composed `describeE2ETier('gate')`
+with diff selection specifically to avoid consuming the last free slot.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
 
 ### `{{DOC_VOICE}}` shared resolver
 
