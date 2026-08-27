@@ -121,7 +121,12 @@ Write DESIGN.md and CLAUDE.md (or update it) in the working directory.`,
     // Structural checks — fuzzy synonym matching to handle agent variation
     const sectionSynonyms: Record<string, string[]> = {
       'Product Context': ['product', 'context', 'overview', 'about'],
-      'Aesthetic': ['aesthetic', 'visual direction', 'design direction', 'visual identity'],
+      // Widened 2026-08-27: two CI runs produced judge-praised DESIGN.md files
+      // that articulated the direction as "design principles" / "design
+      // language" prose without any of the original four literals (run
+      // 33090283032, both attempts; inputs identical to the prior passing
+      // run 32899975845 — vocabulary variance, not a generation regression).
+      'Aesthetic': ['aesthetic', 'visual direction', 'design direction', 'visual identity', 'design language', 'visual language', 'design principle', 'look and feel', 'art direction'],
       'Typography': ['typography', 'type', 'font', 'typeface'],
       'Color': ['color', 'colour', 'palette', 'colors'],
       'Spacing': ['spacing', 'space', 'whitespace', 'gap'],
