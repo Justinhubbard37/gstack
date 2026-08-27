@@ -296,7 +296,7 @@ This is structurally sound — if a command exists in code, it appears in docs. 
 
 ### The preamble
 
-Every skill starts with a `{{PREAMBLE}}` block that runs before the skill's own logic. Since v1.70.0.0 the rendered block is a thin fence that invokes `bin/gstack-skill-start` (the consolidated preamble runtime — it replaced ~18KB of inline bash per tier-2+ skill) and reads back `KEY: value` STATUS lines that the skill prose branches on; `bin/gstack-skill-end` logs telemetry at skill end. One-time onboarding and consent text is emitted as session-bound `GSTACK_INSTRUCTION` blocks only when a runtime gate actually fires, instead of rendering in every skill. The startup still handles five things:
+Every skill starts with a `{{PREAMBLE}}` block that runs before the skill's own logic. Since v1.71.0.0 the rendered block is a thin fence that invokes `bin/gstack-skill-start` (the consolidated preamble runtime — it replaced ~18KB of inline bash per tier-2+ skill) and reads back `KEY: value` STATUS lines that the skill prose branches on; `bin/gstack-skill-end` logs telemetry at skill end. One-time onboarding and consent text is emitted as session-bound `GSTACK_INSTRUCTION` blocks only when a runtime gate actually fires, instead of rendering in every skill. The startup still handles five things:
 
 1. **Update check** — calls `gstack-update-check`, reports if an upgrade is available.
 2. **Session tracking** — touches `~/.gstack/sessions/<parent-pid>` and prunes entries older than 2 hours, so concurrent-session state is observable on disk.
