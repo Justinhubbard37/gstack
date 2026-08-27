@@ -1,18 +1,18 @@
 {
   "tag": "v1.69.1.0",
-  "capturedAt": "2026-08-25T20:44:19.052Z",
-  "capturedFromCommit": "cf530751",
+  "capturedAt": "2026-08-27T15:49:46.194Z",
+  "capturedFromCommit": "98bb779a",
   "capturedFromBranch": "prompt-token-load-reduction",
   "totalSkills": 53,
-  "totalCorpusBytes": 2819823,
+  "totalCorpusBytes": 2820320,
   "estTotalCatalogTokens": 4195,
   "topHeaviest": [
     {
       "skill": "ship",
-      "skillMdBytes": 200390,
-      "skillMdLines": 1087,
-      "estTokens": 50098,
-      "tmplBytes": 29080,
+      "skillMdBytes": 200887,
+      "skillMdLines": 1089,
+      "estTokens": 50222,
+      "tmplBytes": 29469,
       "descriptionLen": 293,
       "hasGateEval": true,
       "hasPeriodicEval": true
@@ -591,10 +591,10 @@
     },
     "ship": {
       "skill": "ship",
-      "skillMdBytes": 200390,
-      "skillMdLines": 1087,
-      "estTokens": 50098,
-      "tmplBytes": 29080,
+      "skillMdBytes": 200887,
+      "skillMdLines": 1089,
+      "estTokens": 50222,
+      "tmplBytes": 29469,
       "descriptionLen": 293,
       "hasGateEval": true,
       "hasPeriodicEval": true
