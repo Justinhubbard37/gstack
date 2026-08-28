@@ -41,11 +41,11 @@ The next time a skill says "you need a Duffel test token," it can just go get it
 
 ### Fixed
 - `restrictDirectoryPermissions` no longer chmods shared sticky directories (`/tmp`, `/var/tmp`), foreign-owned directories, symlinked state dirs, or world-writable mounts when running as root; refusals warn once per process instead of failing silent, owned-but-unreadable dirs still self-repair, and the check-then-act race is closed with fd-anchored fstat/fchmod.
-- `gstack-config resolve-user-slug` exited 127 on Linux distros without perl's `shasum` whenever a git email was set; both hashing call sites now fall back to `sha256sum`.
+- `gstack-config resolve-user-slug` exited 127 on Linux distros without perl's `shasum` whenever a git email was set; both hashing call sites now resolve `sha256sum` first and fall back to `shasum -a 256`.
 - A path-validation test assumed `/etc/crontab` exists (absent on Amazon Linux and minimal Fedora); it now uses `/etc/passwd`.
 
 ### For contributors
-- `test/helpers/fs-caps.ts`: functional capability probes (`canRevokeWrites`, `canRevokeReads`) replace uid-0-only guards in 13 chmod-based tests, so suites skip honestly on CAP_DAC_OVERRIDE containers instead of asserting revocations the kernel ignores.
+- `test/helpers/fs-caps.ts`: functional capability probes (`canRevokeWrites`, `canRevokeReads`) replace uid-0-only guards across 14 chmod-based test files, so suites skip honestly on CAP_DAC_OVERRIDE containers instead of asserting revocations the kernel ignores.
 - Five `tpa-*` entries registered across `E2E_TOUCHFILES`/`E2E_TIERS` with template-level deps, the eval matrix row carries `tier: gate`, and `eval:bg:periodic`'s detach timeout rose to 36000s to cover the grown periodic shard census (floor-enforced by test).
 
 ## [1.71.0.0] - 2026-08-27
