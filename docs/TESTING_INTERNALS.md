@@ -41,3 +41,23 @@ E2E tests stream progress in real-time (tool-by-tool via `--output-format stream
 fallback `~/.gstack-dev/evals/`) with auto-comparison
 against the previous finalized run (in-flight `_partial` files are never used as
 a baseline, so a run can't compare against itself).
+
+## Cloud sandboxes (Vercel / Conductor cloud workspaces)
+
+Syscall-supervised sandboxes need environment setup before `bun run test` can
+run green: run `scripts/sandbox-doctor.sh` once per boot. It documents and
+treats the full failure taxonomy (missing /dev/fd, 64M /dev/shm, spurious
+access(2) EACCES from the seccomp supervisor under load, full-capability
+processes defeating chmod-denial tests, no X server, no git identity, and
+Conductor's git-shim exit-code laundering). Then:
+
+```bash
+setpriv --ambient-caps=-all --bounding-set=-all bun run test
+```
+
+Two runner knobs exist for these environments (both no-ops unless set):
+`GSTACK_FREE_JOBS` caps shard concurrency (2 is the measured sweet spot — one
+serial mega-shard and 6-way sharding both saturate the per-process syscall
+supervisor), and `GSTACK_FREE_RETRY_FLAKY=1` re-runs attributed failures once
+serially, downgrading a clean retry to a loud FLAKY-PASS (capped at 5 files so
+a broken tree can't masquerade as flaky).
