@@ -105,7 +105,7 @@ describe('EvalCollector', () => {
     const filepath = await collector.finalize();
 
     const data: EvalResult = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
-    expect(data.schema_version).toBe(1);
+    expect(data.schema_version).toBe(2);
     expect(data.tier).toBe('e2e');
     expect(data.total_tests).toBe(2);
     expect(data.passed).toBe(1);
