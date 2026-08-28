@@ -588,6 +588,131 @@ Write findings to ${dir}/review-output.md`,
   }, 210_000);
 });
 
+// --- Review Army: Simplification specialist (activation) ---
+
+describeIfSelected('Review Army: Simplification activation', ['review-army-simplification'], () => {
+  let dir: string;
+
+  beforeAll(() => {
+    const repo = setupRepo('army-simplification');
+    dir = repo.dir;
+
+    fs.writeFileSync(path.join(dir, 'app.js'), '// base\n');
+    repo.run('git', ['add', '.']);
+    repo.run('git', ['commit', '-m', 'initial']);
+
+    repo.run('git', ['checkout', '-b', 'feature/date-utils']);
+    const overbuild = fs.readFileSync(
+      path.join(ROOT, 'test', 'fixtures', 'review-army-overbuild.js'), 'utf-8'
+    );
+    fs.writeFileSync(path.join(dir, 'date_utils.js'), overbuild);
+    repo.run('git', ['add', '.']);
+    repo.run('git', ['commit', '-m', 'add date utils']);
+
+    copyReviewFiles(dir);
+  });
+
+  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+
+  testConcurrentIfSelected('review-army-simplification', async () => {
+    const result = await runSkillTest({
+      prompt: `You are in a git repo on a feature branch that adds a JS utility file.
+Read review-SKILL.md for instructions. Also read review-checklist.md.
+The specialist checklists are in review-specialists/ (testing.md, simplification.md, etc.).
+
+Skip the preamble, lake intro, telemetry sections.
+Run Step 4.5 (Review Army) only.
+The base branch is main. The diff is over 100 lines, so the Simplification specialist should activate.
+
+For the specialist dispatch, read review-specialists/simplification.md and apply it against the diff.
+
+Write your findings to ${dir}/review-output.md`,
+      workingDirectory: dir,
+      maxTurns: 20,
+      timeout: 180_000,
+      testName: 'review-army-simplification',
+      runId,
+    });
+
+    logCost('/review army simplification', result);
+    recordE2E(evalCollector, '/review army simplification detection', 'Review Army', result);
+    expect(result.exitReason).toBe('success');
+
+    const outputPath = path.join(dir, 'review-output.md');
+    expect(fs.existsSync(outputPath)).toBe(true);
+    const content = fs.readFileSync(outputPath, 'utf-8').toLowerCase();
+    // At least one planted invitation caught, expressed through the closed
+    // tag vocabulary or its obvious phrasing.
+    const hasStructureFinding =
+      content.includes('native') ||
+      content.includes('stdlib') ||
+      content.includes('speculative') ||
+      content.includes('intl') ||
+      content.includes('one implementation') ||
+      content.includes('single implementation');
+    expect(hasStructureFinding).toBe(true);
+    // Advisory findings must not read as defects: the disavowed frame stays out.
+    expect(content).not.toContain('lean already. ship.');
+  }, 210_000);
+});
+
+// --- Review Army: Simplification specialist (false-flag precision) ---
+
+describeIfSelected('Review Army: Simplification precision', ['review-army-simplification-precision'], () => {
+  let dir: string;
+
+  beforeAll(() => {
+    const repo = setupRepo('army-simplification-lean');
+    dir = repo.dir;
+
+    fs.writeFileSync(path.join(dir, 'app.js'), '// base\n');
+    repo.run('git', ['add', '.']);
+    repo.run('git', ['commit', '-m', 'initial']);
+
+    repo.run('git', ['checkout', '-b', 'feature/parse-port']);
+    const lean = fs.readFileSync(
+      path.join(ROOT, 'test', 'fixtures', 'review-army-lean-complete.js'), 'utf-8'
+    );
+    fs.writeFileSync(path.join(dir, 'parse_port.js'), lean);
+    repo.run('git', ['add', '.']);
+    repo.run('git', ['commit', '-m', 'add parsePort with self-check']);
+
+    copyReviewFiles(dir);
+  });
+
+  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+
+  testConcurrentIfSelected('review-army-simplification-precision', async () => {
+    const result = await runSkillTest({
+      prompt: `You are in a git repo on a feature branch that adds one small, complete utility (validation + error path + self-check).
+Read review-specialists/simplification.md and apply it against the diff of the current branch vs main (git diff main).
+
+Write the specialist's raw output to ${dir}/review-output.md — either the finding JSON lines or the exact NO FINDINGS sentinel.`,
+      workingDirectory: dir,
+      maxTurns: 12,
+      timeout: 150_000,
+      testName: 'review-army-simplification-precision',
+      runId,
+    });
+
+    logCost('/review army simplification precision', result);
+    recordE2E(evalCollector, '/review army simplification precision', 'Review Army', result);
+    expect(result.exitReason).toBe('success');
+
+    const outputPath = path.join(dir, 'review-output.md');
+    expect(fs.existsSync(outputPath)).toBe(true);
+    const content = fs.readFileSync(outputPath, 'utf-8');
+    // Precision: a lean, complete diff yields no simplification findings.
+    // The specialist must not flag the error path or the self-check for
+    // deletion — that is the noise failure mode this case pins.
+    const flaggedTestOrErrorPath =
+      /"category"\s*:\s*"(delete|shrink|stdlib|native|speculative)"/i.test(content) &&
+      /(testparseport|self-check|assert|throw)/i.test(content);
+    expect(flaggedTestOrErrorPath).toBe(false);
+    expect(content.toUpperCase()).toContain('NO FINDINGS');
+  }, 180_000);
+});
+
 // Finalize eval collector
 afterAll(async () => {
   await finalizeEvalCollector(evalCollector);

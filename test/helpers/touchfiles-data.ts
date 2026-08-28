@@ -66,6 +66,8 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'review-army-quality-score':    ['review/**', 'scripts/resolvers/review-army.ts'],
   'review-army-json-findings':    ['review/**', 'scripts/resolvers/review-army.ts'],
   'review-army-red-team':         ['review/**', 'scripts/resolvers/review-army.ts'],
+  'review-army-simplification':   ['review/**', 'scripts/resolvers/review-army.ts'],
+  'review-army-simplification-precision': ['review/**', 'scripts/resolvers/review-army.ts'],
   'review-army-consensus':        ['review/**', 'scripts/resolvers/review-army.ts'],
 
   // Office Hours
@@ -489,6 +491,8 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'review-army-json-findings': 'gate',      // JSON schema compliance
   'review-army-red-team': 'periodic',       // Multi-agent coordination
   'review-army-consensus': 'periodic',      // Multi-specialist agreement
+  'review-army-simplification': 'periodic', // Advisory lens quality benchmark
+  'review-army-simplification-precision': 'periodic', // False-flag noise benchmark
 
   // Office Hours
   'office-hours-spec-review': 'gate',

@@ -67,6 +67,7 @@ Based on the scope signals above, select which specialists to dispatch.
 5. **Data Migration** — if SCOPE_MIGRATIONS=true. Read \`${ctx.paths.skillRoot}/review/specialists/data-migration.md\`
 6. **API Contract** — if SCOPE_API=true. Read \`${ctx.paths.skillRoot}/review/specialists/api-contract.md\`
 7. **Design** — if SCOPE_FRONTEND=true. Use the existing design review checklist at \`${ctx.paths.skillRoot}/review/design-checklist.md\`
+8. **Simplification** — if DIFF_LINES > 100. Read \`${ctx.paths.skillRoot}/review/specialists/simplification.md\`. Advisory-only lens: hunts unrequested structure (hand-rolled stdlib, one-implementation abstractions, dependencies duplicating platform features), never coverage.
 
 ### Adaptive gating
 
@@ -76,7 +77,7 @@ For each conditional specialist that passed scope gating, check the \`gstack-spe
 - If tagged \`[GATE_CANDIDATE]\` (0 findings in 10+ dispatches): skip it. Print: "[specialist] auto-gated (0 findings in N reviews)."
 - If tagged \`[NEVER_GATE]\`: always dispatch regardless of hit rate. Security and data-migration are insurance policy specialists — they should run even when silent.
 
-**Force flags:** If the user's prompt includes \`--security\`, \`--performance\`, \`--testing\`, \`--maintainability\`, \`--data-migration\`, \`--api-contract\`, \`--design\`, or \`--all-specialists\`, force-include that specialist regardless of gating.
+**Force flags:** If the user's prompt includes \`--security\`, \`--performance\`, \`--testing\`, \`--maintainability\`, \`--data-migration\`, \`--api-contract\`, \`--design\`, \`--simplification\`, or \`--all-specialists\`, force-include that specialist regardless of gating.
 
 Note which specialists were selected, gated, and skipped. Print the selection:
 "Dispatching N specialists: [names]. Skipped: [names] (scope not detected). Gated: [names] (0 findings in N+ reviews)."`;
@@ -167,8 +168,14 @@ Group findings by fingerprint. For findings sharing the same fingerprint:
 - Confidence 3-4: move to appendix (suppress from main findings)
 - Confidence 1-2: suppress entirely
 
+**Advisory carve-out (simplification specialist):**
+Findings with \`"advisory": true\` are excluded from BOTH the quality_score
+summation and the findings-count header below — they are structure suggestions,
+not defects, and must not make "5 findings … 10/10" look contradictory. In
+Fix-First they are ASK-only: NEVER auto-applied, even when mechanical.
+
 **Compute PR Quality Score:**
-After merging, compute the quality score:
+After merging, compute the quality score over NON-advisory findings only:
 \`quality_score = max(0, 10 - (critical_count * 2 + informational_count * 0.5))\`
 Cap at 10. Log this in the review result at the end.
 
@@ -178,7 +185,8 @@ Present the merged findings in the same format as the current review:
 \`\`\`
 SPECIALIST REVIEW: N findings (X critical, Y informational) from Z specialists
 
-[For each finding, in order: CRITICAL first, then INFORMATIONAL, sorted by confidence descending]
+[For each finding, in order: CRITICAL first, then INFORMATIONAL, sorted by confidence descending;
+ advisory findings last, each rendered with an [ADVISORY] label in place of the severity]
 [SEVERITY] (confidence: N/10, specialist: name) path:line — summary
   Fix: recommended fix
   [If MULTI-SPECIALIST CONFIRMED: show confirmation note]
@@ -186,12 +194,20 @@ SPECIALIST REVIEW: N findings (X critical, Y informational) from Z specialists
 PR Quality Score: X/10
 \`\`\`
 
+**Simplification footer (after the score line):**
+- If the simplification specialist was dispatched and returned findings, sum
+  their \`lines_removable\` values and print: \`net: -N lines possible\` (omit
+  findings without the field from the sum).
+- If it was dispatched and returned NO FINDINGS, print:
+  \`Simplification: lean already — nothing to cut.\`
+- If it was not dispatched, print neither line.
+
 These findings flow into ${fixFirstRef} alongside ${critPassRef}.
-The Fix-First heuristic applies identically — specialist findings follow the same AUTO-FIX vs ASK classification.
+The Fix-First heuristic applies identically — specialist findings follow the same AUTO-FIX vs ASK classification (except advisory findings, which are ASK-only per the carve-out above).
 
 **Compile per-specialist stats:**
 After merging findings, compile a \`specialists\` object for ${persistRef}.
-For each specialist (testing, maintainability, security, performance, data-migration, api-contract, design, red-team):
+For each specialist (testing, maintainability, security, performance, data-migration, api-contract, design, simplification, red-team):
 - If dispatched: \`{"dispatched": true, "findings": N, "critical": N, "informational": N}\`
 - If skipped by scope: \`{"dispatched": false, "reason": "scope"}\`
 - If skipped by gating: \`{"dispatched": false, "reason": "gated"}\`

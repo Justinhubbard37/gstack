@@ -943,11 +943,38 @@ describe('TEST_COVERAGE_AUDIT placeholders', () => {
       'performance.md',
       'data-migration.md',
       'api-contract.md',
+      'simplification.md',
       'red-team.md',
     ];
     for (const f of expected) {
       expect(fs.existsSync(path.join(specDir, f))).toBe(true);
     }
+  });
+
+  // Regression pins for the simplification specialist (advisory carve-out edits
+  // the pre-existing quality_score instruction, so the rendered contract is
+  // pinned statically — the carve-out and the early-out line must both survive
+  // regeneration verbatim).
+  test('simplification advisory carve-out and early-out render into review docs', () => {
+    const reviewArmySection = fs.readFileSync(
+      path.join(ROOT, 'review', 'sections', 'review-army.md'),
+      'utf-8',
+    );
+    expect(reviewArmySection).toContain('"advisory": true');
+    expect(reviewArmySection).toContain('quality score over NON-advisory findings only');
+    expect(reviewArmySection).toContain('Simplification: lean already — nothing to cut.');
+    expect(reviewArmySection).toContain('net: -N lines possible');
+    expect(reviewArmySection).toContain('--simplification');
+    // The specialist itself must never carry a verdict-shaped zero-findings line.
+    const spec = fs.readFileSync(
+      path.join(ROOT, 'review', 'specialists', 'simplification.md'),
+      'utf-8',
+    );
+    expect(spec).toContain('NO FINDINGS');
+    expect(spec).not.toContain('Lean already. Ship.');
+    // Closed tag vocabulary: the disavowed yagni: frame must not appear.
+    expect(spec).toContain('speculative');
+    expect(spec.toLowerCase()).not.toContain('"yagni"');
   });
 
   test('each specialist file has standard header with scope and output format', () => {
