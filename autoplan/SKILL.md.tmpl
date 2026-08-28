@@ -108,9 +108,11 @@ preference." The user still decides, but the framing is appropriately urgent.
 
 ## Sequential Execution — MANDATORY
 
-Phases MUST execute in strict order: CEO → Design → Eng → DX.
-Each phase MUST complete fully before the next begins.
-NEVER run phases in parallel — each builds on the previous.
+Phases MUST execute in strict order: CEO → Design (if UI scope) → DX (if
+developer-facing scope) → Eng. Eng runs LAST, always: it is the required
+shipping gate, so it must review the FINAL amended plan — every other phase's
+amendments land before it. Each phase MUST complete fully before the next
+begins. NEVER run phases in parallel — each builds on the previous.
 
 Between each phase, emit a phase-transition summary and verify that all required
 outputs from the prior phase are written before starting the next.
@@ -122,13 +124,20 @@ outputs from the prior phase are written before starting the next.
 Auto-decide replaces the USER'S judgment with the 6 principles. It does NOT replace
 the ANALYSIS. Every section in the loaded skill files must still be executed at the
 same depth as the interactive version. The only thing that changes is who answers the
-AskUserQuestion: you do, using the 6 principles, instead of the user.
+AskUserQuestion: you do, instead of the user.
 
-**Two exceptions — never auto-decided:**
-1. Premises (Phase 1) — require human judgment about what problem to solve.
-2. User Challenges — when both models agree the user's stated direction should change
-   (merge, split, add, remove features/workflows). The user always has context models
-   lack. See Decision Classification above.
+**Default resolution: the recommended option.** Every AskUserQuestion in the loaded
+skills resolves to its `(recommended)` option; mode selections take the skill's
+context-dependent default. The 6 principles guide cases with no recommendation and
+break ties; when a principle argues AGAINST the recommended option, that is a Taste
+decision — take the recommendation and surface the disagreement at the final gate.
+
+**One exception class — never auto-decided:** User Challenges — when both models
+agree the user's stated direction should change (merge, split, add, remove
+features/workflows; reinterpret a settled decision), or a premise looks clearly
+wrong. These queue and surface at the Final Approval Gate — never as mid-run
+stops. The user is interrupted exactly once, at the gate. The user always has
+context models lack. See Decision Classification above.
 
 **You MUST still:**
 - READ the actual code, diffs, and files each section references
@@ -278,7 +287,7 @@ else
 fi
 ```
 
-If `_CODEX_AVAILABLE=false`, all Phase 1-3.5 Codex voices below degrade to
+If `_CODEX_AVAILABLE=false`, all Phase 1-3 Codex voices below degrade to
 `[codex-unavailable]` in the degradation matrix. /autoplan completes with
 Claude subagent only — saves token spend on Codex prompts we can't use.
 
@@ -294,7 +303,7 @@ Claude subagent only — saves token spend on Codex prompts we can't use.
 - [ ] CEO completion summary written to plan file
 - [ ] CEO dual voices ran (Codex + Claude subagent, or noted unavailable)
 - [ ] CEO consensus table produced
-- [ ] Premise gate passed (user confirmed)
+- [ ] Premises assessed (clearly-wrong ones queued as Final Gate items — no mid-run stop)
 - [ ] Phase-transition summary emitted
 
 ## Phase 2: Design Review (conditional — skip if no UI scope)
@@ -306,25 +315,28 @@ entirely — do NOT read its section. Log: "Phase 2 skipped — no UI scope dete
 
 ---
 
+## Phase 2.5: DX Review (conditional — skip if no developer-facing scope)
+
+**Skip condition:** If DX scope was NOT detected in Phase 0, skip this phase
+entirely — do NOT read its section. Log: "Phase 2.5 skipped — no developer-facing scope detected."
+
+{{SECTION:dx-phase}}
+
+---
+
 **Pre-Phase 3 checklist (verify before starting):**
 - [ ] All Phase 1 items above confirmed
 - [ ] Design completion summary written (or "skipped, no UI scope")
 - [ ] Design dual voices ran (if Phase 2 ran)
 - [ ] Design consensus table produced (if Phase 2 ran)
+- [ ] DX completion summary written (or "skipped, no developer-facing scope")
+- [ ] DX dual voices ran (if Phase 2.5 ran)
+- [ ] DX consensus table produced (if Phase 2.5 ran)
 - [ ] Phase-transition summary emitted
 
-## Phase 3: Eng Review + Dual Voices
+## Phase 3: Eng Review + Dual Voices (always runs, always LAST — the required gate reviews the final amended plan)
 
 {{SECTION:eng-phase}}
-
----
-
-## Phase 3.5: DX Review (conditional — skip if no developer-facing scope)
-
-**Skip condition:** If DX scope was NOT detected in Phase 0, skip this phase
-entirely — do NOT read its section. Log: "Phase 3.5 skipped — no developer-facing scope detected."
-
-{{SECTION:dx-phase}}
 
 ---
 
@@ -368,7 +380,16 @@ produced. Check the plan file and conversation for each item.
 - [ ] Dual voices ran (or noted unavailable/skipped with phase)
 - [ ] Design litmus scorecard produced
 
-**Phase 3 (Eng) outputs:**
+**Phase 2.5 (DX) outputs — only if DX scope detected:**
+- [ ] All 8 DX dimensions evaluated with scores
+- [ ] Developer journey map produced
+- [ ] Developer empathy narrative written
+- [ ] TTHW assessment with target
+- [ ] DX Implementation Checklist produced
+- [ ] Dual voices ran (or noted unavailable/skipped with phase)
+- [ ] DX consensus table produced
+
+**Phase 3 (Eng — final phase) outputs:**
 - [ ] Scope challenge with actual code analysis (not just "scope is fine")
 - [ ] Architecture ASCII diagram produced
 - [ ] Test diagram mapping codepaths to test coverage
@@ -379,15 +400,6 @@ produced. Check the plan file and conversation for each item.
 - [ ] Completion Summary produced
 - [ ] Dual voices ran (Codex + Claude subagent, or noted unavailable)
 - [ ] Eng consensus table produced
-
-**Phase 3.5 (DX) outputs — only if DX scope detected:**
-- [ ] All 8 DX dimensions evaluated with scores
-- [ ] Developer journey map produced
-- [ ] Developer empathy narrative written
-- [ ] TTHW assessment with target
-- [ ] DX Implementation Checklist produced
-- [ ] Dual voices ran (or noted unavailable/skipped with phase)
-- [ ] DX consensus table produced
 
 **Cross-phase:**
 - [ ] Cross-phase themes section written
@@ -479,7 +491,7 @@ AskUserQuestion options:
 - A: mark APPROVED, write review logs, suggest /ship
 - B: ask which overrides, apply, re-present gate
 - C: answer freeform, re-present gate
-- D: make changes, re-run affected phases (scope→1B, design→2, test plan→3, arch→3). Max 3 cycles.
+- D: make changes, re-run affected phases (scope→1B, design→2, dx→2.5, test plan→3, arch→3; a re-run of any earlier phase re-runs Eng after it — the gate always reviews the final plan). Max 3 cycles.
 - E: start over
 
 ---
@@ -504,7 +516,7 @@ If Phase 2 ran (UI scope):
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-design-review","timestamp":"'"$TIMESTAMP"'","status":"STATUS","unresolved":N,"via":"autoplan","commit":"'"$COMMIT"'"}'
 ```
 
-If Phase 3.5 ran (DX scope):
+If Phase 2.5 ran (DX scope):
 ```bash
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-devex-review","timestamp":"'"$TIMESTAMP"'","status":"STATUS","initial_score":N,"overall_score":N,"product_type":"TYPE","tthw_current":"TTHW","tthw_target":"TARGET","unresolved":N,"via":"autoplan","commit":"'"$COMMIT"'"}'
 ```
@@ -521,7 +533,7 @@ If Phase 2 ran (UI scope), also log:
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"autoplan-voices","timestamp":"'"$TIMESTAMP"'","status":"STATUS","source":"SOURCE","phase":"design","via":"autoplan","consensus_confirmed":N,"consensus_disagree":N,"commit":"'"$COMMIT"'"}'
 ```
 
-If Phase 3.5 ran (DX scope), also log:
+If Phase 2.5 ran (DX scope), also log:
 ```bash
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"autoplan-voices","timestamp":"'"$TIMESTAMP"'","status":"STATUS","source":"SOURCE","phase":"dx","via":"autoplan","consensus_confirmed":N,"consensus_disagree":N,"commit":"'"$COMMIT"'"}'
 ```
@@ -536,8 +548,8 @@ Suggest next step: `/ship` when ready to create the PR.
 ## Important Rules
 
 - **Never abort.** The user chose /autoplan. Respect that choice. Surface all taste decisions, never redirect to interactive review.
-- **Two gates.** The non-auto-decided AskUserQuestions are: (1) premise confirmation in Phase 1, and (2) User Challenges — when both models agree the user's stated direction should change. Everything else is auto-decided using the 6 principles.
+- **One gate.** The only non-auto-decided AskUserQuestions surface at the Final Approval Gate: User Challenges — including clearly-wrong premises queued from Phase 1. Everything else resolves to the recommended option (the 6 principles break ties), so the pipeline never stops mid-run.
 - **Log every decision.** No silent auto-decisions. Every choice gets a row in the audit trail.
 - **Full depth means full depth.** Do not compress or skip sections from the loaded skill files (except the skip list in Phase 0). "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, and decide each one. A one-sentence summary of a section is not "full depth" — it is a skip. If you catch yourself writing fewer than 3 sentences for any review section, you are likely compressing.
 - **Artifacts are deliverables.** Test plan artifact, failure modes registry, error/rescue table, ASCII diagrams — these must exist on disk or in the plan file when the review completes. If they don't exist, the review is incomplete.
-- **Sequential order.** CEO → Design → Eng → DX. Each phase builds on the last.
+- **Sequential order.** CEO → Design (if UI scope) → DX (if developer-facing scope) → Eng, always last. Each phase builds on the last; the required gate reviews the final amended plan.

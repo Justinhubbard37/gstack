@@ -5,9 +5,11 @@ Override: every AskUserQuestion → auto-decide using the 6 principles.
 
 **Override rules:**
 - Mode selection: SELECTIVE EXPANSION
-- Premises: accept reasonable ones (P6), challenge only clearly wrong ones
-- **GATE: Present premises to user for confirmation** — this is the ONE AskUserQuestion
-  that is NOT auto-decided. Premises require human judgment.
+- Premises: accept reasonable ones (P6). Clearly-wrong or challenged premises are
+  NOT a mid-run stop — queue each as a User-Challenge-shaped item for the Final
+  Approval Gate (Phase 4): what the plan assumes, why it looks wrong, and the cost
+  of proceeding anyway. Premises still require human judgment — the human exercises
+  it at the gate, exactly once, not mid-pipeline.
 - Alternatives: pick highest completeness (P1). If tied, pick simplest (P5).
   If top 2 are close → mark TASTE DECISION.
 - Scope expansion: in blast radius + <1d CC → approve (P2). Outside → defer to TODOS.md (P3).
@@ -112,5 +114,6 @@ Sections 1-10 — for EACH section, run the evaluation criteria from the loaded 
 > Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
 > Passing to Phase 2.
 
-Do NOT begin Phase 2 until all Phase 1 outputs are written to the plan file
-and the premise gate has been passed.
+Do NOT begin Phase 2 until all Phase 1 outputs are written to the plan file,
+including the premise assessment (queued premise challenges travel to the
+Final Gate — they never pause the pipeline here).

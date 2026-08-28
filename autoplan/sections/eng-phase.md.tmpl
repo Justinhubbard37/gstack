@@ -16,6 +16,7 @@ Override: every AskUserQuestion → auto-decide using the 6 principles.
   Also consider these findings from prior review phases:
   CEO: <insert CEO consensus table summary — key concerns, DISAGREEs>
   Design: <insert Design consensus table summary, or 'skipped, no UI scope'>
+  DX: <insert DX consensus table summary, or 'skipped, no developer-facing scope'>
 
   File: <plan_path>" -C "$_REPO_ROOT" -s read-only {{CODEX_WEB_SEARCH_FLAG}} < /dev/null
   _CODEX_EXIT=$?
@@ -43,7 +44,7 @@ Override: every AskUserQuestion → auto-decide using the 6 principles.
 - Architecture choices: explicit over clever (P5). If codex disagrees with valid reason → TASTE DECISION. Scope changes both models agree on → USER CHALLENGE.
 - Evals: always include all relevant suites (P1)
 - Test plan: generate artifact at `~/.gstack/projects/$SLUG/{user}-{branch}-test-plan-{datetime}.md`
-- TODOS.md: collect all deferred scope expansions from Phase 1, auto-write
+- TODOS.md: collect all deferred scope expansions from every prior phase (Eng runs last), auto-write
 
 **Required execution checklist (Eng):**
 
@@ -103,4 +104,4 @@ Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = fl
 **PHASE 3 COMPLETE.** Emit phase-transition summary:
 > **Phase 3 complete.** Codex: [N concerns]. Claude subagent: [N issues].
 > Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
-> Passing to Phase 3.5 (DX Review) or Phase 4 (Final Gate).
+> Passing to Phase 4 (Final Gate).

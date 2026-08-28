@@ -87,15 +87,15 @@ Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = fl
 
 4. DX Scorecard: Produce the full scorecard with all 8 dimensions scored.
 
-**Mandatory outputs from Phase 3.5:**
+**Mandatory outputs from Phase 2.5:**
 - Developer journey map (9-stage table)
 - Developer empathy narrative (first-person perspective)
 - DX Scorecard with all 8 dimension scores
 - DX Implementation Checklist
 - TTHW assessment with target
 
-**PHASE 3.5 COMPLETE.** Emit phase-transition summary:
-> **Phase 3.5 complete.** DX overall: [N]/10. TTHW: [N] min → [target] min.
+**PHASE 2.5 COMPLETE.** Emit phase-transition summary:
+> **Phase 2.5 complete.** DX overall: [N]/10. TTHW: [N] min → [target] min.
 > Codex: [N concerns]. Claude subagent: [N issues].
 > Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
-> Passing to Phase 4 (Final Gate).
+> Passing to Phase 3 (Eng Review — the required gate reviews the final amended plan).

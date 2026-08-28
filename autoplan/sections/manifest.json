@@ -2,7 +2,7 @@
   "$schema": "https://gstack.dev/schemas/section-manifest.json",
   "skill": "autoplan",
   "version": 1,
-  "note": "PASSIVE registry (v2 plan T9 / CM2). Fields are IDs, file paths, human titles, and human-readable trigger text ONLY. The skeleton's phase sequencing (Sequential Execution + the Phase 0 UI/DX scope detection) is the ONLY place that decides WHEN to read a section — Phase 2 and Phase 3.5 are conditional and their sections must NOT be read when their scope is absent; required-reads live in the E2E fixtures. No machine predicate here — see docs/designs/v2_PLAN.md:663.",
+  "note": "PASSIVE registry (v2 plan T9 / CM2). Fields are IDs, file paths, human titles, and human-readable trigger text ONLY. The skeleton's phase sequencing (Sequential Execution + the Phase 0 UI/DX scope detection) is the ONLY place that decides WHEN to read a section — Phase 2 and Phase 2.5 are conditional and their sections must NOT be read when their scope is absent; required-reads live in the E2E fixtures. No machine predicate here — see docs/designs/v2_PLAN.md:663.",
   "sections": [
     {
       "id": "ceo-phase",
@@ -25,8 +25,8 @@
     {
       "id": "dx-phase",
       "file": "dx-phase.md",
-      "title": "Phase 3.5: DX review — override rules, dual voices, 8-dimension scorecard",
-      "trigger": "starting Phase 3.5 (DX review — ONLY if developer-facing scope was detected in Phase 0; skip the read entirely otherwise)"
+      "title": "Phase 2.5: DX review — override rules, dual voices, 8-dimension scorecard",
+      "trigger": "starting Phase 2.5 (DX review — ONLY if developer-facing scope was detected in Phase 0; skip the read entirely otherwise)"
     },
     {
       "id": "tasks-aggregator",
