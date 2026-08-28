@@ -198,6 +198,7 @@ export function recordE2E(
     transcript: result.transcript,
     output: result.output?.slice(0, 2000),
     turns_used: result.costEstimate.turnsUsed,
+    tokens_used: result.costEstimate.estimatedTokens,
     browse_errors: result.browseErrors,
     exit_reason: result.exitReason,
     timeout_at_turn: result.exitReason === 'timeout' ? result.costEstimate.turnsUsed : undefined,

@@ -13,7 +13,11 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawnSync } from 'child_process';
 
-const SCHEMA_VERSION = 1;
+// v2: EvalTestEntry.harvest gains optional {insertions, deletions, net} and
+// may be explicitly null (arm-benchmark harvest-failure taxonomy). Readers
+// stay tolerant of v1 runs: no reader requires the new fields, and
+// eval-compare only warns on version mismatch.
+const SCHEMA_VERSION = 2;
 const LEGACY_EVAL_DIR = path.join(os.homedir(), '.gstack-dev', 'evals');
 
 /**
@@ -91,12 +95,20 @@ export interface EvalTestEntry {
 
   error?: string;
 
-  // Worktree harvest data
+  // Diff harvest data. Two writers today:
+  //   - WorktreeManager harvests set {filesChanged, patchPath, isDuplicate}.
+  //   - Arm-benchmark cells (schema v2) set {filesChanged, insertions,
+  //     deletions, net} from `git add -A && git diff --cached --stat`, and
+  //     record an explicit `null` when harvest itself failed (failure
+  //     taxonomy: a failed harvest is never silently dropped).
   harvest?: {
     filesChanged: number;
-    patchPath: string;
-    isDuplicate: boolean;
-  };
+    patchPath?: string;
+    isDuplicate?: boolean;
+    insertions?: number;
+    deletions?: number;
+    net?: number;
+  } | null;
 }
 
 export interface EvalResult {
