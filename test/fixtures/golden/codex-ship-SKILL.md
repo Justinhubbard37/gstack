@@ -117,6 +117,8 @@ ELI10 is always present, in plain English, not function names. Recommendation is
 
 Completeness: use `Completeness: N/10` only when options differ in coverage. 10 = complete, 7 = happy path, 3 = shortcut. If options differ in kind, write: `Note: options differ in kind, not coverage — no completeness score.`
 
+Accepted shortcuts leave a trail: when the user selects an option that is BOTH Completeness ≤ 7 AND a durable-scope call (architecture or scope-cut — never a turn-level choice), log it via `gstack-decision-log` with the ceiling and the upgrade trigger in the rationale, and — as part of implementing that option, same edit, no follow-up question — mark each cut corner in code with `gstack-shortcut(dec-<id>): <ceiling>, upgrade when <trigger>` in the language's comment syntax. Never agent-initiated: the marker exists only downstream of the user's explicit choice. /retro harvests these into a debt ledger, joined on the decision id.
+
 Pros / cons: use ✅ and ❌. Minimum 2 pros and 1 con per option when the choice is real; Minimum 40 characters per bullet. Hard-stop escape for one-way/destructive confirmations: `✅ No cons — this is a hard-stop choice`.
 
 Neutral posture: `Recommendation: <default> — this is a taste call, no strong preference either way`; `(recommended)` STAYS on the default option for AUTO_DECIDE.
@@ -232,6 +234,11 @@ GStack voice: Garry-shaped product and engineering judgment, compressed for runt
 
 Good: "auth.ts:47 returns undefined when the session cookie expires. Users hit a white screen. Fix: add a null check and redirect to /login. Two lines."
 Bad: "I've identified a potential issue in the authentication flow that may cause problems under certain conditions."
+
+**Bounded closer.** After completing work, report in at most a few short lines: what changed, what was skipped, what to watch. No feature tours, no unrequested design notes. If the explanation outgrows the change, cut the explanation. Exempt: AskUserQuestion decision briefs, completion-status blocks, anything the user explicitly asked to be explained, and a skill's mandated report format — the report IS the work in report-shaped skills (/qa-only, /plan-*-review, /retro, /document-generate); this rule governs unrequested prose around the deliverable, never the deliverable.
+
+Good closer: "Renamed the flag in 3 files, regenerated docs, tests green. Skipped the CLI alias (unused since v1.2); watch the Windows job."
+Bad closer: a tour of every edit, a restatement of the plan, and three paragraphs justifying choices nobody questioned.
 
 ## Context Recovery
 
@@ -361,6 +368,16 @@ Always flag anything that looks wrong — one sentence, what you noticed and its
 
 Before building anything unfamiliar, **search first.** See `$GSTACK_ROOT/ETHOS.md`.
 - **Layer 1** (tried and true) — don't reinvent. **Layer 2** (new and popular) — scrutinize. **Layer 3** (first principles) — prize above all.
+
+**The reuse ladder — before writing new code, stop at the first rung that holds:**
+1. A helper, util, or pattern already in this repo — re-implementing what's a few files over is the most common slop.
+2. The standard library.
+3. A native platform feature (CSS over JS, DB constraint over app code, `<input type="date">` over a picker lib).
+4. An already-installed dependency — never add a new one for what a few lines cover.
+
+Then build the complete version of what remains.
+
+**Bug fixes hit root cause, not symptom:** one guard in the shared function beats a guard in every caller — grep the callers, fix it once where they all route through.
 
 **Eureka:** When first-principles reasoning contradicts conventional wisdom, name it and log:
 ```bash
