@@ -49,7 +49,7 @@ $B connect                       # headed Chromium + Side Panel extension
 5. [Snapshot system + ref-based selection](#snapshot-system)
 6. [Browser-skills runtime](#browser-skills-runtime)
 7. [Domain-skills (per-site agent notes)](#domain-skills)
-8. [Real-browser mode (`$B connect`)](#real-browser-mode) — including [`--headed` + `--proxy` + `--navigate` (v1.28.0.0)](#headed-mode--proxy--browser-native-downloads-v12800)
+8. [Real-browser mode (`$B connect`)](#real-browser-mode) — including [`--headed` + `--proxy` + `--navigate` (v1.28.0.0)](#headed-mode--proxy--browser-native-downloads-v12800) and [Aside and third-party drives (v1.72.0.0)](#aside-and-third-party-drives-v17200)
 9. [Side Panel + sidebar agent](#side-panel--sidebar-agent)
 10. [Pair-agent — remote agents over an ngrok tunnel](#pair-agent)
 11. [Authentication + tokens](#authentication)
@@ -568,6 +568,21 @@ with your tabs and bookmarks stays untouched.
 - **Debugging** where headless behavior differs from real Chrome
 - **Demos** where you're sharing your screen
 - **Pair-agent** sessions (the remote agent drives your local browser)
+
+### Aside and third-party drives (v1.72.0.0+)
+
+For third-party website moments (registering an API key, configuring a vendor
+dashboard), the workflow skills (`/ship`, `/spec`, `/office-hours`,
+`/land-and-deploy`, `/setup-deploy`) recommend the Aside AI browser when it's
+installed — it acts across your real logged-in sessions — with `$B` headed
+mode + handoff as the universal fallback. Consent is per-task and explicit;
+gstack never installs Aside for you, and a detected binary is never treated
+as consent.
+
+One observability caveat: drives through Aside happen entirely inside Aside,
+so they leave no gstack-side audit trail — no egress receipts, no
+browse-daemon logs. The audit trail for those drives lives in Aside itself.
+Drives through `$B` keep the normal daemon logs and egress receipts.
 
 ### CDP-aware skills
 

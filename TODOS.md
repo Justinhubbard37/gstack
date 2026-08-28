@@ -471,9 +471,10 @@ directory path got.
 
 **Why:** The symlink-swap class fixed for directories on this branch remains
 open for the files inside them (ship adversarial review, finding 5).
-Also note for docs: drives through Aside leave no gstack-side audit trail
-(no egress receipts, no browse-daemon logs) — the audit trail lives in Aside;
-worth a line in BROWSER.md when this area is next touched (finding 12).
+Docs note (finding 12) — done in the v1.72.0.0 doc pass: BROWSER.md
+§ "Aside and third-party drives" now records that Aside drives leave no
+gstack-side audit trail (no egress receipts, no browse-daemon logs); the
+audit trail lives in Aside.
 
 **Effort:** S (human ~half day / CC+gstack ~20 min)
 **Priority:** P3
