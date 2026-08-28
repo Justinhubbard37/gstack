@@ -255,17 +255,23 @@ describe('repairBrokenDacl', () => {
 });
 // Symlinked state dir (dotfiles-managed ~/.gstack via stow/chezmoi): the
 // fd-anchored path refuses to follow it (O_NOFOLLOW) — the refusal must warn,
-// never throw, and never chmod the symlink target.
+// never throw, and never chmod the symlink target. POSIX-branch behavior:
+// Windows takes the icacls branch and has no POSIX modes (stat reports 0o666),
+// so gate like the sibling tests above.
 test('restrictDirectoryPermissions warns and skips a symlinked dir without throwing', () => {
+  if (process.platform === 'win32') return;
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-symlink-'));
   const target = path.join(base, 'real');
   const link = path.join(base, 'link');
   fs.mkdirSync(target, { mode: 0o755 });
   fs.symlinkSync(target, link);
+  // Capture the actual post-umask mode rather than assuming 0o755 — a strict
+  // umask (077) would legitimately yield 0o700 at creation time.
+  const modeBefore = fs.statSync(target).mode & 0o777;
   try {
     expect(() => restrictDirectoryPermissions(link)).not.toThrow();
     // Target permissions untouched — the link was never followed.
-    expect(fs.statSync(target).mode & 0o777).toBe(0o755);
+    expect(fs.statSync(target).mode & 0o777).toBe(modeBefore);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
