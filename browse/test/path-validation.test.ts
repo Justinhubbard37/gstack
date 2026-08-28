@@ -115,7 +115,11 @@ describe('validateOutputPath — symlink resolution', () => {
   it('blocks symlink inside /tmp pointing outside safe dirs', () => {
     const linkPath = join(tmpdir(), 'test-output-symlink-' + Date.now() + '.png');
     try {
-      symlinkSync('/etc/crontab', linkPath);
+      // /etc/hosts, not /etc/crontab: the target must EXIST for realpath to
+      // resolve the link (a dangling target falls back to the link's own
+      // path, which is inside tmp and passes) — and /etc/crontab is absent
+      // on Amazon Linux while /etc/hosts exists everywhere.
+      symlinkSync('/etc/hosts', linkPath);
       expect(() => validateOutputPath(linkPath)).toThrow(/Path must be within/);
     } finally {
       try { unlinkSync(linkPath); } catch {}
