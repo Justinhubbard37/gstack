@@ -309,6 +309,32 @@ If the time window is 14 days or more, use the `WEEK:` lines (w0 = the week cont
 - If the anchor date is today or yesterday, the streak is live: "Team shipping streak: 47 consecutive days" / "Your shipping streak: 32 consecutive days"
 - If the anchor is older, the streak is broken: report 0 days and note the last shipping day.
 
+### Step 11.5: Shortcut Debt Ledger
+
+Harvest deliberate `gstack-shortcut(...)` markers — the trail left when the user
+accepted a Completeness ≤ 7 option (see the AskUserQuestion Format section). Zero
+matches is the healthy case, not a failure:
+
+```bash
+grep -rn "gstack-shortcut(" . \
+  --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor \
+  --exclude-dir=.claude --exclude-dir=dist \
+  --exclude="SKILL.md" --exclude="*.md.tmpl" 2>/dev/null || true
+```
+
+(The exclusions keep docs that merely document the convention — generated
+SKILL.md, templates, skill installs — out of the ledger.)
+
+For each hit, one ledger row: `<file>:<line>, <what was simplified>. ceiling: <X>. upgrade: <Y>.`
+- Markers carry a decision id (`dec-<id>`): join against `gstack-decision-search`
+  output — the ledger entry is the source of truth; never double-count a marker
+  against its resurfaced decision.
+- Markers WITHOUT an id: tag `unlinked`.
+- Markers naming no upgrade trigger: tag `no-trigger` — those are the ones that
+  silently rot.
+
+End the section with: `N markers, M with no trigger.` If none: `No shortcut debt. Clean ledger.`
+
 ### Step 12: Load History & Compare
 
 Before saving the new snapshot, check for prior retro history:

@@ -380,6 +380,15 @@ describe("LOW patterns surface only", () => {
     );
     expect(f?.tier).toBe("LOW");
   });
+  test("gstack-shortcut(dec-*) debt marker survives redaction untouched", () => {
+    // The shortcut ledger convention (AskUserQuestion Format / /retro Step 11.5)
+    // ships in commits and PR bodies BY DESIGN — the ledger is the point. It
+    // must not be caught by hygiene.todo's TODO(owner) shape or anything else.
+    const marker =
+      "// gstack-shortcut(dec-a1b2c3): global lock, upgrade when throughput matters";
+    const result = scan(marker, { repoVisibility: "public" });
+    expect(result.findings).toHaveLength(0);
+  });
 });
 
 describe("placeholder suppression (per-span)", () => {

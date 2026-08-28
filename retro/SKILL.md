@@ -149,6 +149,8 @@ ELI10 is always present, in plain English, not function names. Recommendation is
 
 Completeness: use `Completeness: N/10` only when options differ in coverage. 10 = complete, 7 = happy path, 3 = shortcut. If options differ in kind, write: `Note: options differ in kind, not coverage — no completeness score.`
 
+Accepted shortcuts leave a trail: when the user selects an option that is BOTH Completeness ≤ 7 AND a durable-scope call (architecture or scope-cut — never a turn-level choice), log it via `gstack-decision-log` with the ceiling and the upgrade trigger in the rationale, and — as part of implementing that option, same edit, no follow-up question — mark each cut corner in code with `gstack-shortcut(dec-<id>): <ceiling>, upgrade when <trigger>` in the language's comment syntax. Never agent-initiated: the marker exists only downstream of the user's explicit choice. /retro harvests these into a debt ledger, joined on the decision id.
+
 Pros / cons: use ✅ and ❌. Minimum 2 pros and 1 con per option when the choice is real; Minimum 40 characters per bullet. Hard-stop escape for one-way/destructive confirmations: `✅ No cons — this is a hard-stop choice`.
 
 Neutral posture: `Recommendation: <default> — this is a taste call, no strong preference either way`; `(recommended)` STAYS on the default option for AUTO_DECIDE.
@@ -782,6 +784,32 @@ If the time window is 14 days or more, use the `WEEK:` lines (w0 = the week cont
 `TEAM_STREAK` and `USER_STREAK` count consecutive days with at least 1 commit (full history, no cutoff), anchored at the **newest commit date** — not at today, because the script never trusts the system clock. Interpret against today from the session reminder:
 - If the anchor date is today or yesterday, the streak is live: "Team shipping streak: 47 consecutive days" / "Your shipping streak: 32 consecutive days"
 - If the anchor is older, the streak is broken: report 0 days and note the last shipping day.
+
+### Step 11.5: Shortcut Debt Ledger
+
+Harvest deliberate `gstack-shortcut(...)` markers — the trail left when the user
+accepted a Completeness ≤ 7 option (see the AskUserQuestion Format section). Zero
+matches is the healthy case, not a failure:
+
+```bash
+grep -rn "gstack-shortcut(" . \
+  --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor \
+  --exclude-dir=.claude --exclude-dir=dist \
+  --exclude="SKILL.md" --exclude="*.md.tmpl" 2>/dev/null || true
+```
+
+(The exclusions keep docs that merely document the convention — generated
+SKILL.md, templates, skill installs — out of the ledger.)
+
+For each hit, one ledger row: `<file>:<line>, <what was simplified>. ceiling: <X>. upgrade: <Y>.`
+- Markers carry a decision id (`dec-<id>`): join against `gstack-decision-search`
+  output — the ledger entry is the source of truth; never double-count a marker
+  against its resurfaced decision.
+- Markers WITHOUT an id: tag `unlinked`.
+- Markers naming no upgrade trigger: tag `no-trigger` — those are the ones that
+  silently rot.
+
+End the section with: `N markers, M with no trigger.` If none: `No shortcut debt. Clean ledger.`
 
 ### Step 12: Load History & Compare
 
