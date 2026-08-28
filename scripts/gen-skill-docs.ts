@@ -1148,5 +1148,16 @@ if (!DRY_RUN) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[gen-llms-txt] FAILED: ${msg}`);
     }
+    // Regenerate agents-digest/gstack-AGENTS.md — the instruction-only tier
+    // for rules-reading hosts with no skill install. Committed artifact;
+    // freshness + byte budget asserted in test/agents-digest.test.ts.
+    try {
+      const { writeAgentsDigest, DIGEST_BYTE_BUDGET } = await import('./gen-agents-digest');
+      const digest = writeAgentsDigest();
+      console.log(`[gen-agents-digest] agents-digest/gstack-AGENTS.md: ${digest.bytes} bytes (budget ${DIGEST_BYTE_BUDGET})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[gen-agents-digest] FAILED: ${msg}`);
+    }
   })();
 }

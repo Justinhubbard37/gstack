@@ -111,16 +111,22 @@ cd ~/gstack && ./setup
 
 Or target a specific agent with `./setup --host <name>`:
 
-| Agent | Flag | Skills install to |
-|-------|------|-------------------|
-| OpenAI Codex CLI | `--host codex` | `${CODEX_HOME:-~/.codex}/skills/gstack-*/` |
-| OpenCode | `--host opencode` | `~/.config/opencode/skills/gstack-*/` |
-| Cursor | `--host cursor` | `~/.cursor/skills/gstack-*/` |
-| Factory Droid | `--host factory` | `~/.factory/skills/gstack-*/` |
-| Slate | `--host slate` | `~/.slate/skills/gstack-*/` |
-| Kiro | `--host kiro` | `~/.kiro/skills/gstack-*/` |
-| Hermes | `--host hermes` | `~/.hermes/skills/gstack-*/` |
-| GBrain (mod) | `--host gbrain` | `~/.gbrain/skills/gstack-*/` |
+| Agent | Flag | What you get |
+|-------|------|--------------|
+| OpenAI Codex CLI | `--host codex` | Full install → `${CODEX_HOME:-~/.codex}/skills/gstack-*/` |
+| OpenCode | `--host opencode` | Full install → `~/.config/opencode/skills/gstack-*/` |
+| Cursor | `--host cursor` | Full install → `~/.cursor/skills/gstack-*/` |
+| Factory Droid | `--host factory` | Full install → `~/.factory/skills/gstack-*/` |
+| Kiro | `--host kiro` | Full install → `~/.kiro/skills/gstack-*/` |
+| Slate | `--host slate` | Pointer to the Claude install (Slate reads `.claude/skills` as a fallback) |
+| Hermes | `--host hermes` | Methodology artifacts via `gen:skill-docs --host hermes` + the instruction-only digest below |
+| GBrain (mod) | `--host gbrain` | Brain-aware skill variants, shipped from the GBrain repo |
+
+**Instruction-only tier (any rules-reading agent — Zed, Amp, Jules, side projects):**
+copy the 2KB digest at [`agents-digest/gstack-AGENTS.md`](agents-digest/gstack-AGENTS.md)
+into a location your agent reads (for example, append it to your project's `AGENTS.md`).
+It carries gstack's ethos, reuse ladder, and voice rules — no install required. The
+digest's first line shows its gstack version; re-copy it after upgrading.
 
 For Codex, setup reads the top-level `model` from
 `${CODEX_HOME:-~/.codex}/config.toml` and generates the matching behavioral
