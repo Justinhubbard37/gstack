@@ -1269,7 +1269,7 @@ the global `~/.gstack/browser-skills/foo/` only inside project-a.
 |----------|---------|-------------|
 | `BROWSE_PORT` | 0 (random 10000–49151) | Fixed port for the HTTP server (debug override) |
 | `BROWSE_IDLE_TIMEOUT` | 1800000 (30 min) | Idle shutdown timeout in ms |
-| `BROWSE_STATE_FILE` | `.gstack/browse.json` | Path to state file. Its parent dir gets owner-only (0700) hardening only when gstack owns it — shared sticky dirs (`/tmp`, `/var/tmp`), foreign-owned dirs, and symlinked dirs are left untouched with a one-time warning (v1.72.0.0+) |
+| `BROWSE_STATE_FILE` | `.gstack/browse.json` | Path to state file. Its parent dir gets owner-only (0700) hardening only when gstack owns it — shared sticky dirs (`/tmp`, `/var/tmp`), foreign-owned dirs, symlinked dirs, and (under root) any world-writable dir are left untouched with a one-time warning (v1.72.0.0+) |
 | `BROWSE_SERVER_SCRIPT` | auto-detected | Path to `server.ts` |
 | `BROWSE_CDP_URL` | (none) | Set to `channel:chrome` for real-browser mode |
 | `BROWSE_CDP_PORT` | 0 | CDP port (used internally) |
