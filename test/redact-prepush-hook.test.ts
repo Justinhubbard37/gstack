@@ -420,6 +420,7 @@ describe("install / chaining", () => {
     );
 
     const r = spawnSync("bun", [REDACT, "install-prepush-hook"], {
+      timeout: 30_000,
       cwd: repo,
       encoding: "utf8",
     });
@@ -433,6 +434,7 @@ describe("install / chaining", () => {
     // Behavioural half: the refreshed wrapper actually feeds the final ref line.
     const sha = "c".repeat(40);
     const run = spawnSync("bash", [hook], {
+      timeout: 30_000,
       cwd: repo,
       input: Buffer.from(`refs/heads/main ${sha} refs/heads/main ${ZERO}\n`),
       encoding: "utf8",
