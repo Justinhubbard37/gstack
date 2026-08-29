@@ -388,7 +388,6 @@ export const WORKER_HOSTILE: Record<string, string> = {
  * a renamed file fails the suite instead of silently dropping serialization.
  */
 export const TREE_MUTATING: Record<string, string> = {
-  'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
   // Ratchet readers (measure the tree; need it quiet):
   'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
   'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',

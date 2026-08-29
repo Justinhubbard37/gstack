@@ -7,9 +7,13 @@
  * /spec is carved (skeleton + sections/gate-and-file.md), so BOTH generated
  * artifacts are checked: a stale section is the same drift bug as a stale
  * skeleton — the on-demand file is what the agent executes at Phase 4.5.
+ *
+ * The regen renders into an isolated --out-dir and compares the rendered
+ * bytes against the TRACKED files — the working tree is only ever read.
  */
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 
@@ -22,9 +26,9 @@ const GENERATED_PATHS = [
 
 describe('/spec template/generated sync', () => {
   test('regenerating spec/SKILL.md + sections produces byte-identical output', () => {
-    const before = GENERATED_PATHS.map((p) => fs.readFileSync(p));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-spec-sync-'));
 
-    const res = spawnSync('bun', ['run', 'gen:skill-docs'], {
+    const res = spawnSync('bun', ['run', 'gen:skill-docs', '--out-dir', outDir], {
       cwd: ROOT,
       encoding: 'utf-8',
       timeout: 120_000,
@@ -40,12 +44,24 @@ describe('/spec template/generated sync', () => {
         TMPDIR: process.env.TMPDIR ?? '',
       },
     });
-    expect(res.status).toBe(0);
+    try {
+      expect(res.status).toBe(0);
 
-    for (let i = 0; i < GENERATED_PATHS.length; i++) {
-      const after = fs.readFileSync(GENERATED_PATHS[i]);
-      expect({ file: path.relative(ROOT, GENERATED_PATHS[i]), identical: after.equals(before[i]) })
-        .toEqual({ file: path.relative(ROOT, GENERATED_PATHS[i]), identical: true });
+      for (const trackedPath of GENERATED_PATHS) {
+        const rel = path.relative(ROOT, trackedPath);
+        const rendered = fs.readFileSync(path.join(outDir, rel), 'utf-8');
+        // --out-dir repoints the literal section-base paths
+        // (~/.claude/skills/gstack/<skill>/sections/ → <outDir>/<skill>/sections/)
+        // so section Reads resolve inside the render. Undo that single
+        // documented rewrite before comparing; every OTHER byte must match
+        // the tracked file exactly.
+        const normalized = rendered.replaceAll(`${outDir}/`, '~/.claude/skills/gstack/');
+        const tracked = fs.readFileSync(trackedPath, 'utf-8');
+        expect({ file: rel, identical: normalized === tracked })
+          .toEqual({ file: rel, identical: true });
+      }
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
     }
   }, 130_000);
 
