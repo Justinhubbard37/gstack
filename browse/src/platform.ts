@@ -19,7 +19,18 @@ export const TEMP_DIR = IS_WINDOWS ? os.tmpdir() : '/tmp';
  * classic /tmp. Remote file serving (TEMP_ONLY in path-security.ts) stays
  * pinned to TEMP_DIR alone; this wider set is for LOCAL path validation only.
  */
-export const TEMP_DIRS = [...new Set([TEMP_DIR, os.tmpdir()])];
+/** A TMPDIR pointed at `/`, the user's home, or a parent of the daemon's cwd
+ *  would widen local path validation to that whole subtree for the daemon's
+ *  lifetime — treat such a value as misconfiguration and ignore it. */
+function trustableTmpdir(dir: string): boolean {
+  const resolved = path.resolve(dir);
+  const home = os.homedir();
+  if (resolved === path.parse(resolved).root) return false;
+  if (resolved === home) return false;
+  return !isPathWithin(path.resolve(process.cwd()), resolved) || isPathWithin(resolved, TEMP_DIR);
+}
+
+export const TEMP_DIRS = [...new Set([TEMP_DIR, os.tmpdir()].filter((d, i) => i === 0 || trustableTmpdir(d)))];
 
 /** Check if resolvedPath is within dir, using platform-aware separators. */
 export function isPathWithin(resolvedPath: string, dir: string): boolean {

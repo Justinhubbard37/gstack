@@ -70,3 +70,33 @@ describe('remote file serving stays pinned to TEMP_DIR alone (no exfil widening)
     }
   });
 });
+
+describe('untrustable TMPDIR values never widen the allowlist', () => {
+  // TEMP_DIRS is computed at module load from os.tmpdir(), which honors
+  // TMPDIR — so a daemon launched with TMPDIR=/ or TMPDIR=$HOME must not
+  // trust that subtree for its whole lifetime. Probed via a subprocess so
+  // each case gets a fresh module load.
+  const probe = (tmpdir: string): string[] => {
+    const r = Bun.spawnSync([
+      process.execPath, '-e',
+      "import { TEMP_DIRS } from './browse/src/platform'; console.log(JSON.stringify(TEMP_DIRS));",
+    ], { env: { ...process.env, TMPDIR: tmpdir }, cwd: path.resolve(import.meta.dir, '..', '..') });
+    return JSON.parse(r.stdout.toString().trim().split('\n').pop()!);
+  };
+
+  it('TMPDIR=/ and TMPDIR=$HOME collapse to TEMP_DIR alone; a cwd ancestor is rejected too', () => {
+    expect(probe('/')).toEqual([TEMP_DIR]);
+    expect(probe(os.homedir())).toEqual([TEMP_DIR]);
+    // Parent of the daemon cwd (the repo checkout's parent) — rejected.
+    expect(probe(path.resolve(import.meta.dir, '..', '..', '..'))).toEqual([TEMP_DIR]);
+  });
+
+  it('a benign distinct TMPDIR (e.g. $HOME/tmp) is still honored for local paths', () => {
+    const benign = fs.mkdtempSync(path.join(os.homedir(), 'browse-tmp-probe-'));
+    try {
+      expect(probe(benign)).toContain(fs.realpathSync(benign));
+    } finally {
+      fs.rmdirSync(benign);
+    }
+  });
+});
