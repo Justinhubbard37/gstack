@@ -47,6 +47,7 @@ jobs:
         #     tolerant: true
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 

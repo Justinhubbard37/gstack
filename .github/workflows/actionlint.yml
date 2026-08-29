@@ -21,6 +21,7 @@ permissions:
 jobs:
   actionlint:
     runs-on: ubicloud-standard-2
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:

@@ -22,6 +22,7 @@ jobs:
     # diff — a maintainer's next push rebuilds the image with real perms.
     if: github.actor != 'dependabot[bot]'
     runs-on: ubicloud-standard-8
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
