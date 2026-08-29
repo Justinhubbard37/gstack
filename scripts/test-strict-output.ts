@@ -11,7 +11,7 @@
  * future strict wrapper around `bun test`.
  */
 
-import { type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import * as path from 'node:path';
 
@@ -297,4 +297,89 @@ export function forwardAndClassify(
     stream.on('end', resolve);
     stream.on('error', reject);
   });
+}
+
+// --- Shared shard-child lifecycle ---
+
+export interface RunShardChildOptions {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  /** External wall-clock deadline; on expiry the child's process GROUP is SIGKILLed. */
+  timeoutMs: number;
+  /**
+   * Hook the freshly-spawned child's stdout/stderr. Stream POLICY (classifier
+   * tees, log spooling, console forwarding, reporters) is entirely the
+   * caller's. Runs synchronously right after spawn; the returned promises are
+   * awaited AFTER the child closes, so trailing output is fully drained
+   * before the caller reads its classifier/reporter state.
+   */
+  hookStreams: (child: ChildProcess) => Array<Promise<void>>;
+}
+
+export interface ShardChildResult {
+  exitCode: number | null;
+  /** True when the wall timer fired and SIGKILLed the group. */
+  timedOut: boolean;
+  /** The child's pid — the process-GROUP id on POSIX (detached spawn). */
+  groupPid: number | null;
+}
+
+/**
+ * The child lifecycle both sharded runners need, extracted from
+ * scripts/test-paid-shards.ts runPaidShard (scripts/test-free-shards.ts
+ * runFreeShard duplicates the same ~35 lines verbatim today and is designed
+ * to migrate here in a later change):
+ *
+ *   - spawn detached on POSIX so the child owns its process group,
+ *   - forward parent SIGINT/SIGTERM to the whole group (not just the child),
+ *   - arm an EXTERNAL wall-clock timer that SIGKILLs the group — a spinning
+ *     child main thread never fires its own in-process timer,
+ *   - in EVERY exit path: disarm the timer, detach the signal forwarder, and
+ *     reap group survivors with SIGKILL.
+ *
+ * Caller-side cleanup that must run even on a spawn failure (log streams,
+ * reporters, temp dirs) belongs in the caller's own try/finally around this
+ * call: a spawn 'error' event THROWS from here after the finally block runs,
+ * preserving the runners' existing could-not-run handling.
+ */
+export async function runShardChild(options: RunShardChildOptions): Promise<ShardChildResult> {
+  const child = spawn(options.command, options.args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+    windowsHide: true,
+  });
+  const groupPid = child.pid ?? null;
+  // Group-kill on parent SIGINT/SIGTERM too, not just on timeout.
+  const forwarding = installChildSignalForwarding({
+    kill: (signal?: NodeJS.Signals | number) => {
+      killProcessGroup(child, (signal as NodeJS.Signals) ?? 'SIGTERM');
+      return true;
+    },
+  });
+
+  let timedOut = false;
+  const killTimer = setTimeout(() => {
+    timedOut = true;
+    killProcessGroup(child, 'SIGKILL');
+  }, options.timeoutMs);
+
+  let exitCode: number | null = null;
+  try {
+    const streams = options.hookStreams(child);
+    exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => resolve(code));
+    });
+    await Promise.all(streams);
+  } finally {
+    clearTimeout(killTimer);
+    forwarding.dispose();
+    // Reap survivors of this shard even on the clean path.
+    killProcessGroup(child, 'SIGKILL');
+  }
+  return { exitCode, timedOut, groupPid };
 }

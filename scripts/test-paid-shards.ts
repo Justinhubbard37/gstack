@@ -50,17 +50,16 @@
  *   bun run scripts/test-paid-shards.ts --timeout 600 --jobs 2
  */
 
-import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { normalizeRelativePath } from './test-free-shards';
 import {
   BunTestOutputClassifier,
   exactTestFileSelectors,
   forwardAndClassify,
-  installChildSignalForwarding,
   isTerminationRequested,
-  killProcessGroup,
+  runShardChild,
   strictTestExitCode,
 } from './test-strict-output';
 import { PAID_TEST_GLOBS, isPaidTestFile } from '../test/helpers/paid-test-set';
@@ -218,6 +217,26 @@ export function computePaidDiffSelection(
   return { selectedNames: new Set(selection.selected), reason: selection.reason, totalTests };
 }
 
+/**
+ * Serialize the parent's diff selection for shard children (EVALS_SELECTION_JSON).
+ *
+ * Children's e2e-helpers module-load path adopts this instead of re-deriving
+ * the selection per shard — which, when touchfiles-data.ts is in the diff,
+ * spawned one bun subprocess PER CHILD to evaluate the old data file (the
+ * map-diff path in test/helpers/test-selection.ts, 20s timeout each; 46-68
+ * redundant children per full run). `selected: null` means run-all, mirroring
+ * PaidDiffSelection.selectedNames. The child-side parser lives in
+ * test/helpers/e2e-helpers.ts (parseEvalsSelectionJson); round-trip parity is
+ * pinned by test/paid-selection-propagation.test.ts.
+ */
+export function serializePaidDiffSelection(selection: PaidDiffSelection): string {
+  return JSON.stringify({
+    version: 1,
+    selected: selection.selectedNames === null ? null : [...selection.selectedNames].sort(),
+    reason: selection.reason,
+  });
+}
+
 export interface ShardSkipDecision {
   file: string;
   kept: boolean;
@@ -363,9 +382,41 @@ export interface RunShardsOptions {
   env?: NodeJS.ProcessEnv;
   /** When set, each shard child gets GSTACK_EVAL_DIR=<evalDirBase>/shards/<slug>/. */
   evalDirBase?: string;
+  /** Directory for the per-shard full-stream log files (default os.tmpdir()). Tests inject. */
+  logDir?: string;
   /** Override the spawned command. Tests inject fake slow/spinning commands. */
   commandFor?: (files: string[]) => ShardCommand;
   log?: (line: string) => void;
+}
+
+let shardLogSequence = 0;
+
+/** Per-shard log path: slug + timestamp; pid + sequence defeat same-ms collisions. */
+function nextShardLogPath(files: string[], logDir: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  shardLogSequence += 1;
+  return path.join(logDir, `gstack-paid-shard-${shardSlug(files)}-${stamp}-${process.pid}-${shardLogSequence}.log`);
+}
+
+/** On-failure console excerpt budget: the last N bytes of the shard's log. */
+export const FAILURE_TAIL_BYTES = 64 * 1024;
+
+/** Read back only the tail of a shard log (never the whole 30-min stream). */
+function readLogTail(logPath: string, maxBytes = FAILURE_TAIL_BYTES): string {
+  try {
+    const size = fs.statSync(logPath).size;
+    const start = Math.max(0, size - maxBytes);
+    const fd = fs.openSync(logPath, 'r');
+    try {
+      const buffer = Buffer.alloc(size - start);
+      fs.readSync(fd, buffer, 0, buffer.length, start);
+      return buffer.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return ''; // a lost tail must never turn a real verdict into an exception
+  }
 }
 
 export async function runPaidShard(
@@ -400,67 +451,85 @@ export async function runPaidShard(
   const startedAt = Date.now();
   log(`${label} START ${files.join(' ')} (timeout ${Math.round(timeoutMs / 1000)}s)`);
 
-  const child = spawn(command, args, {
-    cwd: rootDir,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: process.platform !== 'win32',
-    windowsHide: true,
+  // Full-stream spool: EVERY child byte lands on disk (the free runner's
+  // model), never in a whole-run Buffer[] — non-live shards used to hold
+  // their entire 30-min stream-json stdout+stderr in RAM, × concurrent jobs.
+  // Printed at START so a wedged shard is inspectable live, mid-run.
+  const logPath = nextShardLogPath(files, options.logDir ?? os.tmpdir());
+  const logStream = fs.createWriteStream(logPath);
+  let logWriteFailed = false;
+  logStream.on('error', (err) => {
+    if (logWriteFailed) return;
+    logWriteFailed = true;
+    console.error(`${label} could not write the full log at ${logPath}: ${err.message}`);
   });
-  const groupPid = child.pid ?? null;
-  // Group-kill on parent SIGINT/SIGTERM too, not just on timeout.
-  const forwarding = installChildSignalForwarding({
-    kill: (signal?: NodeJS.Signals | number) => {
-      killProcessGroup(child, (signal as NodeJS.Signals) ?? 'SIGTERM');
-      return true;
-    },
-  });
+  log(`${label} full log: ${logPath}`);
 
   const classifier = new BunTestOutputClassifier();
-  const buffered: Buffer[] = [];
-  const sink = (destination: NodeJS.WriteStream): NodeJS.WriteStream => (streamLive
-    ? destination
-    : ({ write: (chunk: Buffer | string) => buffered.push(Buffer.from(chunk)) } as unknown as NodeJS.WriteStream));
-
-  let timedOut = false;
-  const killTimer = setTimeout(() => {
-    timedOut = true;
-    killProcessGroup(child, 'SIGKILL');
-  }, timeoutMs);
+  // Tee: the spool always gets the chunk; live mode (jobs=1) also forwards to
+  // the console. forwardAndClassify feeds the classifier FIRST, so the strict
+  // verdict path is unchanged by where the bytes land afterwards.
+  const sink = (destination: NodeJS.WriteStream): NodeJS.WriteStream => ({
+    write: (chunk: Buffer | string): boolean => {
+      if (!logWriteFailed) logStream.write(chunk);
+      if (streamLive) destination.write(chunk);
+      return true;
+    },
+  } as unknown as NodeJS.WriteStream);
 
   let exitCode: number | null = null;
+  let timedOut = false;
+  let groupPid: number | null = null;
   try {
-    const streams: Array<Promise<void>> = [];
-    if (child.stdout) streams.push(forwardAndClassify(child.stdout, sink(process.stdout), classifier, 'stdout'));
-    if (child.stderr) streams.push(forwardAndClassify(child.stderr, sink(process.stderr), classifier, 'stderr'));
-    exitCode = await new Promise<number | null>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (code) => resolve(code));
+    // Shared spawn/detached/group-kill/wall-timer/reap lifecycle.
+    const result = await runShardChild({
+      command,
+      args,
+      cwd: rootDir,
+      env,
+      timeoutMs,
+      hookStreams: (child) => {
+        const streams: Array<Promise<void>> = [];
+        if (child.stdout) streams.push(forwardAndClassify(child.stdout, sink(process.stdout), classifier, 'stdout'));
+        if (child.stderr) streams.push(forwardAndClassify(child.stderr, sink(process.stderr), classifier, 'stderr'));
+        return streams;
+      },
     });
-    await Promise.all(streams);
+    exitCode = result.exitCode;
+    timedOut = result.timedOut;
+    groupPid = result.groupPid;
   } finally {
-    clearTimeout(killTimer);
-    forwarding.dispose();
-    // Reap survivors of this shard even on the clean path.
-    killProcessGroup(child, 'SIGKILL');
+    // Close the spool even when the spawn itself failed.
+    await new Promise<void>((resolve) => logStream.end(() => resolve()));
   }
 
   const summary = classifier.end();
-  if (!streamLive && buffered.length > 0) process.stdout.write(Buffer.concat(buffered));
 
   // Pass expectedFiles so a shard whose bun child ran fewer files than planned
   // (or zero, all self-skipped) with exit 0 is NOT recorded 'passed' — the
   // invisible-non-execution class this runner exists to kill. bun prints
   // "Ran N tests across M files" with M = selected files even when every test
-  // self-skips, so terminalFileCounts must include files.length. Only enforced
-  // on the real bun path: an injected commandFor (tests) isn't bun and emits no
-  // terminal summary, so there's no file count to check against.
-  const expectedFiles = options.commandFor ? undefined : files.length;
+  // self-skips, so terminalFileCounts must include files.length. Enforced for
+  // injected commandFor (tests) too, matching the free runner — fake passing
+  // commands must print a synthetic `Ran N tests across M files. [Xms]` line,
+  // so tests can pin the summary-missing => failure backstop.
+  const expectedFiles = files.length;
   const status: ShardStatus = timedOut
     ? 'timed-out'
     : strictTestExitCode(exitCode ?? 1, summary, expectedFiles) === 0 ? 'passed' : 'failed';
   const elapsedMs = Date.now() - startedAt;
-  log(`${label} ${status.toUpperCase()} in ${Math.round(elapsedMs / 1000)}s (exit ${exitCode ?? 'signal'})`);
+
+  // Failure debuggability without the RAM cost: read back only the log's
+  // tail. Live mode already streamed everything, so no re-print there.
+  if (status !== 'passed' && !streamLive) {
+    const tail = readLogTail(logPath);
+    if (tail.length > 0) {
+      process.stdout.write(`${label} last ${Math.min(tail.length, FAILURE_TAIL_BYTES)} bytes of ${logPath}:\n`);
+      process.stdout.write(tail.endsWith('\n') ? tail : `${tail}\n`);
+    }
+  }
+  const logSuffix = status === 'passed' ? '' : ` — full log: ${logPath}`;
+  log(`${label} ${status.toUpperCase()} in ${Math.round(elapsedMs / 1000)}s (exit ${exitCode ?? 'signal'})${logSuffix}`);
 
   return { shard: shardNumber, files, status, exitCode, elapsedMs, groupPid };
 }
@@ -676,7 +745,17 @@ async function main(): Promise<number> {
     timeoutMs: options.timeoutMs,
     jobs: options.jobs,
     withinShardConcurrency: options.withinShardConcurrency,
-    env: { ...process.env, EVALS: '1', EVALS_TIER: options.tier, EVALS_PREFLIGHT_OK: '1' },
+    env: {
+      ...process.env,
+      EVALS: '1',
+      EVALS_TIER: options.tier,
+      EVALS_PREFLIGHT_OK: '1',
+      // The parent's selection, computed once above — children's e2e-helpers
+      // module load adopts it instead of re-deriving per shard (which spawned
+      // a bun subprocess per child on the touchfiles-data map-diff path).
+      // Children fall back to local derivation on any parse failure.
+      EVALS_SELECTION_JSON: serializePaidDiffSelection(diffSelection),
+    },
     evalDirBase: process.env.GSTACK_EVAL_DIR || getProjectEvalDir(),
   });
   const skippedOutcomes: ShardOutcome[] = skipped.map((s, index) => ({
