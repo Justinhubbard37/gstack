@@ -94,4 +94,77 @@ describe('gen-skill-docs --out-dir (B2 render isolation)', () => {
       fs.rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  // ── External-host out-dir cases ─────────────────────────────
+  // The former tree-mutating tests read codex/factory artifacts from out-dir
+  // renders. That is only sound if an out-dir external render is (a) clean —
+  // zero tracked-tree dirt — and (b) byte-identical to what the in-place
+  // render would have produced. Both halves are pinned here.
+
+  test('--host codex --out-dir adds no tracked dirt and is byte-identical to the in-place render', () => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-out-codex-'));
+    const inPlaceShip = path.join(ROOT, '.agents', 'skills', 'gstack-ship', 'SKILL.md');
+    // Compared before/after rather than asserting empty, so a dev's own
+    // unrelated dirty files can't false-fail the suite (#2569 pattern).
+    const beforePorcelain = porcelain();
+    try {
+      // 1) Fresh IN-PLACE codex render — the existing behavior: it writes
+      //    only the gitignored .agents/ tree (itself invisible to porcelain).
+      const inPlace = spawnSync(
+        'bun',
+        ['run', 'scripts/gen-skill-docs.ts', '--host', 'codex'],
+        { cwd: ROOT, encoding: 'utf-8', timeout: 120_000 },
+      );
+      expect(inPlace.status).toBe(0);
+      expect(porcelain()).toBe(beforePorcelain);
+      const inPlaceBytes = fs.readFileSync(inPlaceShip);
+
+      // 2) Out-dir render: zero new dirt, same bytes.
+      const res = spawnSync(
+        'bun',
+        ['run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--out-dir', outDir],
+        { cwd: ROOT, encoding: 'utf-8', timeout: 120_000 },
+      );
+      expect(res.status).toBe(0);
+      expect(porcelain()).toBe(beforePorcelain);
+
+      const outShip = path.join(outDir, '.agents', 'skills', 'gstack-ship', 'SKILL.md');
+      expect(fs.existsSync(outShip)).toBe(true);
+      expect(fs.readFileSync(outShip).equals(inPlaceBytes)).toBe(true);
+
+      // Codex metadata (agents/openai.yaml) mirrors into the out-dir too.
+      expect(fs.existsSync(path.join(outDir, '.agents', 'skills', 'gstack-ship', 'agents', 'openai.yaml'))).toBe(true);
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test('--host all --out-dir renders every host tree into the out-dir; tracked tree stays clean', () => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-out-all-'));
+    const beforePorcelain = porcelain();
+    try {
+      const res = spawnSync(
+        'bun',
+        ['run', 'scripts/gen-skill-docs.ts', '--host', 'all', '--out-dir', outDir],
+        { cwd: ROOT, encoding: 'utf-8', timeout: 300_000 },
+      );
+      expect(res.status).toBe(0);
+      // Zero new dirt in the source checkout.
+      expect(porcelain()).toBe(beforePorcelain);
+
+      // Claude host + external hosts + openclaw docs + llms.txt all landed in the out-dir.
+      for (const rel of [
+        'ship/SKILL.md',
+        '.agents/skills/gstack-ship/SKILL.md',
+        '.factory/skills/gstack-ship/SKILL.md',
+        'gstack/llms.txt',
+        'openclaw/gstack-lite-CLAUDE.md',
+      ]) {
+        expect({ file: rel, exists: fs.existsSync(path.join(outDir, rel)) })
+          .toEqual({ file: rel, exists: true });
+      }
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  }, 300_000);
 });
