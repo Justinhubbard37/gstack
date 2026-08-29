@@ -5,7 +5,7 @@
 
 import { test, expect, describe } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -992,7 +992,6 @@ describe("fetchGitClaimed — laundered ls-remote (exit 0, empty output) is neve
   // and unguarded paths are indistinguishable (ls-remote genuinely fails), so
   // only a laundering shim can pin the guard against reverts.
   test("no origin + shim that lies: claims still come from local refs, with the staleness warning", () => {
-    const { chmodSync } = require("node:fs") as typeof import("node:fs");
     const dir = mkdtempSync(join(tmpdir(), "nextver-launder-"));
     const stubDir = join(dir, "stub-bin");
     mkdirSync(stubDir);
@@ -1029,6 +1028,56 @@ describe("fetchGitClaimed — laundered ls-remote (exit 0, empty output) is neve
       // The empty exit-0 probe must NOT be believed as "live queue is empty":
       expect(versions).toContain("0.1.67.0");
       expect(warnings.join(" ")).toContain("stale local refs/remotes/origin");
+    } finally {
+      process.env.PATH = oldPath;
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("origin CONFIGURED + shim that lies: a zero-head exit-0 probe is distrusted, not read as an empty queue", () => {
+    // The normal Conductor worktree state: origin IS configured, but the
+    // laundering shim makes a failed ls-remote exit 0 with empty stdout. A
+    // configured origin that advertises zero heads is contradictory (every
+    // reachable remote advertises at least its default branch), so the
+    // allocator must fall back to local refs with the laundering warning.
+    const dir = mkdtempSync(join(tmpdir(), "nextver-launder-cfg-"));
+    const stubDir = join(dir, "stub-bin");
+    mkdirSync(stubDir);
+    const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(
+      join(stubDir, "git"),
+      `#!/bin/sh\nif [ "$1" = "ls-remote" ]; then exit 0; fi\nexec ${realGit} "$@"\n`,
+    );
+    chmodSync(join(stubDir, "git"), 0o755);
+
+    const git = (cwd: string, ...args: string[]) =>
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+
+    const cwd = process.cwd();
+    const oldPath = process.env.PATH;
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+      const sibSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sibSha);
+      // Configured origin (unreachable path — the shim intercepts before git tries it).
+      git(dir, "remote", "add", "origin", "/nonexistent/laundered-origin.git");
+
+      process.chdir(dir);
+      process.env.PATH = `${stubDir}:${oldPath}`;
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0");
+      expect(warnings.join(" ")).toContain("advertised zero heads");
     } finally {
       process.env.PATH = oldPath;
       process.chdir(cwd);

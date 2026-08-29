@@ -520,14 +520,27 @@ function fetchGitClaimed(
     : null;
   const lsOk = lsRemote !== null && lsRemote.status === 0 && !lsRemote.error;
 
+  // A configured origin that "successfully" advertises ZERO heads is a
+  // contradiction — every reachable remote advertises at least its default
+  // branch. It means the exit code was laundered (observed: the Conductor
+  // /conductor/bin/git shim exits 0 on every network failure), so an exit-0
+  // empty probe must NOT be believed as "the queue is empty" — that is the
+  // duplicate-allocation bug (#2545) again, one layer up from the
+  // originConfigured guard. Parse first; trust only a non-empty head list.
+  const parsedHeads = lsOk
+    ? (lsRemote.stdout ?? "")
+        .split("\n")
+        .map((line) => line.trim().match(/^([0-9a-f]{40,64})\trefs\/heads\/(.+)$/))
+        .filter((m): m is RegExpMatchArray => m !== null)
+    : [];
+  const lsTrusted = lsOk && parsedHeads.length > 0;
+
   // Each candidate carries the LIVE tip sha when it came from ls-remote, so
   // the VERSION read prefers the fresh commit (present locally after any
   // prior fetch/clone) and only falls back to the local remote-tracking ref.
   const candidates: { branch: string; sha?: string }[] = [];
-  if (lsOk) {
-    for (const line of (lsRemote.stdout ?? "").split("\n")) {
-      const m = line.trim().match(/^([0-9a-f]{40,64})\trefs\/heads\/(.+)$/);
-      if (!m) continue;
+  if (lsTrusted) {
+    for (const m of parsedHeads) {
       if (m[2] === baseShort) continue;
       candidates.push({ branch: m[2], sha: m[1] });
     }
@@ -536,8 +549,11 @@ function fetchGitClaimed(
     // the LOCAL refs/remotes/origin snapshot ONLY (never other remotes — an
     // `upstream` remote's branches are not claims against OUR queue).
     warnings.push(
-      "git ls-remote origin failed; using stale local refs/remotes/origin — " +
-        "branches deleted on the remote may still be counted as claims (run `git fetch --prune origin` to refresh)",
+      lsOk
+        ? "git ls-remote origin exited 0 but advertised zero heads (exit-code-laundering shim suspected); " +
+          "using stale local refs/remotes/origin — branches deleted on the remote may still be counted as claims (run `git fetch --prune origin` to refresh)"
+        : "git ls-remote origin failed; using stale local refs/remotes/origin — " +
+          "branches deleted on the remote may still be counted as claims (run `git fetch --prune origin` to refresh)",
     );
     const refs = runCommand("git", [
       "for-each-ref",
