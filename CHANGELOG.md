@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.73.0.0] - 2026-08-29
+## [1.74.0.0] - 2026-08-29
 
 **Green now means green: every test runs somewhere, provably.**
 **The suites got faster by deleting lies, not by skipping work.**
