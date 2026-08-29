@@ -15,6 +15,8 @@
  *   capture — AskUserQuestion SDK capture runs: sonnet (D1a)
  *   warmup  — PTY warm-up ping (cheapest thing that answers): haiku
  *   distill — free-text distillation (cheap, structured): haiku (pinned)
+ *   judge   — LLM-judge rubric calls: sonnet (D1a pin-on-regressors — the
+ *             Haiku A/B regressed the doc-rubric family; see llm-judge.ts)
  */
 
 // `as const satisfies` keeps EvalModelKind the literal union
@@ -28,6 +30,7 @@ const DEFAULTS = {
   capture: "claude-sonnet-4-6",
   warmup: "claude-haiku-4-5",
   distill: "claude-haiku-4-5-20251001",
+  judge: "claude-sonnet-4-6",
 } as const satisfies Record<string, string>;
 
 export type EvalModelKind = keyof typeof DEFAULTS;

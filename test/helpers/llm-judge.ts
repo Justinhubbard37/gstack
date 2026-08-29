@@ -11,6 +11,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 
+import { resolveEvalModel } from '../../lib/eval-model';
+
 export interface JudgeScore {
   clarity: number;       // 1-5
   completeness: number;  // 1-5
@@ -52,9 +54,10 @@ export interface RecommendationScore {
 
 /**
  * Call an Anthropic model with a prompt, extract JSON response.
- * Retries once on 429 rate limit errors. Defaults to Sonnet 4.6 for
- * existing callers; pass a model id (e.g. claude-haiku-4-5-20251001)
- * for cheaper bounded judgments like judgeRecommendation.
+ * Jittered exponential backoff over three 429 retries. Model resolves via
+ * lib/eval-model's `judge` kind (Sonnet default); pass a model id
+ * (e.g. claude-haiku-4-5-20251001) for cheaper bounded judgments like
+ * judgeRecommendation.
  */
 // Default judge model: Sonnet. D1a tried Haiku 4.5 here and the first live
 // run regressed the doc-rubric family — a controlled A/B on the identical
@@ -66,24 +69,37 @@ export interface RecommendationScore {
 // scoped work. Override per run with GSTACK_EVAL_MODEL_JUDGE; Haiku remains
 // the right default for classifier-grade duties (pty hung/working, warmup,
 // distill — see lib/eval-model.ts).
-export async function callJudge<T>(prompt: string, model: string = process.env.GSTACK_EVAL_MODEL_JUDGE || 'claude-sonnet-4-6'): Promise<T> {
+export async function callJudge<T>(prompt: string, model?: string): Promise<T> {
+  // Routed through the documented single resolution point: explicit arg >
+  // GSTACK_EVAL_MODEL_JUDGE > GSTACK_EVAL_MODEL > sonnet default. The old
+  // inline `GSTACK_EVAL_MODEL_JUDGE || sonnet` silently ignored the global
+  // GSTACK_EVAL_MODEL override that every other eval call site honors.
+  const resolvedModel = resolveEvalModel('judge', model);
   const client = new Anthropic();
 
   const makeRequest = () => client.messages.create({
-    model,
+    model: resolvedModel,
     max_tokens: 1024,
     messages: [{ role: 'user', content: prompt }],
   });
 
+  // 429s under CI concurrency: jittered exponential backoff over 3 retries
+  // (~1s/4s/16s + jitter), honoring the server's retry-after when present.
+  // The old single fixed 1s retry lost races reliably at 40-way concurrency.
   let response;
-  try {
-    response = await makeRequest();
-  } catch (err: any) {
-    if (err.status === 429) {
-      await new Promise(r => setTimeout(r, 1000));
+  let attempt = 0;
+  for (;;) {
+    try {
       response = await makeRequest();
-    } else {
-      throw err;
+      break;
+    } catch (err: any) {
+      if (err?.status !== 429 || attempt >= 3) throw err;
+      const retryAfterSecs = Number(err?.headers?.['retry-after']);
+      const baseMs = Number.isFinite(retryAfterSecs) && retryAfterSecs > 0
+        ? retryAfterSecs * 1000
+        : 1000 * 4 ** attempt;
+      await new Promise((r) => setTimeout(r, baseMs + Math.random() * 500));
+      attempt += 1;
     }
   }
 
