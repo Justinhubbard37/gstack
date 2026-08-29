@@ -63,6 +63,7 @@ import {
   strictTestExitCode,
 } from './test-strict-output';
 import { PAID_TEST_GLOBS, isPaidTestFile } from '../test/helpers/paid-test-set';
+import { PERIODIC_CI_EXCLUDE } from '../test/helpers/periodic-exclude-data';
 import { getProjectEvalDir } from '../test/helpers/eval-store';
 import { preflightAnthropicApi } from '../test/helpers/anthropic-preflight';
 import {
@@ -75,6 +76,7 @@ import {
 } from '../test/helpers/touchfiles';
 
 export { PAID_TEST_GLOBS, isPaidTestFile };
+export { PERIODIC_CI_EXCLUDE };
 
 const ROOT = path.resolve(import.meta.dir, '..');
 
@@ -142,7 +144,17 @@ export interface TierSelection {
 export function selectPaidTestFiles(files: string[], tier: PaidTier, rootDir = ROOT): TierSelection {
   const selected: string[] = [];
   const excluded: Array<{ file: string; reason: string }> = [];
+  // Periodic-lane exclusions (documented-red / manual-hardware files): a
+  // known-red weekly shard is triage waste locally AND in CI, so the list
+  // applies to every periodic run, with the reason surfaced per file.
+  const ciExcluded = (file: string): { reason: string; tracking: string } | undefined =>
+    tier === 'periodic' ? PERIODIC_CI_EXCLUDE[normalizeRelativePath(file)] : undefined;
   for (const file of files) {
+    const exclusion = ciExcluded(file);
+    if (exclusion) {
+      excluded.push({ file, reason: `excluded: ${exclusion.reason} [${exclusion.tracking}]` });
+      continue;
+    }
     const source = fs.readFileSync(path.join(rootDir, file), 'utf8');
     const classification = classifyPaidTestFile(source, tier);
     if (classification.included) selected.push(file);
