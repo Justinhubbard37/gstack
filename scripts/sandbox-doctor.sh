@@ -73,6 +73,12 @@ new = 'exit 0\nelse\n\tstatus=$?\nfi'
 if old in src:
     open('/conductor/bin/git', 'w').write(src.replace(old, new))
     print('sandbox-doctor: patched /conductor/bin/git exit-code laundering')
+elif 'else\n\tstatus=$?\nfi' not in src:
+    # Loud on format drift: the outer guard matched but the byte-exact patch
+    # pattern did not — silence here would read as "fixed" while phantom git
+    # successes persist.
+    print('sandbox-doctor: WARNING /conductor/bin/git matched the laundering guard '
+          'but not the patch pattern — exit-code laundering NOT fixed; patch it by hand')
 EOF
 fi
 
@@ -81,6 +87,11 @@ if ! grep -q 'GSTACK sandbox test env' "$HOME/.bashrc" 2>/dev/null; then
   cat >> "$HOME/.bashrc" <<'EOF'
 
 # GSTACK sandbox test env (written by scripts/sandbox-doctor.sh)
+# NOTE: GSTACK_FREE_RETRY_FLAKY=1 deliberately overrides the runner's
+# default-OFF contract ("dev boxes should see flakes, not absorb them") —
+# this sandbox's seccomp supervisor injects spurious one-off failures under
+# load, which the serial retry absorbs while still failing on reproducible
+# breakage. Delete this block from ~/.bashrc to restore the default.
 export TMPDIR="$HOME/tmp"
 export GSTACK_FREE_JOBS=2
 export GSTACK_FREE_RETRY_FLAKY=1
