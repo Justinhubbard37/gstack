@@ -97,10 +97,16 @@ describe('agents-digest', () => {
     }
   });
 
-  test('instruction-tier hosts declare the digest in host config', () => {
+  test('instruction-tier hosts declare the digest in host config — and the declaration tracks the real path', () => {
+    // This is what makes instructionTier.rulesFile load-bearing instead of
+    // config nobody reads: the declared string must equal the generator's
+    // DIGEST_RELPATH, and setup's explainer must print that same path. If
+    // the digest ever moves, all three surfaces fail together.
+    const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
+    expect(setup).toContain(DIGEST_RELPATH);
     for (const host of ['openclaw', 'hermes']) {
       const src = fs.readFileSync(path.join(ROOT, 'hosts', `${host}.ts`), 'utf-8');
-      expect(src).toContain("instructionTier: { rulesFile: 'agents-digest/gstack-AGENTS.md' }");
+      expect(src).toContain(`instructionTier: { rulesFile: '${DIGEST_RELPATH}' }`);
     }
   });
 });

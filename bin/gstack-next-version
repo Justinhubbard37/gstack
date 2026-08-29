@@ -550,7 +550,7 @@ function fetchGitClaimed(
     // `upstream` remote's branches are not claims against OUR queue).
     warnings.push(
       lsOk
-        ? "git ls-remote origin exited 0 but advertised zero heads (exit-code-laundering shim suspected); " +
+        ? "git ls-remote origin exited 0 but advertised zero heads (an empty remote, or an exit-code-laundering git shim); " +
           "using stale local refs/remotes/origin — branches deleted on the remote may still be counted as claims (run `git fetch --prune origin` to refresh)"
         : "git ls-remote origin failed; using stale local refs/remotes/origin — " +
           "branches deleted on the remote may still be counted as claims (run `git fetch --prune origin` to refresh)",
