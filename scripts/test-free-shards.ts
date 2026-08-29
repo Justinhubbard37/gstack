@@ -1023,7 +1023,7 @@ export async function runFreeShard(
   // so an unoccupied index must not fail or shift work to a different runner.
   if (files.length === 0) {
     const outcome: FreeShardOutcome = {
-      shard: shardNumber, files: [], status: 'passed', exitCode: 0, elapsedMs: 0, groupPid: null,
+      shard: shardNumber, files: [], status: 'passed', exitCode: 0, elapsedMs: 0, groupPid: null, failingFiles: [],
     };
     log(shardEpilogue(outcome, totalShards));
     return outcome;
@@ -1303,7 +1303,8 @@ async function main(): Promise<number> {
     && !isTerminationRequested()
     && outcomes.every((o) => o.status !== 'timed-out')
   ) {
-    const flakyFiles = [...new Set(outcomes.flatMap((o) => o.failingFiles))];
+    const flakyFiles = [...new Set(outcomes.flatMap((o) => o.failingFiles))]
+      .filter((f): f is string => typeof f === 'string' && f.length > 0);
     const allAttributed = outcomes.every((o) => o.status === 'passed' || o.failingFiles.length > 0);
     if (allAttributed && flakyFiles.length > 0 && flakyFiles.length <= RETRY_CAP) {
       console.log(`[test:free] flaky-retry: re-running ${flakyFiles.length} failing file(s) once, serially: ${flakyFiles.join(', ')}`);
@@ -1318,7 +1319,7 @@ async function main(): Promise<number> {
       } else {
         console.error('[test:free] flaky-retry FAILED — the failures reproduce serially; not flaky.');
       }
-    } else if (worst !== 0) {
+    } else {
       console.log(`[test:free] flaky-retry skipped: ${allAttributed ? `${flakyFiles.length} failing file(s) exceeds cap ${RETRY_CAP}` : 'failures not fully attributed'}.`);
     }
   }
