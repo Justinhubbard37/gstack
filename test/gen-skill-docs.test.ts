@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll } from 'bun:test';
+import { describe, test, expect, afterAll } from 'bun:test';
 import { assertSinglePreamble } from '../scripts/gen-skill-docs';
 import { COMMAND_DESCRIPTIONS } from '../browse/src/commands';
 import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
@@ -125,6 +125,32 @@ import { getHostConfig as __getHostConfig } from '../hosts/index';
 const CLAUDE_SKIPPED = new Set(__getHostConfig('claude').generation.skipSkills ?? []);
 const CLAUDE_GENERATED_SKILLS = ALL_SKILLS.filter(s => !CLAUDE_SKIPPED.has(s.dir));
 
+// ─── Out-dir render isolation ────────────────────────────────
+// Every generator invocation in this file that used to regenerate the live
+// tree (the gitignored .agents/.factory/... host dirs included) now renders
+// into this module-level out-dir: ONE `--host all` render covers the claude
+// host plus every external host, and all golden-artifact reads plus the
+// per-host `--dry-run` determinism checks point here. The tracked tree is
+// only ever READ (the `generated files are fresh` dry-run deliberately
+// compares against the committed files — that is a read, not a write).
+// Out-dir renders of external hosts are byte-identical to in-place renders
+// (pinned by test/gen-skill-docs-out-dir.test.ts).
+const EXTERNAL_OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-gen-docs-out-'));
+{
+  const render = Bun.spawnSync(
+    ['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'all', '--out-dir', EXTERNAL_OUT],
+    { cwd: ROOT, stdout: 'pipe', stderr: 'pipe' },
+  );
+  if (render.exitCode !== 0) {
+    throw new Error(
+      `gen-skill-docs --host all --out-dir failed (exit ${render.exitCode}):\n${render.stderr.toString()}`,
+    );
+  }
+}
+afterAll(() => {
+  fs.rmSync(EXTERNAL_OUT, { recursive: true, force: true });
+});
+
 describe('gen-skill-docs', () => {
   // Browse carve (token-reduction Phase 4): the command reference + snapshot
   // flags render into browse/sections/command-list.md now — read the
@@ -219,8 +245,9 @@ describe('gen-skill-docs', () => {
   });
 
   test('every generated Codex (.agents/skills) frontmatter parses as strict YAML', () => {
-    const agentsDir = path.join(ROOT, '.agents', 'skills');
-    if (!fs.existsSync(agentsDir)) return; // skip if external hosts not generated
+    // Reads the module-level out-dir render (guaranteed present — the render
+    // throws at module load if it fails), never the live gitignored tree.
+    const agentsDir = path.join(EXTERNAL_OUT, '.agents', 'skills');
     for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const mdPath = path.join(agentsDir, entry.name, 'SKILL.md');
@@ -240,8 +267,7 @@ describe('gen-skill-docs', () => {
   });
 
   test(`every Codex SKILL.md description stays within ${MAX_SKILL_DESCRIPTION_LENGTH} chars`, () => {
-    const agentsDir = path.join(ROOT, '.agents', 'skills');
-    if (!fs.existsSync(agentsDir)) return; // skip if not generated
+    const agentsDir = path.join(EXTERNAL_OUT, '.agents', 'skills');
     for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const skillMd = path.join(agentsDir, entry.name, 'SKILL.md');
@@ -254,8 +280,7 @@ describe('gen-skill-docs', () => {
 
   test('every Codex SKILL.md description stays under 900-char warning threshold', () => {
     const WARN_THRESHOLD = 900;
-    const agentsDir = path.join(ROOT, '.agents', 'skills');
-    if (!fs.existsSync(agentsDir)) return;
+    const agentsDir = path.join(EXTERNAL_OUT, '.agents', 'skills');
     const violations: string[] = [];
     for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -283,6 +308,9 @@ describe('gen-skill-docs', () => {
   });
 
   test('generated files are fresh (match --dry-run)', () => {
+    // Deliberately compares against the LIVE TRACKED SKILL.md files (no
+    // --out-dir): this is the freshness gate for the committed tree. Dry-run
+    // writes nothing — it is a read.
     const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--dry-run'], {
       cwd: ROOT,
       stdout: 'pipe',
@@ -1346,7 +1374,7 @@ describe('DESIGN_SKETCH resolver', () => {
 
 describe('CODEX_SECOND_OPINION resolver', () => {
   const content = readSkillUnion('office-hours'); // carved: Phase 5/6 prose moved to section
-  const codexContent = fs.readFileSync(path.join(ROOT, '.agents', 'skills', 'gstack-office-hours', 'SKILL.md'), 'utf-8');
+  const codexContent = fs.readFileSync(path.join(EXTERNAL_OUT, '.agents', 'skills', 'gstack-office-hours', 'SKILL.md'), 'utf-8');
 
   test('Phase 3.5 section appears in office-hours SKILL.md', () => {
     expect(content).toContain('Phase 3.5: Cross-Model Second Opinion');
@@ -1783,35 +1811,24 @@ describe('DESIGN_REVIEW_LITE extended with Codex', () => {
 // ─── Codex Generation Tests ─────────────────────────────────
 
 describe('Codex generation (--host codex)', () => {
-  const AGENTS_DIR = path.join(ROOT, '.agents', 'skills');
+  // .agents/ is gitignored (v0.11.2.0) — read the module-level out-dir render
+  // (--host all covers codex) instead of regenerating the live tree in place.
+  const AGENTS_DIR = path.join(EXTERNAL_OUT, '.agents', 'skills');
 
-  // .agents/ is gitignored (v0.11.2.0) — generate on demand for tests
-  Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex'], {
-    cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-  });
-
-  // Dynamic discovery of expected Codex skills: all templates except /codex
-  // Also excludes skills where .agents/skills/{name} is a symlink back to the repo root
-  // (vendored dev mode — gen-skill-docs skips these to avoid overwriting Claude SKILL.md)
+  // Dynamic discovery of expected Codex skills: all templates except /codex.
+  // The out-dir is a fresh mkdtemp, so the vendored-dev-mode symlink loop
+  // (.agents/skills/{name} → repo root) that made the generator skip skills
+  // in-place can never occur here — every template renders.
   const CODEX_SKILLS = (() => {
     const skills: Array<{ dir: string; codexName: string }> = [];
-    const isSymlinkLoop = (codexName: string): boolean => {
-      const agentSkillDir = path.join(ROOT, '.agents', 'skills', codexName);
-      try {
-        return fs.realpathSync(agentSkillDir) === fs.realpathSync(ROOT);
-      } catch { return false; }
-    };
     if (fs.existsSync(path.join(ROOT, 'SKILL.md.tmpl'))) {
-      if (!isSymlinkLoop('gstack')) {
-        skills.push({ dir: '.', codexName: 'gstack' });
-      }
+      skills.push({ dir: '.', codexName: 'gstack' });
     }
     for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       if (entry.name === 'codex') continue; // /codex is excluded from Codex output
       if (!fs.existsSync(path.join(ROOT, entry.name, 'SKILL.md.tmpl'))) continue;
       const codexName = entry.name.startsWith('gstack-') ? entry.name : `gstack-${entry.name}`;
-      if (isSymlinkLoop(codexName)) continue;
       skills.push({ dir: entry.name, codexName });
     }
     return skills;
@@ -1940,7 +1957,9 @@ describe('Codex generation (--host codex)', () => {
   });
 
   test('--host codex --dry-run freshness', () => {
-    const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--dry-run'], {
+    // Dry-run against the out-dir render: determinism/idempotency check
+    // (regenerating produces the same bytes the module-level render did).
+    const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -1955,12 +1974,12 @@ describe('Codex generation (--host codex)', () => {
   });
 
   test('--host agents alias produces same output as --host codex', () => {
-    const codexResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--dry-run'], {
+    const codexResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT,
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const agentsResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'agents', '--dry-run'], {
+    const agentsResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'agents', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -2168,63 +2187,52 @@ describe('Codex generation (--host codex)', () => {
   // ─── Explicit --model override wins over the host default ────
   // Without --model the codex host renders its defaultModel (gpt) — pinned by
   // the golden test. This pins the OTHER direction through the real CLI:
-  // `./setup --host codex --model <id>` depends on it. Runs last in this
-  // describe and restores the host-default render before finishing.
+  // `./setup --host codex --model <id>` depends on it. The override renders
+  // into its OWN out-dir, so no restore pass is needed — the host-default
+  // render (EXTERNAL_OUT) is untouched and asserted directly.
   test('explicit --model overrides the codex host default', () => {
+    const overrideOut = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-model-override-'));
     try {
-      const override = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--model', 'claude'], {
+      const override = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--model', 'claude', '--out-dir', overrideOut], {
         cwd: ROOT,
         stdout: 'pipe',
         stderr: 'pipe',
       });
       expect(override.exitCode).toBe(0);
-      const content = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
+      const content = fs.readFileSync(path.join(overrideOut, '.agents', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
       expect(content).toContain('Model-Specific Behavioral Patch (claude)');
       // The overlay now travels as --model into gstack-skill-start, which
       // echoes MODEL_OVERLAY at runtime.
       expect(content).toContain('--model "claude"');
     } finally {
-      // Restore the host-default render — later tests and the host-config
-      // golden read this tree.
-      const restore = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex'], {
-        cwd: ROOT,
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      expect(restore.exitCode).toBe(0);
+      fs.rmSync(overrideOut, { recursive: true, force: true });
     }
-    const restored = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
-    expect(restored).toContain('Model-Specific Behavioral Patch (gpt)');
-    expect(restored).toContain('--model "gpt"');
+    // Host-default direction: the untouched EXTERNAL_OUT render carries gpt.
+    const hostDefault = fs.readFileSync(path.join(AGENTS_DIR, 'gstack-ship', 'SKILL.md'), 'utf-8');
+    expect(hostDefault).toContain('Model-Specific Behavioral Patch (gpt)');
+    expect(hostDefault).toContain('--model "gpt"');
   });
 });
 
 // ─── Factory generation tests ────────────────────────────────
 
 describe('Factory generation (--host factory)', () => {
-  const FACTORY_DIR = path.join(ROOT, '.factory', 'skills');
+  // .factory/ is gitignored — read the module-level out-dir render
+  // (--host all covers factory) instead of regenerating in place.
+  const FACTORY_DIR = path.join(EXTERNAL_OUT, '.factory', 'skills');
 
-  // Generate Factory output for tests
-  Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'factory'], {
-    cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-  });
-
+  // Fresh out-dir → the vendored-dev-mode symlink loop can never occur, so
+  // every template renders (see the Codex discovery note above).
   const FACTORY_SKILLS = (() => {
     const skills: Array<{ dir: string; factoryName: string }> = [];
-    const isSymlinkLoop = (name: string): boolean => {
-      const factorySkillDir = path.join(ROOT, '.factory', 'skills', name);
-      try { return fs.realpathSync(factorySkillDir) === fs.realpathSync(ROOT); }
-      catch { return false; }
-    };
     if (fs.existsSync(path.join(ROOT, 'SKILL.md.tmpl'))) {
-      if (!isSymlinkLoop('gstack')) skills.push({ dir: '.', factoryName: 'gstack' });
+      skills.push({ dir: '.', factoryName: 'gstack' });
     }
     for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       if (entry.name === 'codex') continue;
       if (!fs.existsSync(path.join(ROOT, entry.name, 'SKILL.md.tmpl'))) continue;
       const factoryName = entry.name.startsWith('gstack-') ? entry.name : `gstack-${entry.name}`;
-      if (isSymlinkLoop(factoryName)) continue;
       skills.push({ dir: entry.name, factoryName });
     }
     return skills;
@@ -2306,10 +2314,10 @@ describe('Factory generation (--host factory)', () => {
   });
 
   test('--host droid alias works', () => {
-    const factoryResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'factory', '--dry-run'], {
+    const factoryResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'factory', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
     });
-    const droidResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'droid', '--dry-run'], {
+    const droidResult = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'droid', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
     });
     expect(factoryResult.exitCode).toBe(0);
@@ -2318,7 +2326,7 @@ describe('Factory generation (--host factory)', () => {
   });
 
   test('--host factory --dry-run freshness', () => {
-    const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'factory', '--dry-run'], {
+    const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'factory', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
     });
     expect(result.exitCode).toBe(0);
@@ -2342,33 +2350,19 @@ describe('Factory generation (--host factory)', () => {
 import { ALL_HOST_CONFIGS, getExternalHosts } from '../hosts/index';
 
 describe('Parameterized host smoke tests', () => {
-  // Regenerate every external host up front so the per-host `--dry-run` freshness
-  // checks are deterministic. These host dirs (.agents/.factory/.cursor/...) are
-  // gitignored regenerated artifacts, so the freshness check is really an
-  // idempotency/determinism check — it still catches non-deterministic gen, but no
-  // longer flakes on stale-on-disk state left by a missing `gen --host all` prestep
-  // (the canonical `bun test` does not run one). The tracked-claude freshness test
+  // Every external host was rendered up front by the module-level
+  // `--host all --out-dir EXTERNAL_OUT` render, so the per-host `--dry-run`
+  // freshness checks are deterministic: they compare a regeneration against
+  // that render — an idempotency/determinism check that catches
+  // non-deterministic gen without ever writing (or depending on) the live
+  // gitignored host dirs. The tracked-claude freshness test
   // (`generated files are fresh`) runs earlier and is unaffected.
-  beforeAll(() => {
-    for (const h of getExternalHosts()) {
-      Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', h.name], {
-        cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-      });
-    }
-  });
-
   for (const hostConfig of getExternalHosts()) {
     describe(`${hostConfig.displayName} (--host ${hostConfig.name})`, () => {
-      const hostDir = path.join(ROOT, hostConfig.hostSubdir, 'skills');
+      const hostDir = path.join(EXTERNAL_OUT, hostConfig.hostSubdir, 'skills');
 
       test('generates output that exists on disk', () => {
-        // Generated dir should exist (created by earlier bun run gen:skill-docs --host all)
-        if (!fs.existsSync(hostDir)) {
-          // Generate if not already done
-          Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', hostConfig.name], {
-            cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-          });
-        }
+        // The module-level --host all render must have produced this host's tree.
         expect(fs.existsSync(hostDir)).toBe(true);
         const skills = fs.readdirSync(hostDir).filter(d =>
           fs.existsSync(path.join(hostDir, d, 'SKILL.md'))
@@ -2410,7 +2404,7 @@ describe('Parameterized host smoke tests', () => {
 
       test('--dry-run freshness check passes', () => {
         const result = Bun.spawnSync(
-          ['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', hostConfig.name, '--dry-run'],
+          ['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', hostConfig.name, '--dry-run', '--out-dir', EXTERNAL_OUT],
           { cwd: ROOT, stdout: 'pipe', stderr: 'pipe' }
         );
         expect(result.exitCode).toBe(0);
@@ -2430,18 +2424,12 @@ describe('Parameterized host smoke tests', () => {
 // ─── --host all tests ────────────────────────────────────────
 
 describe('--host all', () => {
-  // Same determinism guard as the parameterized block: make external hosts fresh on
-  // disk so `--host all --dry-run` reports FRESH regardless of prior state.
-  beforeAll(() => {
-    for (const h of getExternalHosts()) {
-      Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', h.name], {
-        cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-      });
-    }
-  });
-
+  // Same determinism guard as the parameterized block: the module-level
+  // `--host all --out-dir EXTERNAL_OUT` render is the comparison baseline, so
+  // this dry-run reports FRESH regardless of live-tree state — and proves the
+  // claude host plus every external host regenerate deterministically.
   test('--host all generates for all registered hosts', () => {
-    const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'all', '--dry-run'], {
+    const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'all', '--dry-run', '--out-dir', EXTERNAL_OUT], {
       cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
     });
     expect(result.exitCode).toBe(0);
@@ -2609,8 +2597,8 @@ describe('setup script validation', () => {
 
   // T2: Dynamic $GSTACK_ROOT paths in generated Codex preambles
   test('generated Codex preambles use dynamic GSTACK_ROOT paths', () => {
-    const codexSkillDir = path.join(ROOT, '.agents', 'skills', 'gstack-ship');
-    if (!fs.existsSync(codexSkillDir)) return; // skip if .agents/ not generated
+    // Read the module-level out-dir render (always present).
+    const codexSkillDir = path.join(EXTERNAL_OUT, '.agents', 'skills', 'gstack-ship');
     const content = fs.readFileSync(path.join(codexSkillDir, 'SKILL.md'), 'utf-8');
     expect(content).toContain('GSTACK_ROOT=');
     expect(content).toContain('$GSTACK_BIN/');
@@ -3305,7 +3293,10 @@ describe('gen-skill-docs prefix warning (#620/#578)', () => {
       fs.mkdirSync(fakeGstack, { recursive: true });
       fs.writeFileSync(path.join(fakeGstack, 'config.yaml'), 'skill_prefix: true\n');
 
-      const output = execSync('bun run scripts/gen-skill-docs.ts', {
+      // Render into an out-dir under the fixture (the warning fires on any
+      // non-dry-run generation) so the live tree is never rewritten.
+      const outDir = path.join(tmpDir, 'out');
+      const output = execSync(`bun run scripts/gen-skill-docs.ts --out-dir "${outDir}"`, {
         cwd: ROOT,
         env: { ...process.env, HOME: fakeHome },
         encoding: 'utf-8',
@@ -3326,7 +3317,8 @@ describe('gen-skill-docs prefix warning (#620/#578)', () => {
       fs.mkdirSync(fakeGstack, { recursive: true });
       fs.writeFileSync(path.join(fakeGstack, 'config.yaml'), 'skill_prefix: false\n');
 
-      const output = execSync('bun run scripts/gen-skill-docs.ts', {
+      const outDir = path.join(tmpDir, 'out');
+      const output = execSync(`bun run scripts/gen-skill-docs.ts --out-dir "${outDir}"`, {
         cwd: ROOT,
         env: { ...process.env, HOME: fakeHome },
         encoding: 'utf-8',
@@ -3442,14 +3434,16 @@ describe('plan-mode-info resolver (handshake-replacement)', () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  test('vestigial handshake is absent from non-Claude host outputs when present on disk', () => {
+  test('vestigial handshake is absent from non-Claude host outputs', () => {
     // Non-Claude hosts render to hostSubdirs (.agents/, .openclaw/, etc). The
     // plan-mode-info resolver has no host-scoping — all hosts get the new
-    // section, none get the old handshake. Scan all candidate host dirs.
+    // section, none get the old handshake. Scan every candidate host tree in
+    // the module-level out-dir render (--host all), which is always present —
+    // so the check can no longer silently degrade to a console warning.
     const hostDirs = ['.agents', '.openclaw', '.opencode', '.factory', '.hermes', '.kiro', '.cursor', '.slate'];
     let checked = 0;
     for (const host of hostDirs) {
-      const skillsRoot = path.join(ROOT, host, 'skills');
+      const skillsRoot = path.join(EXTERNAL_OUT, host, 'skills');
       if (!fs.existsSync(skillsRoot)) continue;
       const entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
       for (const entry of entries) {
@@ -3461,13 +3455,7 @@ describe('plan-mode-info resolver (handshake-replacement)', () => {
         checked++;
       }
     }
-    if (checked === 0) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        'plan-mode-info: no non-Claude host outputs found for cross-host absence check — ' +
-          'run `bun run gen:skill-docs --host all` to populate',
-      );
-    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   test.each(REVIEW_SKILLS)(
