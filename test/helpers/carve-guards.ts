@@ -150,7 +150,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-ship-section-loading.test.ts',
-    maxSkeletonBytes: 75_420, // ponytail-import wave + v1.72 Aside third-party-actions contract (merged); measured 74_811
+    maxSkeletonBytes: 76_200, // + v1.73 --regen-digest trust-envelope + evidence-gate digest prose; measured 75_592
     minUnionBytes: 181_000, // token-reduction Phases 1-2 (v1.69.x branch); measured union 201,464
     mustContain: ['VERSION', 'CHANGELOG', 'review', 'merge', 'PR'],
     // v1.58.5.0: pre-push-guard install (#2077) stacks on the shared first-run-guidance preamble.
