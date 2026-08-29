@@ -1,4 +1,5 @@
 import { describe, test, expect, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import type { SkillTestResult } from './helpers/session-runner';
 import { EvalCollector } from './helpers/eval-store';
@@ -197,7 +198,7 @@ describeE2E('Skill Routing E2E — Developer Journey', () => {
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -213,7 +214,7 @@ describeE2E('Skill Routing E2E — Developer Journey', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-plan-eng', async () => {
     const tmpDir = createRoutingWorkDir('plan-eng');
@@ -247,7 +248,7 @@ describeE2E('Skill Routing E2E — Developer Journey', () => {
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -263,7 +264,7 @@ describeE2E('Skill Routing E2E — Developer Journey', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   // Removed: journey-think-bigger
   // Tested ambiguous routing ("think bigger" → plan-ceo-review) but Claude
@@ -309,7 +310,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -326,7 +327,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-qa', async () => {
     const tmpDir = createRoutingWorkDir('qa');
@@ -345,7 +346,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -362,7 +363,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-code-review', async () => {
     const tmpDir = createRoutingWorkDir('code-review');
@@ -386,7 +387,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 120_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -402,7 +403,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-ship', async () => {
     const tmpDir = createRoutingWorkDir('ship');
@@ -425,7 +426,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -441,7 +442,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-docs', async () => {
     const tmpDir = createRoutingWorkDir('docs');
@@ -462,7 +463,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -478,7 +479,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-retro', async () => {
     const tmpDir = createRoutingWorkDir('retro');
@@ -505,7 +506,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 120_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -521,7 +522,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-design-system', async () => {
     const tmpDir = createRoutingWorkDir('design-system');
@@ -534,7 +535,7 @@ export default app;
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -550,7 +551,7 @@ export default app;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 
   testIfSelected('journey-visual-qa', async () => {
     const tmpDir = createRoutingWorkDir('visual-qa');
@@ -585,7 +586,7 @@ body { font-family: sans-serif; }
         workingDirectory: tmpDir,
         maxTurns: 5,
         allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-        timeout: 60_000,
+        timeout: JUDGE_MS,
         testName,
         runId,
       });
@@ -602,5 +603,5 @@ body { font-family: sans-serif; }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 });

@@ -27,6 +27,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS, CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, browseBin, runId,
@@ -204,7 +205,7 @@ Do NOT enter the prototype phase. Do NOT use AskUserQuestion.`,
       env: { GSTACK_HOME: gstackHome },
       maxTurns: 12,
       allowedTools: ['Skill', 'Bash', 'Read'],
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'scrape-match-path',
       runId,
     });
@@ -224,7 +225,7 @@ Do NOT enter the prototype phase. Do NOT use AskUserQuestion.`,
     expect(listedSkills).toBe(true);
     expect(ranBundledSkill).toBe(true);
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-  }, 180_000);
+  }, CAPTURE_MS);
 
   // ── 2. /scrape prototype path: drive $B primitives against fixture ────
   testConcurrentIfSelected('scrape-prototype-path', async () => {
@@ -248,7 +249,7 @@ Do NOT use AskUserQuestion.`,
       env: { GSTACK_HOME: gstackHome },
       maxTurns: 18,
       allowedTools: ['Skill', 'Bash', 'Read'],
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'scrape-prototype-path',
       runId,
     });
@@ -283,7 +284,7 @@ Do NOT use AskUserQuestion.`,
     expect(hasJsonItems).toBe(true);
     expect(mentionsSkillify).toBe(true);
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-  }, 240_000);
+  }, CAPTURE_MS);
 
   // ── 3. /skillify happy path: scrape then skillify in one session ─────
   testConcurrentIfSelected('skillify-happy-path', async () => {
@@ -316,7 +317,7 @@ Do NOT halt for clarification.`,
       },
       maxTurns: 40,
       allowedTools: ['Skill', 'Bash', 'Read', 'Write'],
-      timeout: 360_000,
+      timeout: CAPTURE_LONG_MS,
       testName: 'skillify-happy-path',
       runId,
     });
@@ -360,7 +361,7 @@ Do NOT halt for clarification.`,
     expect(hasAllFiles).toBe(true);
     expect(prosesClean).toBe(true);
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-  }, 420_000);
+  }, CAPTURE_LONG_MS);
 
   // ── 4. /skillify provenance refusal: D1 contract ─────────────────────
   testConcurrentIfSelected('skillify-provenance-refusal', async () => {
@@ -379,7 +380,7 @@ write any files.`,
       },
       maxTurns: 8,
       allowedTools: ['Skill', 'Bash', 'Read'],
-      timeout: 90_000,
+      timeout: JUDGE_MS,
       testName: 'skillify-provenance-refusal',
       runId,
     });
@@ -408,7 +409,7 @@ write any files.`,
     expect(noSkillsWritten).toBe(true);
     expect(noStaging).toBe(true);
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-  }, 120_000);
+  }, JUDGE_MS);
 
   // ── 5. /skillify approval-gate reject: D3 cleanup ────────────────────
   testConcurrentIfSelected('skillify-approval-reject', async () => {
@@ -435,7 +436,7 @@ Use HOME=${workDir}. Do NOT commit the skill.`,
       },
       maxTurns: 35,
       allowedTools: ['Skill', 'Bash', 'Read', 'Write'],
-      timeout: 360_000,
+      timeout: CAPTURE_LONG_MS,
       testName: 'skillify-approval-reject',
       runId,
     });
@@ -462,5 +463,5 @@ Use HOME=${workDir}. Do NOT commit the skill.`,
     expect(writtenSkills.length).toBe(0);
     expect(stagingLeftovers.length).toBe(0);
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-  }, 420_000);
+  }, CAPTURE_LONG_MS);
 });

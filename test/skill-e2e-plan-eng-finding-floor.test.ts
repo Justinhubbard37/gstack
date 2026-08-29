@@ -16,6 +16,7 @@
  */
 
 import { test } from 'bun:test';
+import { CAPTURE_LONG_MS, PTY_MS } from './helpers/eval-budgets';
 import { describeE2ETier } from './helpers/e2e-gate';
 import { runPlanSkillFloorCheck } from './helpers/claude-pty-runner';
 import { FORCING_FLOOR_ENG } from './fixtures/forcing-finding-seeds';
@@ -33,7 +34,7 @@ describeE2E('/plan-eng-review AskUserQuestion floor (periodic)', () => {
         // LIVE-REPO CWD: PTY session needs the repo cwd — gstack skill
         // registry + hermetic pre-trusted dir (hermetic-env trustedDirs).
         cwd: process.cwd(),
-        timeoutMs: 600_000,
+        timeoutMs: CAPTURE_LONG_MS,
         env: { QUESTION_TUNING: 'false', EXPLAIN_LEVEL: 'default' },
       });
 
@@ -49,6 +50,6 @@ describeE2E('/plan-eng-review AskUserQuestion floor (periodic)', () => {
         );
       }
     },
-    660_000,
+    PTY_MS,
   );
 });

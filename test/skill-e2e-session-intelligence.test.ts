@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, runId, evalsEnabled,
@@ -166,7 +167,7 @@ IMPORTANT:
       workingDirectory: workDir,
       maxTurns: 10,
       allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob'],
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'context-recovery-artifacts',
       runId,
     });
@@ -193,7 +194,7 @@ IMPORTANT:
     expect(foundCount).toBeGreaterThanOrEqual(1);
 
     console.log(`Context recovery: artifacts=${foundArtifacts}, lastSession=${foundLastSession}, timeline=${foundTimeline}`);
-  }, 180_000);
+  }, CAPTURE_MS);
 
   // --- Test 3: /context-save writes a file ---
   // Hand-feed the save section of context-save/SKILL.md to claude -p and verify
@@ -231,7 +232,7 @@ IMPORTANT:
       workingDirectory: workDir,
       maxTurns: 10,
       allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob'],
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'context-save-writes-file',
       runId,
     });
@@ -264,7 +265,7 @@ IMPORTANT:
     expect(hasYamlFrontmatter).toBe(true);
 
     console.log(`context-save: ${files.length} files created, YAML frontmatter: ${hasYamlFrontmatter}, branch: ${hasBranch}`);
-  }, 180_000);
+  }, CAPTURE_MS);
 
   // --- Test 4: /context-restore loads the newest file across branches ---
   // Seed two saved-context files with different YYYYMMDD-HHMMSS prefixes and
@@ -340,7 +341,7 @@ IMPORTANT:
       workingDirectory: workDir,
       maxTurns: 8,
       allowedTools: ['Bash', 'Read', 'Grep', 'Glob'],
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'context-restore-loads-latest',
       runId,
     });
@@ -361,5 +362,5 @@ IMPORTANT:
     expect(loadedOlder).toBe(false);
 
     console.log(`context-restore: loadedNewer=${loadedNewer}, loadedOlder=${loadedOlder}`);
-  }, 180_000);
+  }, CAPTURE_MS);
 });

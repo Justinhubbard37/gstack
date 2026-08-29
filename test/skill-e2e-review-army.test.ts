@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, runId, describeIfSelected, testConcurrentIfSelected,
@@ -114,7 +115,7 @@ and apply it yourself against the diff (git diff main...HEAD).
 Write your findings to ${dir}/review-output.md`,
       workingDirectory: dir,
       maxTurns: 20,
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'review-army-migration-safety',
       runId,
     });
@@ -135,7 +136,7 @@ Write your findings to ${dir}/review-output.md`,
         content.includes('column');
       expect(hasMigrationFinding).toBe(true);
     }
-  }, 210_000);
+  }, CAPTURE_MS);
 });
 
 // --- Review Army: N+1 Performance ---
@@ -179,7 +180,7 @@ For the specialist dispatch, read review-specialists/performance.md and apply it
 Write your findings to ${dir}/review-output.md`,
       workingDirectory: dir,
       maxTurns: 20,
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'review-army-perf-n-plus-one',
       runId,
     });
@@ -201,7 +202,7 @@ Write your findings to ${dir}/review-output.md`,
         content.includes('loop');
       expect(hasN1Finding).toBe(true);
     }
-  }, 210_000);
+  }, CAPTURE_MS);
 });
 
 // --- Review Army: Delivery Audit ---
@@ -281,7 +282,7 @@ The email notification system should be classified as NOT DONE.
 Write your completion audit to ${dir}/review-output.md`,
       workingDirectory: dir,
       maxTurns: 15,
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'review-army-delivery-audit',
       runId,
     });
@@ -305,7 +306,7 @@ Write your completion audit to ${dir}/review-output.md`,
       expect(hasNotDone).toBe(true);
       expect(mentionsEmail).toBe(true);
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 });
 
 // --- Review Army: Quality Score ---
@@ -356,7 +357,7 @@ Write your findings AND the computed quality score to ${dir}/review-output.md
 Include the line: "PR Quality Score: X/10" where X is the computed score.`,
       workingDirectory: dir,
       maxTurns: 15,
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'review-army-quality-score',
       runId,
     });
@@ -374,7 +375,7 @@ Include the line: "PR Quality Score: X/10" where X is the computed score.`,
         content.match(/\d+\/10/);
       expect(hasScore).toBeTruthy();
     }
-  }, 150_000);
+  }, CAPTURE_MS);
 });
 
 // --- Review Army: JSON Findings ---
@@ -421,7 +422,7 @@ Output your findings as JSON objects, one per line, following the schema:
 Write ONLY JSON findings (no preamble) to ${dir}/findings.json`,
       workingDirectory: dir,
       maxTurns: 12,
-      timeout: 90_000,
+      timeout: JUDGE_MS,
       testName: 'review-army-json-findings',
       runId,
     });
@@ -450,7 +451,7 @@ Write ONLY JSON findings (no preamble) to ${dir}/findings.json`,
         break; // One valid line is enough for the gate test
       }
     }
-  }, 120_000);
+  }, JUDGE_MS);
 });
 
 // --- Review Army: Red Team (periodic) ---
@@ -499,7 +500,7 @@ Write your red team findings to ${dir}/review-output.md
 Start the file with "RED TEAM REVIEW" on the first line.`,
       workingDirectory: dir,
       maxTurns: 20,
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'review-army-red-team',
       runId,
     });
@@ -513,7 +514,7 @@ Start the file with "RED TEAM REVIEW" on the first line.`,
       const content = fs.readFileSync(outputPath, 'utf-8');
       expect(content.toLowerCase()).toMatch(/red team|adversarial/);
     }
-  }, 210_000);
+  }, CAPTURE_MS);
 });
 
 // --- Review Army: Consensus (periodic) ---
@@ -566,7 +567,7 @@ mark it as "MULTI-SPECIALIST CONFIRMED" with the confirming categories.
 Write findings to ${dir}/review-output.md`,
       workingDirectory: dir,
       maxTurns: 20,
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'review-army-consensus',
       runId,
     });
@@ -585,7 +586,7 @@ Write findings to ${dir}/review-output.md`,
         content.includes('interpolat');
       expect(hasSqlFinding).toBe(true);
     }
-  }, 210_000);
+  }, CAPTURE_MS);
 });
 
 // Finalize eval collector

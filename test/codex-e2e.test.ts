@@ -14,6 +14,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runCodexSkill, parseCodexJSONL, installSkillToTempHome } from './helpers/codex-session-runner';
 import type { CodexResult } from './helpers/codex-session-runner';
 import { CODEX_REVIEW_E2E_SECTIONS } from './helpers/skill-fixture';
@@ -150,7 +151,7 @@ describeCodex('Codex E2E', () => {
     const result = await runCodexSkill({
       skillDir,
       prompt: 'List any skills or instructions you have available. Just list the names.',
-      timeoutMs: 60_000,
+      timeoutMs: JUDGE_MS,
       cwd: testWorktree,
       skillName: 'gstack-review',
     });
@@ -171,7 +172,7 @@ describeCodex('Codex E2E', () => {
     expect(
       outputLower.includes('review') || outputLower.includes('gstack') || outputLower.includes('skill'),
     ).toBe(true);
-  }, 120_000);
+  }, JUDGE_MS);
 
   // Validates that Codex can invoke the gstack-review skill, run a diff-based
   // code review, and produce structured review output with findings/issues.
@@ -186,7 +187,7 @@ describeCodex('Codex E2E', () => {
     const result = await runCodexSkill({
       skillDir,
       prompt: 'Run the gstack-review skill on this repository. Review the current branch diff and report your findings.',
-      timeoutMs: 540_000,
+      timeoutMs: CAPTURE_LONG_MS,
       cwd: testWorktree,
       skillName: 'gstack-review',
       sections: CODEX_REVIEW_E2E_SECTIONS,
@@ -224,5 +225,5 @@ describeCodex('Codex E2E', () => {
       outputLower.includes('p1') ||
       outputLower.includes('p2');
     expect(hasReviewContent).toBe(true);
-  }, 600_000);
+  }, CAPTURE_LONG_MS);
 });

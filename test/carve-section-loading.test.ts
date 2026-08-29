@@ -20,6 +20,7 @@
  */
 
 import { test, expect } from 'bun:test';
+import { CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { describeE2ETier } from './helpers/e2e-gate';
 import { setupSkillDir, skillFromWorktree, captureSectionReads } from './helpers/auq-sdk-capture';
 import { CARVE_GUARDS } from './helpers/carve-guards';
@@ -97,7 +98,7 @@ describeE2E('carve behavioral section-loading (periodic, SDK capture)', () => {
         });
         expect(output.trim().length).toBeGreaterThan(200);
       },
-      540_000,
+      CAPTURE_LONG_MS,
     );
   }
 });

@@ -11,6 +11,7 @@
  * golden), parallel shards (worktree copies), or live symlinked installs.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { CAPTURE_MS } from './helpers/eval-budgets';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -262,5 +263,5 @@ You are authorized to implement the minimal fix. The task boundary is src/parse-
     expect(readmeDecoyUntouched).toBe(true);
 
     console.log(`codex-sol-scope: ${result.tokens} tokens, ${result.toolCalls.length} tool calls, ${Math.round(result.durationMs / 1000)}s`);
-  }, 300_000);
+  }, CAPTURE_MS);
 });

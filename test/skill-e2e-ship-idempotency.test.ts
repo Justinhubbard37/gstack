@@ -31,6 +31,7 @@
  */
 
 import { test, expect } from 'bun:test';
+import { PTY_LONG_MS } from './helpers/eval-budgets';
 import { describeE2ETier } from './helpers/e2e-gate';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -158,7 +159,7 @@ describeE2E('/ship idempotency E2E (periodic, real-PTY)', () => {
       const session = await launchClaudePty({
         permissionMode: 'plan',
         cwd: fixture.workTree,
-        timeoutMs: 1_080_000,
+        timeoutMs: PTY_LONG_MS,
         // Disable network-y pieces so the agent can't reach actual github.
         env: { GH_TOKEN: 'mock-not-real', NO_COLOR: '1' },
         seedSkills: true,
@@ -279,6 +280,6 @@ describeE2E('/ship idempotency E2E (periodic, real-PTY)', () => {
         try { fs.rmSync(path.dirname(fixture.workTree), { recursive: true, force: true }); } catch { /* ignore */ }
       }
     },
-    1_200_000, // 20 min wall clock
+    PTY_LONG_MS, // 20 min wall clock
   );
 });
