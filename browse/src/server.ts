@@ -13,7 +13,7 @@
  *   Port:       random 10000-60000 (or BROWSE_PORT env for debug override)
  */
 
-import { BrowserManager } from './browser-manager';
+import { BrowserManager, markDaemonProcess } from './browser-manager';
 import { handleReadCommand, hasOutArg } from './read-commands';
 import { handleWriteCommand } from './write-commands';
 import { handleMetaCommand } from './meta-commands';
@@ -1394,6 +1394,10 @@ async function handleCommand(body: any, tokenInfo?: TokenInfo | null): Promise<R
 // server.ts as a submodule can register their own signal handlers without
 // fighting with gstack's. CLI path is unchanged.
 if (import.meta.main) {
+  // Standalone daemon: a Chromium crash must exit THIS process (its
+  // supervisor/user notices); embedders and in-process test launches must
+  // never be exited by browser-manager's disconnect handler.
+  markDaemonProcess();
   // SIGINT (Ctrl+C): user intentionally stopping → shutdown.
   process.on('SIGINT', () => activeShutdown?.());
   // SIGHUP (terminal hangup): with handleSIGHUP:false at the three launch
