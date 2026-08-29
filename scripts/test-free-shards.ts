@@ -339,8 +339,14 @@ export function wallTimeoutForShard(fileCount: number, baseMs = DEFAULT_WALL_TIM
  * slow Playwright files), so packed shards get max(base, predicted x 3) —
  * generous against seed drift, still bounded.
  */
-export function wallTimeoutForPackedShard(predictedMs: number, baseMs = DEFAULT_WALL_TIMEOUT_MS): number {
-  return Math.max(baseMs, Math.ceil(predictedMs * 3));
+export function wallTimeoutForPackedShard(predictedMs: number, baseMs = DEFAULT_WALL_TIMEOUT_MS, fileCount = 0): number {
+  // Predictions transfer badly across machines: the committed duration seed
+  // is recorded on fast CI, and a syscall-supervised sandbox replays those
+  // files 2-4x slower (observed: a 253-file shard predicted ~242s wall-killed
+  // at its 725s predicted-x3 wall while genuinely still progressing). The
+  // packed wall may therefore be LOOSER than the count heuristic, never
+  // tighter — it keeps the per-file floor the runner has always guaranteed.
+  return Math.max(baseMs, Math.ceil(predictedMs * 3), fileCount * PER_FILE_WALL_MS);
 }
 /**
  * Full-suite parallelism: leave RESERVED_CPUS cores for the parent runner +
@@ -1444,7 +1450,7 @@ async function main(): Promise<number> {
       // cost BY DESIGN, so the 5s/file heuristic would undersize a shard
       // holding few expensive files.
       wallTimeoutMs: packed && !options.wallTimeoutExplicit
-        ? wallTimeoutForPackedShard(packed.predictedMs[index], options.wallTimeoutMs)
+        ? wallTimeoutForPackedShard(packed.predictedMs[index], options.wallTimeoutMs, shardFiles.length)
         : shardTimeout(shardFiles.length),
       verbose: options.verbose,
     })),
