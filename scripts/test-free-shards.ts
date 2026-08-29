@@ -332,6 +332,16 @@ export const PER_FILE_WALL_MS = 5_000;
 export function wallTimeoutForShard(fileCount: number, baseMs = DEFAULT_WALL_TIMEOUT_MS): number {
   return Math.max(baseMs, fileCount * PER_FILE_WALL_MS);
 }
+
+/**
+ * Wall for a duration-packed shard. The count heuristic above assumes count
+ * approximates cost; LPT packing breaks that BY DESIGN (a shard may hold six
+ * slow Playwright files), so packed shards get max(base, predicted x 3) —
+ * generous against seed drift, still bounded.
+ */
+export function wallTimeoutForPackedShard(predictedMs: number, baseMs = DEFAULT_WALL_TIMEOUT_MS): number {
+  return Math.max(baseMs, Math.ceil(predictedMs * 3));
+}
 /**
  * Full-suite parallelism: leave RESERVED_CPUS cores for the parent runner +
  * OS, cap at MAX_FULL_SUITE_JOBS — beyond ~6 concurrent bun processes the
@@ -516,6 +526,92 @@ export function assignFilesToShards(files: string[], shardCount: number): string
   return shards.map(filesInShard => filesInShard.sort());
 }
 
+// ─── Duration-aware packing (full-suite path ONLY) ─────────────────────────
+// Hash sharding balances file COUNTS (~1.15x spread) but not cost: the 15
+// Playwright-launching files land 4/3/4/1/2/1 across 6 shards, giving a
+// measured 28s–97s shard spread and ~40s of idle tail on every run. LPT
+// packing over recorded per-file durations reclaims most of it. The `--shard`
+// CI-matrix path is deliberately untouched — its contract is stable indices
+// via assignFilesToShards/stableHash (empty shards no-op; see above).
+//
+// One store, no overlay: durations come from the committed seed
+// (scripts/free-test-durations.json), refreshed occasionally via
+// `--record-durations` (each file timed in its own child — exact, and immune
+// to bun's stream buffering, where silent passers print no header to
+// timestamp). GSTACK_FREE_TEST_DURATIONS overrides the path for experiments.
+// The seed is a HINT, not a contract: missing file → hash-shard fallback;
+// unknown file → 75th-percentile pessimism (placed early by LPT, bounding
+// tail risk). Successor note: bun ≥1.3.14 ships native --timings/--shard LPT
+// scheduling — when the repo unpins 1.3.13, this packer is the code to
+// replace (keep it swappable).
+
+export const FREE_TEST_DURATIONS_FILE = 'scripts/free-test-durations.json';
+
+export function loadFreeTestDurations(rootDir = ROOT): Record<string, number> | null {
+  const file = process.env.GSTACK_FREE_TEST_DURATIONS
+    ?? path.join(rootDir, FREE_TEST_DURATIONS_FILE);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, 'utf-8');
+  } catch {
+    return null; // no seed — hash sharding, silently (fresh checkouts are normal)
+  }
+  try {
+    const parsed = JSON.parse(raw) as { durations?: Record<string, unknown> };
+    const entries = Object.entries(parsed.durations ?? {})
+      .filter((entry): entry is [string, number] =>
+        typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0);
+    if (entries.length === 0) return null;
+    return Object.fromEntries(entries);
+  } catch (error) {
+    // A corrupt seed (bad merge) must cost a warning, never the suite.
+    console.error(`[test:free] WARNING: corrupt durations seed ${file} (${(error as Error).message}) — falling back to hash sharding`);
+    return null;
+  }
+}
+
+export interface PackedShards {
+  shards: string[][];
+  /** Predicted total per shard, aligned with `shards` — feeds walls + logs. */
+  predictedMs: number[];
+}
+
+/**
+ * Longest-processing-time-first bin packing: files sorted by predicted
+ * duration (desc, path-stable tiebreak) each go to the currently-lightest
+ * shard. Deterministic for a given (files, shardCount, durations).
+ */
+export function packShardsByDuration(
+  files: string[],
+  shardCount: number,
+  durations: Record<string, number>,
+): PackedShards {
+  if (!Number.isInteger(shardCount) || shardCount <= 0) {
+    throw new Error(`Shard count must be a positive integer. Received: ${shardCount}`);
+  }
+  const known = files
+    .map((f) => durations[normalizeRelativePath(f)])
+    .filter((v): v is number => typeof v === 'number')
+    .sort((a, b) => a - b);
+  // Unknown files get the 75th percentile of known durations: pessimistic, so
+  // LPT places them early and a surprise long-runner can't recreate the tail.
+  const fallback = known.length > 0 ? known[Math.min(known.length - 1, Math.floor(known.length * 0.75))] : 1;
+  const predicted = (f: string): number => durations[normalizeRelativePath(f)] ?? fallback;
+
+  const ordered = [...files].sort((a, b) => predicted(b) - predicted(a) || (a < b ? -1 : 1));
+  const shards = Array.from({ length: shardCount }, () => [] as string[]);
+  const loads = new Array<number>(shardCount).fill(0);
+  for (const file of ordered) {
+    let lightest = 0;
+    for (let i = 1; i < shardCount; i += 1) {
+      if (loads[i] < loads[lightest]) lightest = i;
+    }
+    shards[lightest].push(file);
+    loads[lightest] += predicted(file);
+  }
+  return { shards: shards.map((s) => s.sort()), predictedMs: loads };
+}
+
 export interface BuildShardArgsOptions {
   /**
    * Pass bun's --parallel (worker-per-file, implies --isolate). No production
@@ -541,6 +637,7 @@ export function buildShardArgs(files: string[], options: BuildShardArgsOptions =
 type CliOptions = {
   dryRun: boolean;
   listOnly: boolean;
+  recordDurations: boolean;
   windowsOnly: boolean;
   verbose: boolean;
   shardCount: number;
@@ -553,6 +650,7 @@ type CliOptions = {
 function parseCliOptions(argv: string[]): CliOptions {
   let dryRun = false;
   let listOnly = false;
+  let recordDurations = false;
   let windowsOnly = false;
   let verbose = false;
   let shardCount = DEFAULT_SHARD_COUNT;
@@ -564,6 +662,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     const arg = argv[index];
     if (arg === '--dry-run') { dryRun = true; continue; }
     if (arg === '--list') { listOnly = true; continue; }
+    if (arg === '--record-durations') { recordDurations = true; continue; }
     if (arg === '--windows-only') { windowsOnly = true; continue; }
     if (arg === '--verbose') { verbose = true; continue; }
     if (arg === '--shards') {
@@ -591,7 +690,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { dryRun, listOnly, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs, wallTimeoutExplicit };
+  return { dryRun, listOnly, recordDurations, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs, wallTimeoutExplicit };
 }
 
 function formatShardSummary(shards: string[][]): string[] {
@@ -1153,6 +1252,63 @@ function exitCodeFor(status: FreeShardStatus): number {
   return status === 'timed-out' ? 124 : 1;
 }
 
+/**
+ * `--record-durations`: time every file in its own child (exact per-file wall,
+ * immune to bun's stream buffering) and write the committed seed atomically.
+ * Occasional + manual by design — CI never records (a hint refreshed by a
+ * human beats per-run churn), and the runtime (~serial suite / jobs) is fine
+ * for an operation run a few times a quarter.
+ */
+async function recordFreeTestDurations(files: string[], jobs: number): Promise<number> {
+  const durations: Record<string, number> = {};
+  const failed: string[] = [];
+  let cursor = 0;
+  console.log(`[test:free] recording per-file durations: ${files.length} files across ${jobs} workers`);
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= files.length) return;
+      const file = files[index];
+      const started = Date.now();
+      const child = spawn('bun', ['test', file, `--timeout=${FREE_TEST_TIMEOUT_MS}`], {
+        cwd: ROOT,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: { ...process.env, GSTACK_HEADLESS: '1' },
+      });
+      const code = await new Promise<number>((resolve) => {
+        const timer = setTimeout(() => { child.kill('SIGKILL'); }, wallTimeoutForShard(1));
+        child.on('close', (c) => { clearTimeout(timer); resolve(c ?? 1); });
+        child.on('error', () => { clearTimeout(timer); resolve(1); });
+      });
+      durations[normalizeRelativePath(file)] = Date.now() - started;
+      if (code !== 0) failed.push(file);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, jobs) }, () => worker()));
+
+  const target = process.env.GSTACK_FREE_TEST_DURATIONS ?? path.join(ROOT, FREE_TEST_DURATIONS_FILE);
+  const payload = {
+    version: 1,
+    recordedAt: new Date().toISOString(),
+    durations: Object.fromEntries(Object.entries(durations).sort(([a], [b]) => (a < b ? -1 : 1))),
+  };
+  // Atomic temp+rename (capture-context-budget's pattern): a killed recorder
+  // must never leave a truncated seed for loadFreeTestDurations to warn on.
+  const tmp = `${target}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
+  fs.renameSync(tmp, target);
+  console.log(`[test:free] wrote ${Object.keys(durations).length} durations to ${path.relative(ROOT, target)}`);
+  if (failed.length > 0) {
+    // Failures still recorded (a red file's duration is still a real cost),
+    // but surfaced loudly — recording from a broken tree deserves a look.
+    console.error(`[test:free] WARNING: ${failed.length} file(s) failed while recording:`);
+    for (const f of failed) console.error(`  ✗ ${f}`);
+    return 1;
+  }
+  return 0;
+}
+
 async function main(): Promise<number> {
   const options = parseCliOptions(process.argv.slice(2));
   const allFiles = collectFreeTestFiles();
@@ -1178,6 +1334,11 @@ async function main(): Promise<number> {
     console.log(`\nDiscovered ${files.length} test files.`);
     for (const file of files) console.log(`  ${file}`);
     return 0;
+  }
+
+  if (options.recordDurations) {
+    const jobs = Math.max(1, Math.min(MAX_FULL_SUITE_JOBS, os.cpus().length - RESERVED_CPUS));
+    return recordFreeTestDurations(files, jobs);
   }
 
   if (options.dryRun) {
@@ -1223,15 +1384,29 @@ async function main(): Promise<number> {
   // serial shard, so no concurrent shard ever reads a half-regenerated tree.
   const mutators = files.filter((f) => f in TREE_MUTATING);
   const readers = files.filter((f) => !(f in TREE_MUTATING));
-  const shards = assignFilesToShards(readers, jobs);
+  const durations = loadFreeTestDurations();
+  const packed = durations ? packShardsByDuration(readers, jobs, durations) : null;
+  const shards = packed ? packed.shards : assignFilesToShards(readers, jobs);
   const totalShards = jobs + (mutators.length > 0 ? 1 : 0);
   console.log(`[test:free] full suite: ${readers.length} files across ${jobs} shard processes`
+    + (packed ? ' (duration-packed)' : '')
     + (mutators.length > 0 ? `, then ${mutators.length} tree-mutating file(s) serially` : ''));
+  if (packed) {
+    // One line per shard so a packing regression is diagnosable from any log.
+    packed.predictedMs.forEach((ms, i) => {
+      console.log(`[test:free]   shard ${i + 1}: ${shards[i].length} files, predicted ~${Math.round(ms / 1000)}s`);
+    });
+  }
   const shardTimeout = (fileCount: number): number =>
     options.wallTimeoutExplicit ? options.wallTimeoutMs : wallTimeoutForShard(fileCount, options.wallTimeoutMs);
   const outcomes = await Promise.all(
     shards.map((shardFiles, index) => runFreeShard(shardFiles, index + 1, totalShards, {
-      wallTimeoutMs: shardTimeout(shardFiles.length),
+      // Packed shards get duration-aware walls: LPT decouples file count from
+      // cost BY DESIGN, so the 5s/file heuristic would undersize a shard
+      // holding few expensive files.
+      wallTimeoutMs: packed && !options.wallTimeoutExplicit
+        ? wallTimeoutForPackedShard(packed.predictedMs[index], options.wallTimeoutMs)
+        : shardTimeout(shardFiles.length),
       verbose: options.verbose,
     })),
   );

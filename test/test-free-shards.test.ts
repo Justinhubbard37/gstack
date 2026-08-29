@@ -23,6 +23,12 @@ import {
   TREE_MUTATING,
   WORKER_HOSTILE,
 } from '../scripts/test-free-shards';
+import {
+  loadFreeTestDurations,
+  packShardsByDuration,
+  wallTimeoutForPackedShard,
+  DEFAULT_WALL_TIMEOUT_MS as WALL_BASE_MS,
+} from '../scripts/test-free-shards';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 
@@ -564,5 +570,84 @@ describe('test-free-shards: wall-timeout scaling', () => {
 
   test('an explicit base above the scaled value wins', () => {
     expect(wallTimeoutForShard(10, 10 * 60_000)).toBe(10 * 60_000);
+  });
+});
+
+
+describe('test-free-shards: duration-aware packing (full-suite LPT)', () => {
+  const files = ['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts'];
+
+  test('LPT balances by cost, not count', () => {
+    const durations = {
+      'test/a.test.ts': 90_000, // one giant file
+      'test/b.test.ts': 30_000,
+      'test/c.test.ts': 30_000,
+      'test/d.test.ts': 30_000,
+    };
+    const { shards, predictedMs } = packShardsByDuration(files, 2, durations);
+    // The giant file gets its own shard; the three smalls share the other.
+    expect(shards.map((s) => s.length).sort()).toEqual([1, 3]);
+    expect(Math.max(...predictedMs)).toBe(90_000);
+  });
+
+  test('deterministic for identical inputs', () => {
+    const durations = { 'test/a.test.ts': 5, 'test/b.test.ts': 5, 'test/c.test.ts': 5, 'test/d.test.ts': 5 };
+    const one = packShardsByDuration(files, 3, durations);
+    const two = packShardsByDuration([...files].reverse(), 3, durations);
+    expect(one.shards).toEqual(two.shards);
+  });
+
+  test('unknown files get 75th-percentile pessimism (placed early, never the tail)', () => {
+    const durations = {
+      'test/a.test.ts': 1_000,
+      'test/b.test.ts': 2_000,
+      'test/c.test.ts': 100_000,
+      // test/d.test.ts unrecorded → p75 of known = 100_000 (pessimistic)
+    };
+    const { shards } = packShardsByDuration(files, 2, durations);
+    // The unknown must NOT be packed as if free: it lands opposite the
+    // 100s file, not stacked onto it.
+    const shardOfC = shards.findIndex((s) => s.includes('test/c.test.ts'));
+    const shardOfD = shards.findIndex((s) => s.includes('test/d.test.ts'));
+    expect(shardOfC).not.toBe(shardOfD);
+  });
+
+  test('every file lands in exactly one shard', () => {
+    const { shards } = packShardsByDuration(files, 3, {});
+    expect(shards.flat().sort()).toEqual([...files].sort());
+  });
+
+  test('invalid shard count throws', () => {
+    expect(() => packShardsByDuration(files, 0, {})).toThrow();
+  });
+
+  test('corrupt seed falls back to null (hash sharding), never throws', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'durations-seed-'));
+    const seedPath = path.join(dir, 'seed.json');
+    fs.writeFileSync(seedPath, '{ definitely not json');
+    const prev = process.env.GSTACK_FREE_TEST_DURATIONS;
+    process.env.GSTACK_FREE_TEST_DURATIONS = seedPath;
+    try {
+      expect(loadFreeTestDurations()).toBeNull();
+      // Missing file: silent null (fresh checkouts are normal).
+      process.env.GSTACK_FREE_TEST_DURATIONS = path.join(dir, 'missing.json');
+      expect(loadFreeTestDurations()).toBeNull();
+      // Valid seed round-trips, non-numeric entries dropped.
+      fs.writeFileSync(seedPath, JSON.stringify({ version: 1, durations: { 'test/a.test.ts': 42, bad: 'nope' } }));
+      process.env.GSTACK_FREE_TEST_DURATIONS = seedPath;
+      expect(loadFreeTestDurations()).toEqual({ 'test/a.test.ts': 42 });
+    } finally {
+      if (prev === undefined) delete process.env.GSTACK_FREE_TEST_DURATIONS;
+      else process.env.GSTACK_FREE_TEST_DURATIONS = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('packed shards get duration-aware walls (count heuristic is wrong under LPT)', () => {
+    // A packed shard predicted at 120s must get a 360s wall even though its
+    // file COUNT would produce only the 6-minute base under the old formula.
+    expect(wallTimeoutForPackedShard(120_000)).toBe(Math.max(WALL_BASE_MS, 360_000));
+    // Tiny prediction: base still floors it.
+    expect(wallTimeoutForPackedShard(1_000)).toBe(WALL_BASE_MS);
   });
 });
