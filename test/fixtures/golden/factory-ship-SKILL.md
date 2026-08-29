@@ -1959,6 +1959,11 @@ For each specialist (testing, maintainability, security, performance, data-migra
 - If skipped by gating: `{"dispatched": false, "reason": "gated"}`
 - If not applicable (e.g., red-team not activated): omit from the object
 
+Advisory findings COUNT in the stats `findings` field — the advisory
+carve-out governs the quality score and the findings-count header only.
+Logging simplification's advisories as `findings: 0` would auto-gate the
+lens into permanent silence after 10 dispatches.
+
 Include the Design specialist even though it uses `design-checklist.md` instead of the specialist schema files.
 Remember these stats — you will need them for the review-log entry in Step 5.8.
 
@@ -2354,9 +2359,9 @@ stay agent judgment; the slot pick stays `gstack-next-version`.
 
 4. **Write the bump** (FRESH, or an approved rebump):
    ```bash
-   bun run $GSTACK_ROOT/bin/gstack-version-bump write --version "$NEW_VERSION"
+   bun run $GSTACK_ROOT/bin/gstack-version-bump write --version "$NEW_VERSION" --regen-digest
    ```
-   The CLI validates the version pattern (4-digit `MAJOR.MINOR.PATCH.MICRO`; 3-digit for repos whose pinned version source uses plain semver) and writes VERSION, the manifest, and the manifest's npm lockfiles (`package-lock.json` / `npm-shrinkwrap.json`) when they already exist — never created. The manifest is resolved as `--package-json-path` → `.gstack/package-json-path` → `./package.json`, so a repo whose only Node package lives in a subdirectory (`web/`, `app/`) is covered by a one-line pin instead of silently getting a VERSION-only bump. npm rejects 4-component versions, so the manifest and lockfiles carry the npm-valid 3-digit translation (`1.67.0.0` → `1.67.0`); VERSION stays the 4-digit source of truth and classify judges drift against the translated form. On a half-write it exits 3 — re-run, and classify will report DRIFT_STALE_PKG for `repair` to fix.
+   The CLI validates the version pattern (4-digit `MAJOR.MINOR.PATCH.MICRO`; 3-digit for repos whose pinned version source uses plain semver) and writes VERSION, the manifest, and the manifest's npm lockfiles (`package-lock.json` / `npm-shrinkwrap.json`) when they already exist — never created. `--regen-digest` additionally reruns the repo's own `scripts/gen-agents-digest.ts` when present (gstack repo only — its committed digest embeds VERSION and is freshness-gated), a no-op everywhere else; /ship passes it deliberately because shipping a repo already executes that repo's code (its test suite). The manifest is resolved as `--package-json-path` → `.gstack/package-json-path` → `./package.json`, so a repo whose only Node package lives in a subdirectory (`web/`, `app/`) is covered by a one-line pin instead of silently getting a VERSION-only bump. npm rejects 4-component versions, so the manifest and lockfiles carry the npm-valid 3-digit translation (`1.67.0.0` → `1.67.0`); VERSION stays the 4-digit source of truth and classify judges drift against the translated form. On a half-write it exits 3 — re-run, and classify will report DRIFT_STALE_PKG for `repair` to fix.
 
 5. **Record the release decision** (durable cross-session memory). The bump level is a real decision the next session should not re-derive blind:
    ```bash
@@ -2575,15 +2580,17 @@ EOF
 The evidence ledger is the mechanical arm of this law. Check it FIRST:
 
 ```bash
-$GSTACK_ROOT/bin/gstack-evidence check --label tests --expect-cmd '<exact tests-lane command from Step 5>' --label vitest --expect-cmd '<exact vitest-lane command from Step 5>' --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json
+$GSTACK_ROOT/bin/gstack-evidence check --label tests --expect-cmd '<exact tests-lane command from Step 5>' --label vitest --expect-cmd '<exact vitest-lane command from Step 5>' --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json,agents-digest/gstack-AGENTS.md
 ```
 
 Pass each `--expect-cmd` the exact command string the wrapped Step 5 lane ran —
 that binds FRESH to the real suite (a green `echo ok` recorded under the label
 can never satisfy the check). Residual risk, accepted: `package.json` sits on
 the allow-list because Step 12's version bump writes its version field between
-the test run and this gate; a behavior-changing package.json edit in that
-window would not invalidate evidence. The check is advisory either way.
+the test run and this gate (and, in the gstack repo, regenerates the
+version-stamped `agents-digest/gstack-AGENTS.md`); a behavior-changing
+package.json edit in that window would not invalidate evidence. The check is
+advisory either way.
 
 - **Every line FRESH (exit 0):** the recorded runs were green and the working-tree
   content is identical to what was tested, modulo the allow-listed release files

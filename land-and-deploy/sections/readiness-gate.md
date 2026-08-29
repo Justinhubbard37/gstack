@@ -97,7 +97,7 @@ and tell the user: "I found and fixed a few issues during the review. The fixes 
 Check the evidence ledger first:
 
 ```bash
-~/.claude/skills/gstack/bin/gstack-evidence check --label tests --expect-cmd '<the project test command>' --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json
+~/.claude/skills/gstack/bin/gstack-evidence check --label tests --expect-cmd '<the project test command>' --max-age 24 --allow-paths CHANGELOG.md,VERSION,package.json,agents-digest/gstack-AGENTS.md
 ```
 
 (The `--expect-cmd` string must be the exact command the recorded run used —
