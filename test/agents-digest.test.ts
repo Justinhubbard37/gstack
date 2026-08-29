@@ -56,8 +56,11 @@ describe('agents-digest', () => {
 
   test('setup never copies the digest onto a user AGENTS.md (print-path only)', () => {
     const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
-    // The explainer arms print the digest path…
-    expect(setup).toContain('agents-digest/gstack-AGENTS.md');
+    // The explainer arms print the digest path, anchored to the script's own
+    // directory — a $(pwd)-relative path prints a nonexistent file whenever
+    // setup is invoked from anywhere but the repo root.
+    expect(setup).toContain('$SOURCE_GSTACK_DIR/agents-digest/gstack-AGENTS.md');
+    expect(setup).not.toMatch(/\$\(pwd\)\/agents-digest/);
     // …and no line may write to an AGENTS.md destination. Covers direct
     // write verbs (cp/ln/mv/tee/install/rsync/dd/truncate), > and >>
     // redirects, and the laundered form (dest="$proj/AGENTS.md"; … > "$dest")
@@ -69,7 +72,7 @@ describe('agents-digest', () => {
       .filter((l) =>
         /(^|\s|\|)(cp|ln|mv|tee|install|rsync|dd|truncate)\s[^#]*AGENTS\.md/.test(l)
         || />{1,2}\s*"?[^"\s]*AGENTS\.md/.test(l)
-        || /^\s*\w+=[^#]*\/AGENTS\.md/.test(l));
+        || /^\s*(?:(?:local|export|declare|readonly|typeset)\s+)?\w+=[^#]*\/AGENTS\.md/.test(l));
     expect(writers).toEqual([]);
   });
 
