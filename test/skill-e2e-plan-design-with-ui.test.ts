@@ -43,6 +43,8 @@ describeE2E('/plan-design-review with UI scope (gate)', () => {
 
       const session = await launchClaudePty({
         permissionMode: 'plan',
+        // LIVE-REPO CWD: PTY session needs the repo cwd — skill registry,
+        // hermetic pre-trusted dir, and the repo-relative fixture path above.
         cwd: ROOT,
         timeoutMs: 720_000,
         seedSkills: true,

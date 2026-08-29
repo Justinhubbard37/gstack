@@ -67,6 +67,8 @@ describeE2E('AUTO_DECIDE opt-in preserved under Conductor flags (periodic)', () 
       //    claude would resolve). The preference file path keys on this slug.
       const slugBin = path.join(ROOT, 'bin', 'gstack-slug');
       const slugRes = spawnSync(slugBin, [], {
+        // LIVE-REPO CWD: gstack-slug resolves the slug from this repo's git
+        // remote — must match what the spawned claude (repo cwd) resolves.
         cwd: ROOT,
         env: { ...process.env, GSTACK_HOME: tmpHome },
         encoding: 'utf-8',

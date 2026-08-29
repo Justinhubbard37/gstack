@@ -19,6 +19,8 @@ describeE2E('/plan-design-review AskUserQuestion floor (periodic)', () => {
         skillName: 'plan-design-review',
         slashCommand: '/plan-design-review',
         followUpPrompt: FORCING_FLOOR_DESIGN,
+        // LIVE-REPO CWD: PTY session needs the repo cwd — gstack skill
+        // registry + hermetic pre-trusted dir (hermetic-env trustedDirs).
         cwd: process.cwd(),
         timeoutMs: 600_000,
         env: { QUESTION_TUNING: 'false', EXPLAIN_LEVEL: 'default' },

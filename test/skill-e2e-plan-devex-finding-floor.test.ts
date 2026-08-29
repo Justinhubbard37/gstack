@@ -19,6 +19,8 @@ describeE2E('/plan-devex-review AskUserQuestion floor (gate)', () => {
         skillName: 'plan-devex-review',
         slashCommand: '/plan-devex-review',
         followUpPrompt: FORCING_FLOOR_DEVEX,
+        // LIVE-REPO CWD: PTY session needs the repo cwd — gstack skill
+        // registry + hermetic pre-trusted dir (hermetic-env trustedDirs).
         cwd: process.cwd(),
         timeoutMs: 600_000,
         env: { QUESTION_TUNING: 'false', EXPLAIN_LEVEL: 'default' },

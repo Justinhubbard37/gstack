@@ -122,6 +122,8 @@ describeIfSelected(
             '--respect-detection',
           ],
           {
+            // LIVE-REPO CWD: gen-skill-docs regenerates the in-repo
+            // office-hours SKILL.md + section (snapshotted/restored in finally).
             cwd: ROOT,
             env: { ...process.env, GSTACK_HOME: tmpHome },
             stdio: ['ignore', 'pipe', 'pipe'],

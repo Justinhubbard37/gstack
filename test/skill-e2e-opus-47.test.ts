@@ -67,6 +67,8 @@ function mkEvalRoot(suffix: string, includeOverlay: boolean): string {
   const result = spawnSync(
     'bun',
     ['run', 'scripts/gen-skill-docs.ts', '--model', includeOverlay ? 'opus-4-7' : 'claude'],
+    // LIVE-REPO CWD: gen-skill-docs reads .tmpl sources and regenerates the
+    // in-repo SKILL.md files (restored to default in afterAll below).
     { cwd: ROOT, stdio: 'pipe', encoding: 'utf-8', timeout: 60_000 },
   );
   if (result.status !== 0) {
@@ -169,6 +171,8 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
     // whichever model ran last. Reset to the default (claude) so the tree
     // matches what would be checked in.
     spawnSync('bun', ['run', 'scripts/gen-skill-docs.ts'], {
+      // LIVE-REPO CWD: restores the in-repo SKILL.md files to the default
+      // model render after mkEvalRoot's --model regens.
       cwd: ROOT,
       stdio: 'pipe',
       timeout: 60_000,

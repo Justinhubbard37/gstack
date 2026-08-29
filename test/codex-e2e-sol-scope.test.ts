@@ -125,6 +125,9 @@ describeSol('GPT-5.6 Sol full-artifact scope termination', () => {
     const generated = spawnSync(
       'bun',
       ['run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--model', 'gpt-5.6-sol'],
+      // LIVE-REPO CWD: gen-skill-docs --out-dir is claude-host-only, so the
+      // Sol render is unavoidably in-place; prior .agents tree is snapshotted
+      // above and restored below.
       { cwd: ROOT, encoding: 'utf8', timeout: 120_000 },
     );
     if (generated.status !== 0) {
