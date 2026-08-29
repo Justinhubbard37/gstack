@@ -58,12 +58,40 @@ describe('agents-digest', () => {
     const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
     // The explainer arms print the digest path…
     expect(setup).toContain('agents-digest/gstack-AGENTS.md');
-    // …and no line may write to an AGENTS.md destination. A cp/ln/mv or a
-    // shell redirect into AGENTS.md would clobber user content on re-run.
+    // …and no line may write to an AGENTS.md destination. Covers direct
+    // write verbs (cp/ln/mv/tee/install/rsync/dd/truncate), > and >>
+    // redirects, and the laundered form (dest="$proj/AGENTS.md"; … > "$dest")
+    // by flagging any variable assigned from an AGENTS.md path. echo/printf
+    // lines that merely PRINT the path stay legal.
     const writers = setup
       .split('\n')
-      .filter((l) => /(^|\s)(cp|ln|mv)\s[^#]*AGENTS\.md|>\s*"?[^"\s]*AGENTS\.md/.test(l));
+      .filter((l) => !/^\s*#/.test(l))
+      .filter((l) =>
+        /(^|\s|\|)(cp|ln|mv|tee|install|rsync|dd|truncate)\s[^#]*AGENTS\.md/.test(l)
+        || />{1,2}\s*"?[^"\s]*AGENTS\.md/.test(l)
+        || /^\s*\w+=[^#]*\/AGENTS\.md/.test(l));
     expect(writers).toEqual([]);
+  });
+
+  test('the digest reuse-ladder text stays in lockstep with the preamble resolver', () => {
+    // The ladder and root-cause rules are hand-rendered into the digest (it
+    // ships to hosts that never load the preamble). The freshness test above
+    // pins digest-vs-generator; this pins generator-vs-resolver so an edit to
+    // scripts/resolvers/preamble/generate-search-before-building.ts fails CI
+    // instead of silently shipping a stale digest.
+    const { content } = generateAgentsDigest();
+    const resolver = fs.readFileSync(
+      path.join(ROOT, 'scripts', 'resolvers', 'preamble', 'generate-search-before-building.ts'),
+      'utf-8',
+    );
+    for (const shared of [
+      'stop at the first rung that holds',
+      'Then build the complete version of what remains',
+      'one guard in the shared function beats a guard in every caller',
+    ]) {
+      expect(content).toContain(shared);
+      expect(resolver).toContain(shared);
+    }
   });
 
   test('instruction-tier hosts declare the digest in host config', () => {
