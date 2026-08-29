@@ -514,6 +514,18 @@ coverage fill. Remaining, in rough priority order:
   post-migration flake data exists (the Codex outside-voice's "green means
   green is not delivered while paid stays advisory" point — correct, and
   deliberately a branch-protection decision, not repo YAML). Effort S.
+- **P2 — browse daemon lifecycle vs in-suite browsers (top remaining free-suite
+  flake).** The post-#994 daemon deliberately outlives its parent and lingers
+  across test FILES in a shard process; a later file's browser use can then
+  fight it ('[browse] FATAL: Chromium process crashed' + 5s element-wait
+  timeouts). Receipts: commands+snapshot in one bun process fails identically
+  WITH and WITHOUT per-file CHROMIUM_PROFILE isolation (pre-existing; PR
+  #2721 triage), and CI shard 1 on d9b78b5a died at model-overlay-sonnet-5
+  after a daemon-spawning file. Per-shard + per-file profile isolation
+  (landed) removed the cross-shard kills; the intra-shard daemon handoff
+  needs a real design: tests that spawn the daemon should stop it in
+  afterAll, or the daemon should detect a foreign CHROMIUM_PROFILE env and
+  refuse reuse. Effort M.
 - **P2 — browse daemon /tmp-namespace hardening.** Every file-path transport
   to the daemon (eval <file>, load-html --from-file, pdf output, upload,
   cookie-import) assumes client and daemon share one /tmp view; a sandboxed
