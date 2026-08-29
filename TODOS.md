@@ -557,6 +557,13 @@ coverage fill. Remaining, in rough priority order:
   watch across runs. (c) `tpa-apple-ban` failed only on retry attempt 2 —
   flake watch. All three are the coverage contract WORKING (these files ran
   in no CI lane before). Effort S each.
+- **P2 — make-pdf image promotion is per-render nondeterministic on CI**:
+  two renders of the same fixture SECONDS apart in one CI job produced 2 vs
+  3 landscape pages (an image's promotion depends on load timing at render).
+  The landscape gates now assert content/presence invariants, but the
+  underlying render race is a product quality issue (a user's alt-hinted
+  image can silently miss its landscape promotion). Receipts: PR #2721
+  free-tests runs on heads ab549353 + c49b2ece. Effort S.
 - **P3 — duration-weighted slice assignment** if parity data shows slice
   walls diverging >1.5x (round-robin today; eval-store durations exist).
   Effort S.
