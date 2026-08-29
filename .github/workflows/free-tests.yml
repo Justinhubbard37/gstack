@@ -82,9 +82,14 @@ jobs:
       # Headed-browser tests (handoff, extension sidepanel DOM) need a real
       # DISPLAY — first Linux run failed with Playwright's "launched a headed
       # browser without an XServer" banner. xvfb-run below provides it;
-      # x11-utils ships xdpyinfo for display probing.
-      - name: Install Xvfb + X11 utilities
-        run: sudo apt-get install -y --no-install-recommends xvfb x11-utils
+      # x11-utils ships xdpyinfo for display probing. poppler-utils ships
+      # pdftotext/pdffonts/pdftoppm for the make-pdf e2e gates;
+      # fonts-noto-color-emoji is the emoji-gate's render font (playwright
+      # --with-deps usually installs it, but the gate must not depend on a
+      # transitive package list). Fonts must land BEFORE the first browse
+      # daemon launch — Chromium snapshots fontconfig at startup.
+      - name: Install Xvfb + X11 utilities + gate tools
+        run: sudo apt-get install -y --no-install-recommends xvfb x11-utils poppler-utils fonts-noto-color-emoji
 
       - name: Configure git identity (tests init temp repos)
         run: |
@@ -108,8 +113,22 @@ jobs:
       - name: Build server-node bundle (loaded by browse cli imports)
         run: bash browse/scripts/build-node-server.sh
 
+      # Narrowed gate build: the make-pdf e2e gates probe make-pdf/dist/pdf,
+      # browse/dist/browse, and the diagram-render bundle, then self-skip when
+      # absent — which made them silently skip on Linux for their whole life
+      # (this lane never built binaries). Full `bun run build` compiles five
+      # binaries and would add ~60-90s to the ONLY required check; the gates
+      # need exactly these three artifacts.
+      - name: Build gate binaries (make-pdf e2e gates)
+        run: bun run build:gates
+
+      # GSTACK_EXPECT_BINARIES=1 arms make-pdf/test/e2e/ci-prereqs.test.ts:
+      # if a future edit drops the gate build (or poppler), the lane FAILS
+      # instead of the gates silently self-skipping back to false green.
       - name: Run free suite
         run: xvfb-run -a bun run test:free
+        env:
+          GSTACK_EXPECT_BINARIES: "1"
 
       # The runner streams the full child output to per-run logs under the OS
       # tmpdir and prints only the quiet contract to the console. Without this

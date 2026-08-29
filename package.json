@@ -14,6 +14,7 @@
     "dev:make-pdf": "bun run make-pdf/src/cli.ts",
     "dev:design": "bun run design/src/cli.ts",
     "build:diagram-render": "cd lib/diagram-render && bun install && bun run scripts/build.ts",
+    "build:gates": "bun build --compile make-pdf/src/cli.ts --outfile make-pdf/dist/pdf && bun build --compile browse/src/cli.ts --outfile browse/dist/browse && bun run build:diagram-render",
     "gen:skill-docs": "bun run scripts/gen-skill-docs.ts",
     "gen:skill-docs:user": "bun run scripts/gen-skill-docs.ts --respect-detection",
     "dev": "bun run browse/src/cli.ts",
