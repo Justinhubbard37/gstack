@@ -260,6 +260,10 @@ describe('test-free-shards: strict shard execution', () => {
       log: (l) => lines.push(l),
     });
     expect(outcome.status).toBe('passed');
+    // Mutation-caught gap: bun strips types at runtime, so a missing
+    // failingFiles here feeds undefined into the flaky-retry flatMap.
+    expect(outcome.failingFiles).toEqual([]);
+    expect(outcome.unattributedFailures).toBe(0);
     expect(lines.some((l) => /^\[test:free\] shard 7\/20: 0 files, 0s, pass$/.test(l))).toBe(true);
   });
 

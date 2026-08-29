@@ -94,6 +94,23 @@ describe('test-free-shards: FreeShardOutcome.failingFiles (flaky-retry feed)', (
     const outcome = await runFreeShard(['planted'], 1, 1, { commandFor, quiet: true, log: () => {} });
     expect(outcome.status).toBe('failed');
     expect(outcome.failingFiles).toEqual(['test/planted.test.ts']);
+    expect(outcome.unattributedFailures).toBe(0); // fully attributed — retry-eligible
+  });
+
+  test('a MIXED shard (one attributed + one headerless failure) is flagged unattributable — retry must not mask the headerless one', async () => {
+    // The retry gate must not equate "some failure attributed" with "all
+    // failures attributed": re-running only test/planted.test.ts and passing
+    // would report the suite green over the headerless failure.
+    const commandFor = commandPrinting([
+      failLine('headerless failure before any file chunk'),
+      'test/planted.test.ts:',
+      failLine('planted failure'),
+      summary(2, 1),
+    ]);
+    const outcome = await runFreeShard(['mixed'], 1, 1, { commandFor, quiet: true, log: () => {} });
+    expect(outcome.status).toBe('failed');
+    expect(outcome.failingFiles).toEqual(['test/planted.test.ts']);
+    expect(outcome.unattributedFailures).toBeGreaterThan(0);
   });
 
   test('failures across two files attribute both; a crashed worker file joins the set deduped', async () => {
@@ -128,5 +145,18 @@ describe('test-free-shards: FreeShardOutcome.failingFiles (flaky-retry feed)', (
     const outcome = await runFreeShard(['truncated'], 1, 1, { commandFor, quiet: true, log: () => {} });
     expect(outcome.status).toBe('failed');
     expect(outcome.failingFiles).toEqual([]);
+    expect(outcome.unattributedFailures).toBeGreaterThan(0); // truncation counts as unattributable evidence
+  });
+
+  test('a truncated run WITH an attributed failure is still unattributable — tests after the cut never ran', async () => {
+    const commandFor = commandPrinting([
+      'test/planted.test.ts:',
+      failLine('planted failure'),
+      // no terminal summary: the child died mid-suite
+    ]);
+    const outcome = await runFreeShard(['planted', 'neverran'], 1, 1, { commandFor, quiet: true, log: () => {} });
+    expect(outcome.status).toBe('failed');
+    expect(outcome.failingFiles).toEqual(['test/planted.test.ts']);
+    expect(outcome.unattributedFailures).toBeGreaterThan(0);
   });
 });

@@ -945,6 +945,15 @@ export interface FreeShardOutcome {
    * meaningless without knowing what to re-run).
    */
   failingFiles: string[];
+  /**
+   * Count of failure evidence the retry pass CANNOT re-run by file: fail
+   * lines seen before any file-chunk header, unhandled errors between tests,
+   * and a truncated run (no terminal summary). Nonzero vetoes the flaky
+   * retry for the whole run — retrying only failingFiles would re-run a
+   * subset and mask the rest as a FLAKY-PASS, re-opening the silent-truncation
+   * hole the strict classifier exists to close.
+   */
+  unattributedFailures: number;
 }
 
 export interface ShardCommand {
@@ -1023,7 +1032,7 @@ export async function runFreeShard(
   // so an unoccupied index must not fail or shift work to a different runner.
   if (files.length === 0) {
     const outcome: FreeShardOutcome = {
-      shard: shardNumber, files: [], status: 'passed', exitCode: 0, elapsedMs: 0, groupPid: null, failingFiles: [],
+      shard: shardNumber, files: [], status: 'passed', exitCode: 0, elapsedMs: 0, groupPid: null, failingFiles: [], unattributedFailures: 0,
     };
     log(shardEpilogue(outcome, totalShards));
     return outcome;
@@ -1160,8 +1169,12 @@ export async function runFreeShard(
     ...report.failures.map((f) => f.file).filter((f): f is string => !!f),
     ...report.crashedFiles,
   ])];
+  const unattributedFailures = status === 'passed' ? 0
+    : report.failures.filter((f) => !f.file).length
+      + report.unhandledErrors.length
+      + (report.sawTerminalSummary ? 0 : 1);
   const outcome: FreeShardOutcome = {
-    shard: shardNumber, files, status, exitCode, elapsedMs: Date.now() - startedAt, groupPid, failingFiles,
+    shard: shardNumber, files, status, exitCode, elapsedMs: Date.now() - startedAt, groupPid, failingFiles, unattributedFailures,
   };
   log(shardEpilogue(outcome, totalShards));
   for (const line of buildRunEpilogue(status, report, outcome.elapsedMs, logPath)) log(line);
@@ -1305,7 +1318,12 @@ async function main(): Promise<number> {
   ) {
     const flakyFiles = [...new Set(outcomes.flatMap((o) => o.failingFiles))]
       .filter((f): f is string => typeof f === 'string' && f.length > 0);
-    const allAttributed = outcomes.every((o) => o.status === 'passed' || o.failingFiles.length > 0);
+    // "Fully attributed" is per-failure, not per-shard: a shard with one
+    // attributed failure PLUS a headerless failure / unhandled error /
+    // truncated run must veto the retry — re-running only failingFiles would
+    // mask the unattributable evidence as a FLAKY-PASS.
+    const allAttributed = outcomes.every((o) => o.status === 'passed'
+      || (o.failingFiles.length > 0 && o.unattributedFailures === 0));
     if (allAttributed && flakyFiles.length > 0 && flakyFiles.length <= RETRY_CAP) {
       console.log(`[test:free] flaky-retry: re-running ${flakyFiles.length} failing file(s) once, serially: ${flakyFiles.join(', ')}`);
       const retryOutcome = await runFreeShard(flakyFiles, totalShards + 1, totalShards + 1, {
