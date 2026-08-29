@@ -482,6 +482,71 @@ audit trail lives in Aside.
 
 ## Test infrastructure
 
+### P1: skillify gate test red — HOME-override sessions never discover project skills (pre-existing)
+
+**What:** `test/skill-e2e-skillify.test.ts` `skillify-provenance-refusal` fails
+on BOTH this branch and origin/main @ b5a951e6 (proven 2026-08-29: identical
+2-turn `Unknown skill: skillify` transcripts). Every test in that file passing
+`env: { HOME: workDir }` gets ZERO seeded project skills in the session init
+(claude CLI 2.1.237); the passing siblings recover by Reading the SKILL.md
+directly, the refusal test's agent stops at the Skill error. Fix the harness
+(seed skills wherever HOME-overridden discovery looks, or drop the HOME
+override and pass the write target another way), or report upstream if
+project-scope `.claude/skills` discovery genuinely keys off HOME.
+
+**Why:** A gate-tier safety test that is red for environmental reasons trains
+people to ignore gate reds.
+
+**Effort:** S-M (harness). **Priority:** P1 (gate hygiene).
+
+### P2: auq-verbose-vs-carved-ab PRE arm reads a branch-local ref (same fragility class the repetition-cut A/B just fixed)
+
+**What:** `test/helpers/auq-sdk-capture.ts` `verboseSkill()` defaults to git ref
+`ab66193e^`, reachable only from the token-usage-reduction branch — shallow
+clones fail today, all clones fail after that branch is pruned. Vendor the
+pre-carve render as a fixture the way `auq-pre-cut-plan-ceo-review-SKILL.md`
+was vendored for the repetition-cut A/B (v1.73.0.0), or repoint at a
+main-reachable commit.
+
+**Effort:** S. **Priority:** P2 (weekly periodic breaks silently later).
+
+### P3: eval-store harvest as a discriminated union
+
+**What:** `EvalTestEntry.harvest` went all-optional in schema v2 (worktree
+harvests carry patchPath/isDuplicate, arm-benchmark diff-stats carry
+insertions/deletions/net) — compile-time safety for the two writer shapes now
+rests on a comment. Model as `{kind:'worktree',...} | {kind:'diff-stat',...}`.
+Filed from the v1.73 review army (maintainability); deferred at ship time to
+avoid schema churn mid-release.
+
+**Effort:** S. **Priority:** P3.
+
+### P2: WS6-2 dead-frontmatter strip — needs a live host, not a sandbox
+
+**What:** `bin/gstack-context-bill` warns about 14 frontmatter keys "the router
+never reads" (ROUTER_KEYS in lib/context-bill.ts is a hand-maintained guess).
+The approved ponytail-import plan mandates EMPIRICAL verification before
+stripping: remove the keys in a scratch install on a LIVE Claude Code host,
+confirm skill discovery/routing/hooks unchanged, then land via the
+hosts/claude.ts denylist (keys stay in templates for gen tooling). Deferred at
+v1.73 implementation time with a decision-ledger entry (2026-08-28) because the
+cloud sandbox cannot exercise live-host discovery. Savings are hundreds of
+always-on bytes; growth is already capped by the ratchet regardless.
+
+**Effort:** S (once on a live host). **Priority:** P2.
+
+### P3: scope the evidence-gate digest allow-path
+
+**What:** `agents-digest/gstack-AGENTS.md` rides `--allow-paths` in ship's and
+land-and-deploy's evidence checks in EVERY repo, and unlike CHANGELOG/VERSION
+it is instruction-bearing for rules-reading hosts. Scope the exemption to
+"the bump actually regenerated it" (e.g. gstack-evidence learns a
+--allow-if-regenerated flag, or the check compares the digest bytes to a fresh
+generator run). Filed from the v1.73 Claude adversarial pass; the gate is
+advisory and gstack's freshness CI covers the drift case, so P3.
+
+**Effort:** S-M. **Priority:** P3.
+
 ### P2: /context-save worktree-identity hardening (the #2052 residual)
 
 **What:** Persist a stable worktree identity (path hash or worktree name) into
