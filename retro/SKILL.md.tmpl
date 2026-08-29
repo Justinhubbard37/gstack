@@ -319,11 +319,16 @@ matches is the healthy case, not a failure:
 grep -rn "gstack-shortcut(" . \
   --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor \
   --exclude-dir=.claude --exclude-dir=dist \
-  --exclude="SKILL.md" --exclude="*.md.tmpl" 2>/dev/null || true
+  --exclude="SKILL.md" --exclude="*.md.tmpl" 2>/dev/null \
+  | grep -vE "gstack-shortcut\(dec-(<|\*)" || true
 ```
 
 (The exclusions keep docs that merely document the convention — generated
-SKILL.md, templates, skill installs — out of the ledger.)
+SKILL.md, templates, skill installs — out of the ledger, and the trailing
+filter drops placeholder forms like `dec-<id>` / `dec-*` that documentation
+uses. Judgment call on what survives: discard any hit that quotes or tests
+the convention itself — a sample marker in a checklist, resolver source, or
+convention test — rather than marking a real cut corner in this repo's code.)
 
 For each hit, one ledger row: `<file>:<line>, <what was simplified>. ceiling: <X>. upgrade: <Y>.`
 - Markers carry a decision id (`dec-<id>`): join against `gstack-decision-search`
