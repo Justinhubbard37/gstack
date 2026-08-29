@@ -68,6 +68,11 @@ jobs:
   evals:
     runs-on: ubicloud-standard-8
     needs: build-image
+    # Least privilege (mirrors evals.yml): read-only contents, packages:read
+    # for the container-image pull.
+    permissions:
+      contents: read
+      packages: read
     container:
       image: ${{ needs.build-image.outputs.image-tag }}
       credentials:
@@ -110,6 +115,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Fix bun temp
         run: |

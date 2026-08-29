@@ -89,6 +89,13 @@ jobs:
     runs-on: ${{ matrix.suite.runner || 'ubicloud-standard-8' }}
     needs: build-image
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Least privilege for the job that executes PR-authored code with three
+    # provider API keys in env: read-only contents, packages:read for the
+    # container-image pull below. Without this block the job ran on the
+    # repo-default token grant.
+    permissions:
+      contents: read
+      packages: read
     container:
       image: ${{ needs.build-image.outputs.image-tag }}
       credentials:
@@ -176,6 +183,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # Don't write the token into .git/config — this job runs
+          # PR-authored code; nothing in it pushes.
+          persist-credentials: false
 
       # Bun creates root-owned temp dirs during Docker build. GH Actions runs as
       # runner user with HOME=/github/home. Redirect bun's cache to a writable dir.

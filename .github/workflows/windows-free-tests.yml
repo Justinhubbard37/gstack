@@ -31,6 +31,10 @@ concurrency:
   group: windows-free-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Test-only lane — no token writes.
+permissions:
+  contents: read
+
 jobs:
   windows-free-tests:
     # Ubicloud Windows runner (same provider as the Linux evals workflow).
