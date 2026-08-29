@@ -1111,6 +1111,17 @@ export async function runFreeShard(
   env.TMPDIR = childTmp;
   env.TEMP = childTmp;
   env.TMP = childTmp;
+  // Per-shard Chromium profile (same isolation idea as TMPDIR): nine test
+  // files launch in-process persistent contexts or daemons that default to
+  // the SHARED ~/.gstack/chromium-profile, and two concurrent shards on one
+  // profile dir kill each other's browser — observed live on CI once
+  // duration packing recomposed shards (handoff's launchPersistentContext
+  // died "Target page, context or browser has been closed" while a sibling
+  // shard's daemon logged "Chromium process crashed"). Hash sharding had
+  // masked the collision by chance placement. Within a shard, files run
+  // serially, so sharing the per-shard profile is safe; config tests that
+  // assert resolution order save/restore this env around their assertions.
+  env.CHROMIUM_PROFILE = path.join(stateDir, 'chromium-profile');
 
   const startedAt = Date.now();
   const child = spawn(command, args, {
