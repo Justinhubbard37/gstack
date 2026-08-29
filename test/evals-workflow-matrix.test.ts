@@ -48,6 +48,19 @@ const KNOWN_MATRIX_GAPS = new Set([
   'test/skill-e2e-plan-design-with-ui.test.ts',
   'test/skill-e2e-plan-devex-finding-floor.test.ts',
   'test/skill-e2e-plan-devex-plan-mode.test.ts',
+  // Exposed by the 2026-08 dep-list self-registration sweep: these eight had
+  // zero gate-key dep-list membership before it, so the census never saw
+  // them as gate-hosting. Their gate tests run in NO CI lane today. The
+  // paid-lane re-platform (test-paid-shards.ts as the CI engine) runs every
+  // gate-tier file by construction and retires this whole ratchet.
+  'test/skill-e2e-cso.test.ts',
+  'test/skill-e2e-diagram.test.ts',
+  'test/skill-e2e-learnings.test.ts',
+  'test/skill-e2e-plan-tune.test.ts',
+  'test/skill-e2e-plan-tune-cathedral.test.ts',
+  'test/skill-e2e-review-army.test.ts',
+  'test/skill-e2e-session-intelligence.test.ts',
+  'test/skill-e2e-skillify.test.ts',
 ]);
 
 /**
