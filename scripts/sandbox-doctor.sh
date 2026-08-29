@@ -33,6 +33,9 @@
 #   DISPLAY=:99 TMPDIR=$HOME/tmp GSTACK_FREE_JOBS=2 GSTACK_FREE_RETRY_FLAKY=1 \
 #     setpriv --ambient-caps=-all --bounding-set=-all bun run test
 set -eu
+# When bash runs this script, keep heredoc bodies on temp files rather than
+# the 512-65536B pipe window (see test/heredoc-pipe-deadlock.test.ts).
+BASH_COMPAT=50
 
 say() { printf 'sandbox-doctor: %s\n' "$1"; }
 
@@ -53,9 +56,21 @@ fi
 # 3. TMPDIR under HOME (persisted via bashrc below; created here)
 mkdir -p "$HOME/tmp"
 
-# 5. Xvfb for headed-browser tests
-command -v Xvfb >/dev/null 2>&1 || sudo dnf install -y xorg-x11-server-Xvfb >/dev/null
-pgrep -x Xvfb >/dev/null 2>&1 || { Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 & say 'started Xvfb on :99'; }
+# 5. Xvfb for headed-browser tests. dnf-gated so a non-dnf distro degrades to
+# a warning instead of aborting the remaining fixes under set -eu; the
+# running-check looks for the :99 socket specifically (an Xvfb on another
+# display would otherwise satisfy pgrep while DISPLAY=:99 points at nothing).
+if ! command -v Xvfb >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y xorg-x11-server-Xvfb >/dev/null
+  else
+    say 'WARNING Xvfb missing and no dnf — install Xvfb manually for headed-browser tests'
+  fi
+fi
+if command -v Xvfb >/dev/null 2>&1 && [ ! -e /tmp/.X11-unix/X99 ]; then
+  Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+  say 'started Xvfb on :99'
+fi
 
 # 6. git identity (only if absent — never clobber a configured one)
 git config --global user.name >/dev/null 2>&1 || {
@@ -67,12 +82,19 @@ git config --global user.name >/dev/null 2>&1 || {
 # 7. Conductor git-shim exit-code bug
 if [ -f /conductor/bin/git ] && grep -q '^status=\$?' /conductor/bin/git 2>/dev/null; then
   sudo python3 - <<'EOF'
-src = open('/conductor/bin/git').read()
+import os
+p = '/conductor/bin/git'
+src = open(p).read()
 old = 'exit 0\nfi\nstatus=$?'
 new = 'exit 0\nelse\n\tstatus=$?\nfi'
 if old in src:
-    open('/conductor/bin/git', 'w').write(src.replace(old, new))
-    print('sandbox-doctor: patched /conductor/bin/git exit-code laundering')
+    # Atomic: a concurrently spawned git must never exec a truncated shim.
+    open(p + '.orig', 'w').write(src)
+    tmp = p + '.tmp'
+    open(tmp, 'w').write(src.replace(old, new))
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, p)
+    print('sandbox-doctor: patched /conductor/bin/git exit-code laundering (backup: git.orig)')
 elif new not in src:
     print('sandbox-doctor: WARNING git shim drifted from the patch pattern; laundering NOT fixed, patch by hand')
 EOF
@@ -90,8 +112,8 @@ export TMPDIR="$HOME/tmp"
 export GSTACK_FREE_JOBS=2
 export GSTACK_FREE_RETRY_FLAKY=1
 export DISPLAY=:99
-[ -e /dev/fd ] || sudo ln -sfn /proc/self/fd /dev/fd 2>/dev/null
-pgrep -x Xvfb >/dev/null 2>&1 || (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
+[ -e /dev/fd ] || sudo -n ln -sfn /proc/self/fd /dev/fd 2>/dev/null || true
+[ -e /tmp/.X11-unix/X99 ] || (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
 EOF
   say 'seeded ~/.bashrc test env'
 fi

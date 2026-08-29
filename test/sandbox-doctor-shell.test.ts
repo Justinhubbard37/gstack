@@ -27,7 +27,8 @@ describe('sandbox-doctor.sh', () => {
     expect(src).toContain('[ ! -e /dev/fd ]');                       // /dev/fd restore
     expect(src).toContain('git config --global user.name >/dev/null 2>&1 ||'); // never clobber identity
     expect(src).toContain("grep -q 'GSTACK sandbox test env'");      // bashrc seeded once
-    expect(src).toContain('command -v Xvfb >/dev/null 2>&1 ||');     // install only if absent
+    expect(src).toContain('if ! command -v Xvfb >/dev/null 2>&1');   // install only if absent, dnf-gated
+    expect(src).toContain('[ ! -e /tmp/.X11-unix/X99 ]');            // :99 socket check, not any-display pgrep
     expect(src).toContain('[ "${shm_kb:-0}" -gt 0 ]');               // missing /dev/shm: skip, not a set -eu abort
   });
 });
