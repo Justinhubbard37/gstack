@@ -19,7 +19,7 @@ const ROOT = path.resolve(import.meta.dir, '..');
 const ANSI_ESCAPE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
 const BUN_FAIL_RESULT = /^\(fail\) .+ \[(?:\d+(?:\.\d+)?)(?:ns|us|µs|ms|s)\]$/;
 const BUN_BETWEEN_TESTS_ERROR = '# Unhandled error between tests';
-const BUN_TERMINAL_SUMMARY = /^Ran \d+ tests? across (\d+) files?\. \[(?:\d+(?:\.\d+)?)(?:ns|us|µs|ms|s)\]$/;
+const BUN_TERMINAL_SUMMARY = /^Ran (\d+) tests? across (\d+) files?\. \[(?:\d+(?:\.\d+)?)(?:ns|us|µs|ms|s)\]$/;
 
 export type BunTestOutputFinding = 'failed-test' | 'unhandled-between-tests';
 
@@ -27,6 +27,8 @@ export interface BunTestOutputSummary {
   failedTests: number;
   unhandledBetweenTests: number;
   terminalFileCounts: number[];
+  /** Test counts from the same terminal lines — feeds the hollow-shard guard. */
+  terminalTestCounts: number[];
 }
 
 export type ForwardedTerminationSignal = 'SIGINT' | 'SIGTERM';
@@ -196,9 +198,15 @@ export function classifyBunTestOutputLine(rawLine: string): BunTestOutputFinding
 }
 
 export function parseBunTerminalSummaryLine(rawLine: string): number | null {
+  return parseBunTerminalSummary(rawLine)?.files ?? null;
+}
+
+export function parseBunTerminalSummary(rawLine: string): { tests: number; files: number } | null {
   const line = stripAnsiLine(rawLine);
   const match = BUN_TERMINAL_SUMMARY.exec(line);
-  return match ? Number.parseInt(match[1], 10) : null;
+  return match
+    ? { tests: Number.parseInt(match[1], 10), files: Number.parseInt(match[2], 10) }
+    : null;
 }
 
 /**
@@ -220,6 +228,7 @@ export class BunTestOutputClassifier {
   private failedTests = 0;
   private unhandledBetweenTests = 0;
   private terminalFileCounts: number[] = [];
+  private terminalTestCounts: number[] = [];
 
   write(chunk: Uint8Array | string, origin: ClassifierOrigin = 'stdout'): void {
     this.pending[origin] += typeof chunk === 'string'
@@ -242,6 +251,7 @@ export class BunTestOutputClassifier {
       failedTests: this.failedTests,
       unhandledBetweenTests: this.unhandledBetweenTests,
       terminalFileCounts: [...this.terminalFileCounts],
+      terminalTestCounts: [...this.terminalTestCounts],
     };
   }
 
@@ -258,8 +268,11 @@ export class BunTestOutputClassifier {
     const finding = classifyBunTestOutputLine(line);
     if (finding === 'failed-test') this.failedTests += 1;
     if (finding === 'unhandled-between-tests') this.unhandledBetweenTests += 1;
-    const terminalFileCount = parseBunTerminalSummaryLine(line);
-    if (terminalFileCount !== null) this.terminalFileCounts.push(terminalFileCount);
+    const terminal = parseBunTerminalSummary(line);
+    if (terminal !== null) {
+      this.terminalFileCounts.push(terminal.files);
+      this.terminalTestCounts.push(terminal.tests);
+    }
   }
 }
 
