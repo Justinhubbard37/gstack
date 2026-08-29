@@ -42,8 +42,10 @@ if [ ! -e /dev/fd ]; then
   say 'restored /dev/fd -> /proc/self/fd'
 fi
 
-# 2. /dev/shm size
-if [ "$(df -k /dev/shm 2>/dev/null | awk 'NR==2 {print $2}')" -lt 1048576 ]; then
+# 2. /dev/shm size (missing /dev/shm => empty df output => skip, don't abort:
+# an empty operand would be a test(1) error, fatal under set -eu)
+shm_kb="$(df -k /dev/shm 2>/dev/null | awk 'NR==2 {print $2}')"
+if [ "${shm_kb:-0}" -gt 0 ] && [ "$shm_kb" -lt 1048576 ]; then
   sudo mount -o remount,size=4G /dev/shm
   say 'remounted /dev/shm at 4G'
 fi
