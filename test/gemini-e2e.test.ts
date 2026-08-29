@@ -15,6 +15,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS } from './helpers/eval-budgets';
 import { runGeminiSkill } from './helpers/gemini-session-runner';
 import type { GeminiResult } from './helpers/gemini-session-runner';
 import { EvalCollector } from './helpers/eval-store';
@@ -151,7 +152,7 @@ describeGemini('Gemini E2E', () => {
     // Uses a simple prompt that doesn't require skill invocation or complex navigation.
     const result = await runGeminiSkill({
       prompt: 'What is this project? Answer in one sentence based on the README.',
-      timeoutMs: 90_000,
+      timeoutMs: JUDGE_MS,
       cwd: testWorktree,
     });
 
@@ -163,5 +164,5 @@ describeGemini('Gemini E2E', () => {
     recordGeminiE2E('gemini-smoke', result, passed);
 
     expect(result.output.length, 'Gemini should produce output').toBeGreaterThan(10);
-  }, 120_000);
+  }, JUDGE_MS);
 });

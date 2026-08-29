@@ -146,13 +146,18 @@ const EXPLAIN_LEVEL: 'default' | 'terse' = (() => {
 })();
 
 // ─── Out-dir (dev workspace render isolation) ───────────────
-// --out-dir <abs-dir> redirects Claude SKILL.md + section output to a separate
-// (untracked) directory instead of writing in place, AND rewrites the literal
-// section-base path (`~/.claude/skills/gstack/<skill>/sections/`) inside the
-// generated content to point at the out-dir, so section Reads resolve to the
-// rendered copy rather than the global install. Used by bin/dev-setup to render
-// the gbrain `:user` variant for a Conductor workspace without dirtying tracked
-// source. Default (unset) = in-place, behavior unchanged. Claude host only.
+// --out-dir <abs-dir> redirects ALL generated output (Claude SKILL.md +
+// sections, external-host trees like .agents/.factory, openclaw docs,
+// gstack/llms.txt) into a separate (untracked) directory instead of writing
+// in place. OUTPUTS ONLY: inputs (templates, sections/, host configs) are
+// always read from ROOT. For the Claude host it ALSO rewrites the literal
+// section-base path (`~/.claude/skills/gstack/<skill>/sections/`) inside
+// generated content so section Reads resolve to the rendered copy — that
+// rewrite stays Claude-only (external hosts have their own path grammar).
+// Consumers: bin/dev-setup (renders the gbrain `:user` variant for a
+// Conductor workspace — byte-compat pinned by gen-skill-docs-out-dir tests)
+// and the former TREE_MUTATING tests, which render into a mkdtemp instead
+// of mutating the live tree. Default (unset) = in-place, unchanged.
 const OUT_DIR_ARG = process.argv.find(a => a.startsWith('--out-dir'));
 const OUT_DIR: string | null = (() => {
   if (!OUT_DIR_ARG) return null;
@@ -778,7 +783,8 @@ function processExternalHost(
   const hostConfig = getHostConfig(host);
 
   const name = externalSkillName(skillDir === '.' ? '' : skillDir, frontmatterName);
-  const outputDir = path.join(ROOT, hostConfig.hostSubdir, 'skills', name);
+  // --out-dir mirrors the host tree (outputs only; inputs read from ROOT).
+  const outputDir = path.join(OUT_DIR ?? ROOT, hostConfig.hostSubdir, 'skills', name);
   fs.mkdirSync(outputDir, { recursive: true });
   const outputPath = path.join(outputDir, 'SKILL.md');
 
@@ -837,8 +843,8 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
   // Determine skill directory relative to ROOT
   const skillDir = path.relative(ROOT, path.dirname(tmplPath));
 
-  // --out-dir (Claude only): mirror the skill tree into the out-dir instead of
-  // writing in place. External hosts compute their own paths below.
+  // --out-dir: mirror the skill tree into the out-dir instead of writing in
+  // place (external hosts compute their own OUT_DIR-aware paths below).
   if (OUT_DIR && host === 'claude') {
     outputPath = path.join(OUT_DIR, skillDir, path.basename(tmplPath).replace(/\.tmpl$/, ''));
   }
@@ -949,7 +955,7 @@ function processSectionTemplate(
     outputPath = path.join(OUT_DIR || ROOT, skillDir, 'sections', fileName);
   } else {
     const externalName = externalSkillName(skillDir, parentName);
-    outputPath = path.join(ROOT, hostConfig.hostSubdir, 'skills', externalName, 'sections', fileName);
+    outputPath = path.join(OUT_DIR ?? ROOT, hostConfig.hostSubdir, 'skills', externalName, 'sections', fileName);
   }
   if (!DRY_RUN) fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   return { outputPath, content };
@@ -962,6 +968,20 @@ function findTemplates(): string[] {
 }
 
 const ALL_HOSTS: Host[] = ALL_HOST_NAMES as Host[];
+
+/**
+ * The generator's whole executable body. Import-purity contract: importing
+ * this module must NEVER touch the tree — test/gen-skill-docs.test.ts pulls
+ * assertSinglePreamble via require(), test/catalog-trim.test.ts imports
+ * helpers, and before this guard existed every such import regenerated all
+ * 71 SKILL.md in place at module-load time (the root cause of half the
+ * TREE_MUTATING serial shard; hazard class #2532). Pinned by
+ * test/gen-skill-docs-import-purity.test.ts.
+ *
+ * Returns the process exit code. Kept synchronous so the module stays
+ * require()-able (see the llms.txt IIFE note below).
+ */
+export function main(): number {
 const hostsToRun: Host[] = HOST_ARG_VAL === 'all' ? ALL_HOSTS : [HOST];
 const failures: { host: string; error: Error }[] = [];
 
@@ -1049,6 +1069,7 @@ for (const currentHost of hostsToRun) {
           console.log(`FRESH: ${relOutput}`);
         }
       } else {
+        if (OUT_DIR) fs.mkdirSync(path.dirname(outputPath), { recursive: true });
         fs.writeFileSync(outputPath, content);
         console.log(`GENERATED: ${relOutput}`);
       }
@@ -1065,19 +1086,21 @@ for (const currentHost of hostsToRun) {
     // plain markdown, no placeholder resolution — and are copied byte-for-byte
     // to openclaw/ at gen time.
     if (currentHost === 'openclaw' && !DRY_RUN) {
-      const openclawDir = path.join(ROOT, 'openclaw');
-      const openclawTemplatesDir = path.join(openclawDir, 'templates');
+      // Inputs from ROOT, outputs into OUT_DIR when set (outputs-only rule).
+      const openclawTemplatesDir = path.join(ROOT, 'openclaw', 'templates');
+      const openclawOutDir = path.join(OUT_DIR ?? ROOT, 'openclaw');
+      if (OUT_DIR) fs.mkdirSync(openclawOutDir, { recursive: true });
       for (const variant of ['lite', 'full', 'plan'] as const) {
         const fileName = `gstack-${variant}-CLAUDE.md`;
         const content = fs.readFileSync(path.join(openclawTemplatesDir, fileName), 'utf-8');
-        fs.writeFileSync(path.join(openclawDir, fileName), content);
+        fs.writeFileSync(path.join(openclawOutDir, fileName), content);
         console.log(`GENERATED: openclaw/${fileName}`);
       }
     }
 
     if (DRY_RUN && hasChanges) {
       console.error(`\nGenerated SKILL.md files are stale (${currentHost} host). Run: bun run gen:skill-docs --host ${currentHost}`);
-      if (HOST_ARG_VAL !== 'all') process.exit(1);
+      if (HOST_ARG_VAL !== 'all') return 1;
       failures.push({ host: currentHost, error: new Error('Stale files detected') });
     }
 
@@ -1112,7 +1135,7 @@ for (const currentHost of hostsToRun) {
 // in the same commit" is only a real gate if every host failure is fatal here.
 if (failures.length > 0 && HOST_ARG_VAL === 'all') {
   console.error(`\n${failures.length} host(s) failed: ${failures.map(f => f.host).join(', ')}`);
-  process.exit(1);
+  return 1;
 }
 // Single host dry-run failure already handled above
 
@@ -1138,7 +1161,11 @@ if (!DRY_RUN) {
 if (!DRY_RUN) {
   void (async () => {
     try {
-      const result = await writeLlmsTxt();
+      const result = await writeLlmsTxt(
+        // Outputs-only rule: under --out-dir even this index lands there
+        // (a catalog-mode render must never rewrite the tracked llms.txt).
+        OUT_DIR ? { outputPath: path.join(OUT_DIR, 'gstack', 'llms.txt') } : {},
+      );
       if (result.warnings.length > 0) {
         for (const w of result.warnings) console.error(`[gen-llms-txt] WARN: ${w}`);
       } else {
@@ -1153,7 +1180,9 @@ if (!DRY_RUN) {
     // freshness + byte budget asserted in test/agents-digest.test.ts.
     try {
       const { writeAgentsDigest, DIGEST_BYTE_BUDGET } = await import('./gen-agents-digest');
-      const digest = writeAgentsDigest();
+      // Outputs-only rule: under --out-dir the digest lands there too — a
+      // workspace render must never rewrite the tracked committed artifact.
+      const digest = writeAgentsDigest(OUT_DIR ? { outRoot: OUT_DIR } : {});
       console.log(`[gen-agents-digest] agents-digest/gstack-AGENTS.md: ${digest.bytes} bytes (budget ${DIGEST_BYTE_BUDGET})`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1163,4 +1192,15 @@ if (!DRY_RUN) {
       process.exitCode = 1;
     }
   })();
+}
+
+return 0;
+}
+
+if (import.meta.main) {
+  // Failure exits are immediate (matching the old top-level process.exit
+  // behavior); success leaves the event loop to drain so the llms.txt
+  // fire-and-forget IIFE inside main() finishes its write.
+  const code = main();
+  if (code !== 0) process.exit(code);
 }

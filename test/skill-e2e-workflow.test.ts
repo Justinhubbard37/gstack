@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS, CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, browseBin, runId, evalsEnabled,
@@ -83,7 +84,7 @@ IMPORTANT:
       // other rounds — marginal at 180s, same contention story as
       // review-dashboard-via and retro-base-branch. Outer bun timeout
       // rises to 360s for headroom.
-      timeout: 300_000,
+      timeout: CAPTURE_MS,
       testName: 'document-release',
       runId,
     });
@@ -120,7 +121,7 @@ IMPORTANT:
     } else {
       console.warn('README was NOT updated — agent may not have found the feature');
     }
-  }, 360_000);
+  }, CAPTURE_LONG_MS);
 });
 
 // --- Ship workflow with local bare remote ---
@@ -174,7 +175,7 @@ describeIfSelected('Ship workflow E2E', ['ship-local-workflow'], () => {
 4. Push to origin: git push origin feature/ship-test`,
       workingDirectory: shipWorkDir,
       maxTurns: 8,
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'ship-local-workflow',
       runId,
     });
@@ -198,7 +199,7 @@ describeIfSelected('Ship workflow E2E', ['ship-local-workflow'], () => {
     expect(branchExists).toBe(true);
     expect(versionBumped).toBe(true);
     console.log(`Branch pushed: ${branchExists}, VERSION: ${versionContent}, bumped: ${versionBumped}`);
-  }, 150_000);
+  }, CAPTURE_MS);
 });
 
 // setup-cookies-detect REMOVED: The cookie-import-browser module has 30+ thorough
@@ -297,7 +298,7 @@ Skip any AskUserQuestion calls — auto-approve the upgrade. Write a summary of 
 IMPORTANT: The install directory is at ./.claude/skills/gstack — use that exact path.`,
       workingDirectory: upgradeDir,
       maxTurns: 20,
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'gstack-upgrade-happy-path',
       runId,
     });
@@ -317,7 +318,7 @@ IMPORTANT: The install directory is at ./.claude/skills/gstack — use that exac
 
     expect(['success', 'error_max_turns']).toContain(result.exitReason);
     expect(versionAfter).toBe('0.6.0');
-  }, 240_000);
+  }, CAPTURE_MS);
 });
 
 // --- Test Coverage Audit E2E ---
@@ -418,7 +419,7 @@ Output the diagram directly.`,
       workingDirectory: coverageDir,
       maxTurns: 15,
       allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      timeout: 120_000,
+      timeout: JUDGE_MS,
       testName: 'ship-coverage-audit',
       runId,
     });
@@ -443,7 +444,7 @@ Output the diagram directly.`,
     // At minimum, the agent should have read the source and test files
     const readCalls = result.toolCalls.filter(tc => tc.tool === 'Read');
     expect(readCalls.length).toBeGreaterThan(0);
-  }, 180_000);
+  }, CAPTURE_MS);
 });
 
 // --- Codex skill E2E ---
@@ -520,7 +521,7 @@ Follow those instructions to run codex review against the diff on this branch.
 Write the full output (including the GATE verdict) to ${codexDir}/codex-output.md`,
       workingDirectory: codexDir,
       maxTurns: 25,
-      timeout: 300_000,
+      timeout: CAPTURE_MS,
       testName: 'codex-review',
       runId,
       model: 'claude-opus-4-7',
@@ -538,7 +539,7 @@ Write the full output (including the GATE verdict) to ${codexDir}/codex-output.m
       const hasCodexOutput = output.includes('CODEX') || output.includes('GATE') || output.includes('codex');
       expect(hasCodexOutput).toBe(true);
     }
-  }, 360_000);
+  }, CAPTURE_LONG_MS);
 });
 
 // Module-level afterAll — finalize eval collector after all tests complete

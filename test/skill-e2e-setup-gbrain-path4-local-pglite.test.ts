@@ -19,6 +19,7 @@
 // Cost: ~$0.50-$1.00 per run. Periodic-tier (EVALS=1 EVALS_TIER=periodic).
 
 import { test, expect } from 'bun:test';
+import { CAPTURE_MS } from './helpers/eval-budgets';
 import { describeE2ETier } from './helpers/e2e-gate';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -264,5 +265,5 @@ describeE2E('/setup-gbrain Path 4 + Step 4.5 Yes → local PGLite for code', () 
       fs.rmSync(sandboxHome, { recursive: true, force: true });
       fs.rmSync(fakeBinDir, { recursive: true, force: true });
     }
-  }, 300_000);
+  }, CAPTURE_MS);
 });

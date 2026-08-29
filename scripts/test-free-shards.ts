@@ -282,12 +282,18 @@ const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
   {
     file: 'browse/test/file-permissions.test.ts',
     // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
-    // is platform-guarded (win32 returns early / takes the icacls branch).
+    // is platform-guarded: win32-only tests return early, POSIX-only tests
+    // guard the bitmask behind `process.platform !== 'win32'`, and the
+    // symlink-skip regression test both wraps symlinkSync in try/catch
+    // (runners without Developer Mode can't create symlinks) and guards its
+    // bitmask — on win32 it asserts behavior (warns, skips, doesn't throw,
+    // target stays usable), never fake Windows mode bits (dirs stat 0o777
+    // there, so a 0o755 expectation fails on runner semantics, not our code).
     // This file carries the win32-only icacls-by-SID regression tests, which
     // can ONLY execute on windows-latest — excluding it here means the
     // machine-account ACL lockout regression is never exercised on the one
     // platform it bricks.
-    reason: 'mode-bitmask hits are POSIX-branch only; win32-only ACL regression tests must run on windows-latest',
+    reason: 'every mode-bitmask assertion is guarded off win32 (behavior asserted instead); win32-only ACL regression tests must run on windows-latest',
   },
   {
     file: 'browse/test/terminal-agent-owner-watchdog.test.ts',
@@ -325,6 +331,16 @@ export const DEFAULT_WALL_TIMEOUT_MS = 6 * 60_000;
 export const PER_FILE_WALL_MS = 5_000;
 export function wallTimeoutForShard(fileCount: number, baseMs = DEFAULT_WALL_TIMEOUT_MS): number {
   return Math.max(baseMs, fileCount * PER_FILE_WALL_MS);
+}
+
+/**
+ * Wall for a duration-packed shard. The count heuristic above assumes count
+ * approximates cost; LPT packing breaks that BY DESIGN (a shard may hold six
+ * slow Playwright files), so packed shards get max(base, predicted x 3) —
+ * generous against seed drift, still bounded.
+ */
+export function wallTimeoutForPackedShard(predictedMs: number, baseMs = DEFAULT_WALL_TIMEOUT_MS): number {
+  return Math.max(baseMs, Math.ceil(predictedMs * 3));
 }
 /**
  * Full-suite parallelism: leave RESERVED_CPUS cores for the parent runner +
@@ -375,46 +391,23 @@ export const WORKER_HOSTILE: Record<string, string> = {
 
 /**
  * TREE-SERIAL files: run in ONE serial shard AFTER the parallel shards.
- * Two kinds live here:
- *   - MUTATORS: tests that regenerate shared repo artifacts in place (skill
- *     SKILL.md files or the .agents/ host outputs). A shard reading those
- *     files concurrently sees a moving target — this family produced an
- *     exactly-doubled catalog estimate, golden-file drift, and a spec-sync
- *     mismatch before serialization.
- *   - RATCHET READERS: tests that MEASURE the shared tree (parity caps,
- *     size budgets). Measuring while any concurrent test regenerates is
- *     undefined behavior — two runs failed with byte-identical inflated
- *     skeletons while the tree was clean before and after, so rather than
- *     hunt every present and future mutator, the measurers get a quiet
- *     tree by construction.
- * Order within the serial shard is alphabetical (the file census is sorted
- * and the serial shard is a filter over it) — safety does NOT depend on
- * mutators-before-readers ordering; it rests on every mutator restoring
- * default state itself. (CI's --shards matrix is unaffected: each CI shard
- * has its own checkout.)
+ * EMPTY since the 2026-08 dissolution — kept as a mechanism, not a museum:
+ * a test that must regenerate shared repo artifacts IN PLACE (and cannot
+ * render into an out-dir instead) earns an entry here with a reason, and
+ * the runner will serialize it again.
+ *
+ * How it emptied: gen-skill-docs gained a main() guard (imports stopped
+ * regenerating 71 files at load) and --out-dir grew to every host, so all
+ * eight mutators now render into mkdtemps — the live tree is never written
+ * by the suite (pinned by gen-skill-docs-import-purity + each migrated
+ * file's own porcelain/mtime assertions). With zero mutators, the four
+ * ratchet READERS (parity caps, size budgets, carve parity/ordering) get a
+ * quiet tree by construction in any shard, so they rejoined the parallel
+ * phase — the ~35-40s serial tail on every full-suite run is gone.
  * Keys are pinned against the live file census by test-free-shards.test.ts —
  * a renamed file fails the suite instead of silently dropping serialization.
  */
-export const TREE_MUTATING: Record<string, string> = {
-  'test/catalog-mode-full.test.ts': 'regenerates ALL SKILL.md in full-catalog mode, then restores',
-  'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
-  'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
-  'test/gen-skill-docs.test.ts': 'regenerates .agents/ (codex host) golden artifacts in place',
-  'test/skill-validation.test.ts': 'regenerates .agents/ (codex host) artifacts in place (3 sites)',
-  'test/gbrain-detection-override.test.ts':
-    'regenerates SKILL.md in place with --respect-detection (gbrain variant), then git-restores — readers see inflated skeletons mid-window',
-  'test/host-config.test.ts':
-    'golden tests read .agents/.factory artifacts produced by gen-skill-docs.test.ts, and its beforeAll generates them when missing (#2532) — must not race the parallel readers or run before the mutators window',
-  'test/catalog-trim.test.ts':
-    'imports scripts/gen-skill-docs.ts, whose top-level body regenerates the full claude host at import time (71 files; idempotent on a fresh tree, but a stale tree gets rewritten mid-window) — same hazard class as #2532',
-  'test/gen-skill-docs-out-dir.test.ts':
-    'PORCELAIN READER — its before/after git-status pin needs a quiet tree (a concurrent shard\'s transient fixture write raced it on Windows CI), and its spawned render rewrites llms.txt/agents-digest in place (idempotent on a fresh tree)',
-  // Ratchet readers (measure the tree; need it quiet):
-  'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
-  'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',
-  'test/carve-guard-completeness.test.ts': 'RATCHET READER — registry-vs-disk parity reads live sections/manifest.json files',
-  'test/carve-section-ordering.test.ts': 'RATCHET READER — checkOrdering(ROOT) reads live skeletons and sections',
-};
+export const TREE_MUTATING: Record<string, string> = {};
 
 export function normalizeRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
@@ -536,6 +529,92 @@ export function assignFilesToShards(files: string[], shardCount: number): string
   return shards.map(filesInShard => filesInShard.sort());
 }
 
+// ─── Duration-aware packing (full-suite path ONLY) ─────────────────────────
+// Hash sharding balances file COUNTS (~1.15x spread) but not cost: the 15
+// Playwright-launching files land 4/3/4/1/2/1 across 6 shards, giving a
+// measured 28s–97s shard spread and ~40s of idle tail on every run. LPT
+// packing over recorded per-file durations reclaims most of it. The `--shard`
+// CI-matrix path is deliberately untouched — its contract is stable indices
+// via assignFilesToShards/stableHash (empty shards no-op; see above).
+//
+// One store, no overlay: durations come from the committed seed
+// (scripts/free-test-durations.json), refreshed occasionally via
+// `--record-durations` (each file timed in its own child — exact, and immune
+// to bun's stream buffering, where silent passers print no header to
+// timestamp). GSTACK_FREE_TEST_DURATIONS overrides the path for experiments.
+// The seed is a HINT, not a contract: missing file → hash-shard fallback;
+// unknown file → 75th-percentile pessimism (placed early by LPT, bounding
+// tail risk). Successor note: bun ≥1.3.14 ships native --timings/--shard LPT
+// scheduling — when the repo unpins 1.3.13, this packer is the code to
+// replace (keep it swappable).
+
+export const FREE_TEST_DURATIONS_FILE = 'scripts/free-test-durations.json';
+
+export function loadFreeTestDurations(rootDir = ROOT): Record<string, number> | null {
+  const file = process.env.GSTACK_FREE_TEST_DURATIONS
+    ?? path.join(rootDir, FREE_TEST_DURATIONS_FILE);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, 'utf-8');
+  } catch {
+    return null; // no seed — hash sharding, silently (fresh checkouts are normal)
+  }
+  try {
+    const parsed = JSON.parse(raw) as { durations?: Record<string, unknown> };
+    const entries = Object.entries(parsed.durations ?? {})
+      .filter((entry): entry is [string, number] =>
+        typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0);
+    if (entries.length === 0) return null;
+    return Object.fromEntries(entries);
+  } catch (error) {
+    // A corrupt seed (bad merge) must cost a warning, never the suite.
+    console.error(`[test:free] WARNING: corrupt durations seed ${file} (${(error as Error).message}) — falling back to hash sharding`);
+    return null;
+  }
+}
+
+export interface PackedShards {
+  shards: string[][];
+  /** Predicted total per shard, aligned with `shards` — feeds walls + logs. */
+  predictedMs: number[];
+}
+
+/**
+ * Longest-processing-time-first bin packing: files sorted by predicted
+ * duration (desc, path-stable tiebreak) each go to the currently-lightest
+ * shard. Deterministic for a given (files, shardCount, durations).
+ */
+export function packShardsByDuration(
+  files: string[],
+  shardCount: number,
+  durations: Record<string, number>,
+): PackedShards {
+  if (!Number.isInteger(shardCount) || shardCount <= 0) {
+    throw new Error(`Shard count must be a positive integer. Received: ${shardCount}`);
+  }
+  const known = files
+    .map((f) => durations[normalizeRelativePath(f)])
+    .filter((v): v is number => typeof v === 'number')
+    .sort((a, b) => a - b);
+  // Unknown files get the 75th percentile of known durations: pessimistic, so
+  // LPT places them early and a surprise long-runner can't recreate the tail.
+  const fallback = known.length > 0 ? known[Math.min(known.length - 1, Math.floor(known.length * 0.75))] : 1;
+  const predicted = (f: string): number => durations[normalizeRelativePath(f)] ?? fallback;
+
+  const ordered = [...files].sort((a, b) => predicted(b) - predicted(a) || (a < b ? -1 : 1));
+  const shards = Array.from({ length: shardCount }, () => [] as string[]);
+  const loads = new Array<number>(shardCount).fill(0);
+  for (const file of ordered) {
+    let lightest = 0;
+    for (let i = 1; i < shardCount; i += 1) {
+      if (loads[i] < loads[lightest]) lightest = i;
+    }
+    shards[lightest].push(file);
+    loads[lightest] += predicted(file);
+  }
+  return { shards: shards.map((s) => s.sort()), predictedMs: loads };
+}
+
 export interface BuildShardArgsOptions {
   /**
    * Pass bun's --parallel (worker-per-file, implies --isolate). No production
@@ -561,6 +640,7 @@ export function buildShardArgs(files: string[], options: BuildShardArgsOptions =
 type CliOptions = {
   dryRun: boolean;
   listOnly: boolean;
+  recordDurations: boolean;
   windowsOnly: boolean;
   verbose: boolean;
   shardCount: number;
@@ -573,6 +653,7 @@ type CliOptions = {
 function parseCliOptions(argv: string[]): CliOptions {
   let dryRun = false;
   let listOnly = false;
+  let recordDurations = false;
   let windowsOnly = false;
   let verbose = false;
   let shardCount = DEFAULT_SHARD_COUNT;
@@ -584,6 +665,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     const arg = argv[index];
     if (arg === '--dry-run') { dryRun = true; continue; }
     if (arg === '--list') { listOnly = true; continue; }
+    if (arg === '--record-durations') { recordDurations = true; continue; }
     if (arg === '--windows-only') { windowsOnly = true; continue; }
     if (arg === '--verbose') { verbose = true; continue; }
     if (arg === '--shards') {
@@ -611,7 +693,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { dryRun, listOnly, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs, wallTimeoutExplicit };
+  return { dryRun, listOnly, recordDurations, windowsOnly, verbose, shardCount, shardIndex, wallTimeoutMs, wallTimeoutExplicit };
 }
 
 function formatShardSummary(shards: string[][]): string[] {
@@ -1069,6 +1151,17 @@ export async function runFreeShard(
   env.TMPDIR = childTmp;
   env.TEMP = childTmp;
   env.TMP = childTmp;
+  // Per-shard Chromium profile (same isolation idea as TMPDIR): nine test
+  // files launch in-process persistent contexts or daemons that default to
+  // the SHARED ~/.gstack/chromium-profile, and two concurrent shards on one
+  // profile dir kill each other's browser — observed live on CI once
+  // duration packing recomposed shards (handoff's launchPersistentContext
+  // died "Target page, context or browser has been closed" while a sibling
+  // shard's daemon logged "Chromium process crashed"). Hash sharding had
+  // masked the collision by chance placement. Within a shard, files run
+  // serially, so sharing the per-shard profile is safe; config tests that
+  // assert resolution order save/restore this env around their assertions.
+  env.CHROMIUM_PROFILE = path.join(stateDir, 'chromium-profile');
 
   const startedAt = Date.now();
   const child = spawn(command, args, {
@@ -1198,6 +1291,63 @@ function exitCodeFor(status: FreeShardStatus): number {
   return status === 'timed-out' ? 124 : 1;
 }
 
+/**
+ * `--record-durations`: time every file in its own child (exact per-file wall,
+ * immune to bun's stream buffering) and write the committed seed atomically.
+ * Occasional + manual by design — CI never records (a hint refreshed by a
+ * human beats per-run churn), and the runtime (~serial suite / jobs) is fine
+ * for an operation run a few times a quarter.
+ */
+async function recordFreeTestDurations(files: string[], jobs: number): Promise<number> {
+  const durations: Record<string, number> = {};
+  const failed: string[] = [];
+  let cursor = 0;
+  console.log(`[test:free] recording per-file durations: ${files.length} files across ${jobs} workers`);
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= files.length) return;
+      const file = files[index];
+      const started = Date.now();
+      const child = spawn('bun', ['test', file, `--timeout=${FREE_TEST_TIMEOUT_MS}`], {
+        cwd: ROOT,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: { ...process.env, GSTACK_HEADLESS: '1' },
+      });
+      const code = await new Promise<number>((resolve) => {
+        const timer = setTimeout(() => { child.kill('SIGKILL'); }, wallTimeoutForShard(1));
+        child.on('close', (c) => { clearTimeout(timer); resolve(c ?? 1); });
+        child.on('error', () => { clearTimeout(timer); resolve(1); });
+      });
+      durations[normalizeRelativePath(file)] = Date.now() - started;
+      if (code !== 0) failed.push(file);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, jobs) }, () => worker()));
+
+  const target = process.env.GSTACK_FREE_TEST_DURATIONS ?? path.join(ROOT, FREE_TEST_DURATIONS_FILE);
+  const payload = {
+    version: 1,
+    recordedAt: new Date().toISOString(),
+    durations: Object.fromEntries(Object.entries(durations).sort(([a], [b]) => (a < b ? -1 : 1))),
+  };
+  // Atomic temp+rename (capture-context-budget's pattern): a killed recorder
+  // must never leave a truncated seed for loadFreeTestDurations to warn on.
+  const tmp = `${target}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
+  fs.renameSync(tmp, target);
+  console.log(`[test:free] wrote ${Object.keys(durations).length} durations to ${path.relative(ROOT, target)}`);
+  if (failed.length > 0) {
+    // Failures still recorded (a red file's duration is still a real cost),
+    // but surfaced loudly — recording from a broken tree deserves a look.
+    console.error(`[test:free] WARNING: ${failed.length} file(s) failed while recording:`);
+    for (const f of failed) console.error(`  ✗ ${f}`);
+    return 1;
+  }
+  return 0;
+}
+
 async function main(): Promise<number> {
   const options = parseCliOptions(process.argv.slice(2));
   const allFiles = collectFreeTestFiles();
@@ -1223,6 +1373,11 @@ async function main(): Promise<number> {
     console.log(`\nDiscovered ${files.length} test files.`);
     for (const file of files) console.log(`  ${file}`);
     return 0;
+  }
+
+  if (options.recordDurations) {
+    const jobs = Math.max(1, Math.min(MAX_FULL_SUITE_JOBS, os.cpus().length - RESERVED_CPUS));
+    return recordFreeTestDurations(files, jobs);
   }
 
   if (options.dryRun) {
@@ -1268,15 +1423,29 @@ async function main(): Promise<number> {
   // serial shard, so no concurrent shard ever reads a half-regenerated tree.
   const mutators = files.filter((f) => f in TREE_MUTATING);
   const readers = files.filter((f) => !(f in TREE_MUTATING));
-  const shards = assignFilesToShards(readers, jobs);
+  const durations = loadFreeTestDurations();
+  const packed = durations ? packShardsByDuration(readers, jobs, durations) : null;
+  const shards = packed ? packed.shards : assignFilesToShards(readers, jobs);
   const totalShards = jobs + (mutators.length > 0 ? 1 : 0);
   console.log(`[test:free] full suite: ${readers.length} files across ${jobs} shard processes`
+    + (packed ? ' (duration-packed)' : '')
     + (mutators.length > 0 ? `, then ${mutators.length} tree-mutating file(s) serially` : ''));
+  if (packed) {
+    // One line per shard so a packing regression is diagnosable from any log.
+    packed.predictedMs.forEach((ms, i) => {
+      console.log(`[test:free]   shard ${i + 1}: ${shards[i].length} files, predicted ~${Math.round(ms / 1000)}s`);
+    });
+  }
   const shardTimeout = (fileCount: number): number =>
     options.wallTimeoutExplicit ? options.wallTimeoutMs : wallTimeoutForShard(fileCount, options.wallTimeoutMs);
   const outcomes = await Promise.all(
     shards.map((shardFiles, index) => runFreeShard(shardFiles, index + 1, totalShards, {
-      wallTimeoutMs: shardTimeout(shardFiles.length),
+      // Packed shards get duration-aware walls: LPT decouples file count from
+      // cost BY DESIGN, so the 5s/file heuristic would undersize a shard
+      // holding few expensive files.
+      wallTimeoutMs: packed && !options.wallTimeoutExplicit
+        ? wallTimeoutForPackedShard(packed.predictedMs[index], options.wallTimeoutMs)
+        : shardTimeout(shardFiles.length),
       verbose: options.verbose,
     })),
   );

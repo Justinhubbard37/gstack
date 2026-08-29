@@ -11,6 +11,7 @@
  */
 
 import { afterAll, expect } from 'bun:test';
+import { JUDGE_MS } from './helpers/eval-budgets';
 import Anthropic from '@anthropic-ai/sdk';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -556,7 +557,7 @@ describeIfSelected('Baseline score pinning', ['baseline score pinning'], () => {
     if (!passed) {
       throw new Error(`Score regressions detected:\n${regressions.join('\n')}`);
     }
-  }, 60_000);
+  }, JUDGE_MS);
 });
 
 // --- Workflow SKILL.md quality evals (10 new tests for 100% coverage) ---

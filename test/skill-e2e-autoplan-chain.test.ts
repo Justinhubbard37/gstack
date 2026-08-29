@@ -26,6 +26,7 @@
  */
 
 import { test, expect } from 'bun:test';
+import { PTY_LONG_MS } from './helpers/eval-budgets';
 import { describeE2ETier } from './helpers/e2e-gate';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -184,6 +185,6 @@ describeE2E('/autoplan chain ordering (periodic)', () => {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
       }
     },
-    1_200_000, // 20 min absolute test ceiling
+    PTY_LONG_MS, // 20 min absolute test ceiling
   );
 });

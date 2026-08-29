@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, browseBin, runId, evalsEnabled, selectedTests,
@@ -66,7 +67,7 @@ Run /review on the current diff (git diff main...HEAD).
 Write your review findings to ${reviewDir}/review-output.md`,
       workingDirectory: reviewDir,
       maxTurns: 20,
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'review-sql-injection',
       runId,
     });
@@ -89,7 +90,7 @@ Write your review findings to ${reviewDir}/review-output.md`,
         reviewContent.includes('unsanitized');
       expect(hasSqlContent).toBe(true);
     }
-  }, 210_000);
+  }, CAPTURE_MS);
 });
 
 // --- Review: Enum completeness E2E ---
@@ -144,7 +145,7 @@ Write your review findings to ${enumDir}/review-output.md
 The diff adds a new "returned" status to the Order model. Your job is to check if all consumers handle it.`,
       workingDirectory: enumDir,
       maxTurns: 15,
-      timeout: 90_000,
+      timeout: JUDGE_MS,
       testName: 'review-enum-completeness',
       runId,
     });
@@ -164,7 +165,7 @@ The diff adds a new "returned" status to the Order model. Your job is to check i
       expect(mentionsReturned).toBe(true);
       expect(mentionsEnum || mentionsCritical).toBe(true);
     }
-  }, 120_000);
+  }, JUDGE_MS);
 });
 
 // --- Review: Design review lite E2E ---
@@ -229,7 +230,7 @@ Write your review findings to ${designDir}/review-output.md
 Important: The design checklist should catch issues like blacklisted fonts, small font sizes, outline:none, !important, AI slop patterns (purple gradients, generic hero copy, 3-column feature grid), etc.`,
       workingDirectory: designDir,
       maxTurns: 35,
-      timeout: 240_000,
+      timeout: CAPTURE_MS,
       testName: 'review-design-lite',
       runId,
     });
@@ -262,7 +263,7 @@ Important: The design checklist should catch issues like blacklisted fonts, smal
       console.log(`Design review detected ${detected}/7 planted issues`);
       expect(detected).toBeGreaterThanOrEqual(4);
     }
-  }, 300_000);
+  }, CAPTURE_MS);
 });
 
 // Base branch detection tests for review/ship + the Review Dashboard Via

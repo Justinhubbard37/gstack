@@ -353,7 +353,16 @@ touchfiles and re-offer pending ones on the next interactive run.
 false) permanently misses the artifacts-rename migration unless they paste the
 manual command. **Effort:** M. **Priority:** P2.
 
-### P2: periodic tier — three documented-red tests need structural repair
+### P2: periodic tier — TWO documented-red tests need structural repair (was three)
+
+**2026-08-29 update (test-infra overhaul):** (1) the sidebar E2E trio is
+ALREADY DELETED — no file in the tree POSTs to /sidebar-command or
+/sidebar-chat; only tombstone tests remain (browse/test/sidebar-tabs.test.ts
+asserts the endpoints STAY deleted), so part (1) closes as already-done.
+(2) skill-e2e-ship-idempotency and (3) skill-e2e-brain-privacy-gate are now
+EXCLUDED from the weekly lane with tracking
+(test/helpers/periodic-exclude-data.ts) — removing their entries re-activates
+them; the structural investigations below are the re-entry condition.
 
 **What:** (1) The sidebar E2E trio (navigate, url-accuracy, css-interaction)
 POSTs to /sidebar-command and /sidebar-chat — endpoints removed on every tree
@@ -547,6 +556,96 @@ advisory and gstack's freshness CI covers the drift case, so P3.
 
 **Effort:** S-M. **Priority:** P3.
 
+### 2026-08-29 test-infra overhaul — follow-ups (filed at implementation)
+
+The overhaul landed: green-means-green fixes (make-pdf gates in the required
+lane, zero-test eval jobs killed, 4 orphaned paid files activated + orphan
+tripwire, touchfiles self-registration + warn→fail), the serial
+tree-mutating shard dissolved (main() guard + --out-dir all hosts),
+duration-packed free shards, the sharded paid runner as the CI engine
+(planner/slices/fail-closed report, parity phase), the weekly all-periodic
+coverage contract + gate census, eval-budget timeout tiers, and the
+coverage fill. Remaining, in rough priority order:
+
+- **P1 — Delete the legacy evals.yml matrix after parity.** The sliced lane
+  runs alongside the 18-row matrix (`needs: evals`, so provider concurrency
+  never doubles). After 1-2 PR cycles of parity (compare executed-test sets:
+  intersection strict + the 8 KNOWN_MATRIX_GAPS files as expected additions;
+  stochastic outcomes informational), delete the matrix as a PURE-DELETION
+  commit (one revert restores it), drop the `needs: evals` edge, rewrite
+  test/evals-workflow-matrix.test.ts into a runner-wiring pin, and retire
+  KNOWN_MATRIX_GAPS/KNOWN_TIER_UNSET wholesale. Effort S.
+- **P1 — Maintainer decision: make `slices-report` a required check** once
+  post-migration flake data exists (the Codex outside-voice's "green means
+  green is not delivered while paid stays advisory" point — correct, and
+  deliberately a branch-protection decision, not repo YAML). Effort S.
+- **P2 — browse daemon lifecycle vs in-suite browsers (top remaining free-suite
+  flake).** The post-#994 daemon deliberately outlives its parent and lingers
+  across test FILES in a shard process; a later file's browser use can then
+  fight it ('[browse] FATAL: Chromium process crashed' + 5s element-wait
+  timeouts). Receipts: commands+snapshot in one bun process fails identically
+  WITH and WITHOUT per-file CHROMIUM_PROFILE isolation (pre-existing; PR
+  #2721 triage), and CI shard 1 on d9b78b5a died at model-overlay-sonnet-5
+  after a daemon-spawning file. Per-shard + per-file profile isolation
+  (landed) removed the cross-shard kills; the intra-shard daemon handoff
+  needs a real design: tests that spawn the daemon should stop it in
+  afterAll, or the daemon should detect a foreign CHROMIUM_PROFILE env and
+  refuse reuse. Effort M.
+- **P2 — browse daemon /tmp-namespace hardening.** Every file-path transport
+  to the daemon (eval <file>, load-html --from-file, pdf output, upload,
+  cookie-import) assumes client and daemon share one /tmp view; a sandboxed
+  shell reusing an out-of-namespace daemon gets "File not found" on files it
+  just wrote (root-caused live, reproduced with unshare). Minimal fix: the
+  CLI reads a local `eval <file>` itself and sends the code as `js` (
+  semantics-preserving; keep the daemon path for remote callers), plus a
+  namespace hint appended to read-commands.ts:313's error. Effort S.
+- **P2 — PTY boot-readiness wait.** The PTY tests' Bun.sleep(8000) preludes
+  and invokeAndObserve's 6s boot_grace_ms are blind waits; a real readiness
+  waitFor needs empirical CLI 2.1.x ready-marker probing in a working
+  terminal environment (this sandbox's PTY probe wedged). Effort S, needs a
+  dev machine.
+- **P2 — single typed test registry.** Paid globs, tiers, touchfiles keys,
+  and exclusions are still separate literal authorities synced by tripwires;
+  derive them from one registry and the drift class dies structurally
+  (outside-voice recommendation; the tripwires are the interim). Effort M.
+- **P2 — swap the custom LPT packer for bun-native `--timings`/`--shard`**
+  at the next Bun unpin (native LPT scheduling ships ≥1.3.14; the packer is
+  deliberately small and swappable — see the successor note in
+  scripts/test-free-shards.ts). Effort S.
+- **P3 — runBin migration remainder** (~31 of 36 local run() duplicates;
+  helper + first 3 migrated). Mechanical batches. Effort S.
+- **P3 — migrate the free runner onto runShardChild** (the shared lifecycle
+  helper the paid runner now uses; designed for it). Effort S.
+- **P3 — eval-list should exclude _partial runs** (pinned as current
+  behavior in test/eval-cli-family.test.ts with an improvement note).
+  Effort S.
+- **P3 — codex-e2e-plan-format's testIfSelected names have no map keys**
+  (run-all only today) + 15 E2E / 2 judge PHANTOM touchfiles keys select
+  tests that exist nowhere — add keys or delete, one sweep. Effort S.
+- **P3 — first-execution rot from the sliced lane's first live runs: 2 of 3
+  FIXED** (PR #2721): (a) ✅ skillify family — root cause was HOME==cwd
+  making claude treat <cwd>/.claude/skills as the PERSONAL dir (project
+  skills never registered); all three tests now use a fresh HOME subdir,
+  the refusal test gained a not-registered tripwire + assistant-text-only
+  matching (the skill body echo could pass vacuously), and the siblings now
+  genuinely exercise the Skill-tool path (verified paid, 5/5).
+  (b) ✅ session-intelligence context-restore — assertion was prose-matching
+  over stochastic wording; now verbatim RESTORED-marker + tool-call
+  corroboration with a stronger older-file negative (3/3 paid green).
+  (c) `tpa-apple-ban` failed only on retry attempt 2 once — flake watch
+  only. The lane finding these on first execution is the coverage contract
+  working.
+- **P2 — make-pdf image promotion is per-render nondeterministic on CI**:
+  two renders of the same fixture SECONDS apart in one CI job produced 2 vs
+  3 landscape pages (an image's promotion depends on load timing at render).
+  The landscape gates now assert content/presence invariants, but the
+  underlying render race is a product quality issue (a user's alt-hinted
+  image can silently miss its landscape promotion). Receipts: PR #2721
+  free-tests runs on heads ab549353 + c49b2ece. Effort S.
+- **P3 — duration-weighted slice assignment** if parity data shows slice
+  walls diverging >1.5x (round-robin today; eval-store durations exist).
+  Effort S.
+
 ### P2: /context-save worktree-identity hardening (the #2052 residual)
 
 **What:** Persist a stable worktree identity (path hash or worktree name) into
@@ -591,7 +690,19 @@ Trigger condition documented in `lib/gbrain-sources.ts` at the drift log line.
 
 **Effort:** M (human ~1d, CC ~45min). **Depends on:** drift-log evidence from
 the wave's `ensureSourceRegistered` logging.
-### P2: Periodic CI matrix covers 9 of ~66 e2e files — decide the coverage contract
+### ✅ DONE (2026-08-29): Periodic CI coverage contract — implemented as option (a)
+
+**Resolved by the test-infra overhaul:** evals-periodic.yml re-platformed onto
+scripts/test-paid-shards.ts — ALL periodic-tier files run weekly (EVALS_ALL,
+planner manifest → 6 slices → fail-closed report) minus the reasoned
+exclusions in test/helpers/periodic-exclude-data.ts (reason + tracking per
+entry, policy-pinned). A weekly EVALS_ALL gate census rides the same cron.
+The silent-rot class is dead: a test that runs nowhere is now either planned,
+diff-skipped, excluded-with-reason, or a failed report. Original filing kept
+below for the receipts.
+
+#### Original filing (closed)
+Periodic CI matrix covers 9 of ~66 e2e files — decide the coverage contract
 
 **Priority:** P2
 
@@ -629,7 +740,19 @@ in `.github/workflows/evals*.yml`. Receipts from the autoplan incident:
 `~/.gstack/projects/garrytan-gstack/e2e-runs/2026-07-10-0154/` (0-turn "Unknown command"
 transcripts).
 
-### Eval harness: live progress + incremental result persistence (kill the silent hour)
+### ✅ DONE (verified 2026-08-29): Eval harness live progress + incremental persistence
+
+**Verified landed** (the v1.66-era harness work delivered all three asks):
+(1) heartbeat — session-runner writes ~/.gstack-dev/e2e-live.json atomically
+per tool call (+ progress.log + per-test ndjson); (2) incremental persistence
+— EvalCollector writes _partial-e2e.json after every addTest, dual-signal
+isPartialEval keeps partials out of baselines; (3) live signal — per-tool
+stderr progress lines flush unbuffered, and scripts/eval-watch.ts dashboards
+the heartbeat. The 2026-08 overhaul added per-shard full-stream spool logs
+(path printed at START) on top. Original filing kept below for receipts.
+
+#### Original filing (closed)
+Eval harness: live progress + incremental result persistence (kill the silent hour)
 
 **Priority:** P1
 

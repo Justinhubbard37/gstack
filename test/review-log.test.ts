@@ -182,6 +182,35 @@ describe('gstack-wtree', () => {
     });
   });
 
+  test('racy-git window: a same-size rewrite pinned to the index timestamp changes the fingerprint', () => {
+    withScratchRepo((repoDir, wtree) => {
+      const file = path.join(repoDir, 'a.txt');
+      const indexPath = path.join(repoDir, '.git', 'index');
+      // ctime can't be restored after a rewrite; production hits this window
+      // when everything lands in the same second (ctime SECONDS match).
+      // trustctime=false isolates the racy mechanism deterministically
+      // instead of racing a second boundary.
+      gitIn(repoDir, 'config core.trustctime false');
+      // Pin the cached entry's mtime to a fixed timestamp (zero nsec, so the
+      // restore below is exact even on USE_NSEC git builds).
+      const pinned = new Date('2026-01-01T12:00:00Z');
+      fs.utimesSync(file, pinned, pinned);
+      gitIn(repoDir, 'add a.txt');
+      const clean = wtree();
+      // Same-size rewrite restored to the pinned stat, with the index file
+      // itself pinned to the SAME timestamp: the entry is stat-identical to
+      // its stale cache and sits exactly on git's racy-git boundary.
+      // gstack-wtree must carry the real index's mtime onto its temp copy —
+      // a fresh-stamped copy marks the entry non-racy, trusts the stale stat
+      // cache, and the edit vanishes from the fingerprint (evidence would
+      // stay FRESH after a source change).
+      fs.writeFileSync(file, 'howdy\n'); // same byte length as 'hello\n'
+      fs.utimesSync(file, pinned, pinned);
+      fs.utimesSync(indexPath, pinned, pinned);
+      expect(wtree()).not.toBe(clean);
+    });
+  });
+
   test('exits non-zero outside a git repo', () => {
     const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-wtree-nongit-'));
     try {

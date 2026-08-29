@@ -9,6 +9,11 @@
  *     we verify the helper doesn't throw and the file ends up accessible
  *     to the current user — the "doesn't crash, file still usable"
  *     contract the callers rely on.
+ *   - Every `mode & 0o777` bitmask assertion is platform-guarded: Windows
+ *     fakes POSIX mode bits (chmod is ~a no-op; dirs stat as 0o777), so a
+ *     bitmask expectation on win32 tests the runner, not our code. Symlink
+ *     fixtures are created in try/catch — Windows runners without Developer
+ *     Mode / admin can't create symlinks, and the test skips gracefully.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -105,6 +110,47 @@ describe('restrictDirectoryPermissions', () => {
     const d = path.join(tmpDir, 'subdir');
     fs.mkdirSync(d);
     expect(() => restrictDirectoryPermissions(d)).not.toThrow();
+  });
+
+  test('warns and skips a symlinked dir without throwing', () => {
+    const real = path.join(tmpDir, 'real-target');
+    fs.mkdirSync(real);
+    if (process.platform !== 'win32') {
+      // chmod, not mkdir({ mode }), so a restrictive umask can't skew the
+      // starting bits we later assert were left untouched.
+      fs.chmodSync(real, 0o755);
+    }
+    const link = path.join(tmpDir, 'linked');
+    try {
+      fs.symlinkSync(real, link, 'dir');
+    } catch {
+      // Windows runners without Developer Mode / admin can't create
+      // symlinks (house pattern: security-audit-r2.test.ts skips the same
+      // way). Nothing to test without the link.
+      // biome-ignore lint/suspicious/noConsole: test-skip diagnostics
+      console.warn('Skipping: symlink creation failed (no symlink privilege)');
+      return;
+    }
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+    try {
+      expect(() => restrictDirectoryPermissions(link)).not.toThrow();
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnings.some((w) => w.includes('symlink'))).toBe(true);
+
+    // The skip must leave the link target untouched. Mode bits are only
+    // meaningful on POSIX — Windows fakes stat().mode (dirs report 0o777
+    // no matter what), so asserting 0o755 there fails on runner semantics,
+    // not on our behavior. The no-throw + warn + still-usable checks are
+    // the meaningful win32 contract.
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(real).mode & 0o777).toBe(0o755);
+    }
+    expect(() => fs.readdirSync(real)).not.toThrow();
   });
 
   test('on Windows, the directory stays usable by the calling process', () => {

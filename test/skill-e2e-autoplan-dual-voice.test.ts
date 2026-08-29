@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, runId, evalsEnabled,
@@ -98,7 +99,7 @@ Add a new /greet skill that prints a welcome message.
         testName: 'autoplan-dual-voice',
         workingDirectory: workDir,
         prompt: `/autoplan ${planPath}`,
-        timeout: 600_000, // 10 min
+        timeout: CAPTURE_LONG_MS, // 10 min
         // /autoplan spawns subagents and calls codex via Bash; it needs the
         // full tool set to get past Phase 1. Bash+Read+Write alone wasn't
         // enough — the skill stalled trying to invoke Agent/Skill.

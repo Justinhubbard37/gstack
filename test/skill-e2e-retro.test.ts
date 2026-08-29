@@ -1,4 +1,5 @@
 import { expect, beforeAll, afterAll } from 'bun:test';
+import { CAPTURE_MS, CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, runId,
@@ -135,7 +136,7 @@ Write your retrospective to ${dir}/retro-output.md`,
     expect(wroteReport).toBe(true);
     const content = fs.readFileSync(retroPath, 'utf-8');
     expect(content.length).toBeGreaterThan(100);
-  }, 480_000);
+  }, CAPTURE_LONG_MS);
 });
 
 // --- Retro E2E ---
@@ -198,7 +199,7 @@ Write your retrospective report to ${retroDir}/retro-output.md
 Analyze the git history and produce the narrative report as described in the SKILL.md.`,
       workingDirectory: retroDir,
       maxTurns: 30,
-      timeout: 300_000,
+      timeout: CAPTURE_MS,
       testName: 'retro',
       runId,
       model: 'claude-opus-4-7',
@@ -217,7 +218,7 @@ Analyze the git history and produce the narrative report as described in the SKI
     expect(wroteReport).toBe(true);
     const retro = fs.readFileSync(retroPath, 'utf-8');
     expect(retro.length).toBeGreaterThan(100);
-  }, 420_000);
+  }, CAPTURE_LONG_MS);
 });
 
 // Module-level afterAll — finalize eval collector after all tests complete

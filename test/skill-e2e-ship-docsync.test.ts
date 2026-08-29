@@ -49,6 +49,7 @@
  * gate tier confirmed).
  */
 import { expect, beforeAll, afterAll } from 'bun:test';
+import { CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -200,7 +201,7 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
         workingDirectory: repoDir,
         maxTurns: 30,
         allowedTools: ['Bash', 'Read', 'Grep', 'Glob', 'Write', 'Agent', 'Task'],
-        timeout: 480_000,
+        timeout: CAPTURE_LONG_MS,
         env: {
           HOME: workDir,
           GSTACK_HOME: path.join(workDir, 'gstack-home'),
@@ -273,7 +274,7 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
       console.log(
         `dispatchIdx=${dispatchIdx} prCreateIdx=${prCreateIdx} readPrBody=${readPrBody} exit=${result.exitReason}`
       );
-    }, 540_000);
+    }, CAPTURE_LONG_MS);
   });
 });
 

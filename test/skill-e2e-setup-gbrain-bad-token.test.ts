@@ -14,6 +14,7 @@
 // on a failed verify the skill STOPs before any CLAUDE.md write.
 
 import { test, expect } from 'bun:test';
+import { CAPTURE_MS } from './helpers/eval-budgets';
 import { describeE2ETier } from './helpers/e2e-gate';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -155,5 +156,5 @@ describeE2E('/setup-gbrain Path 4 — bad token STOPs cleanly', () => {
       fs.rmSync(gstackHome, { recursive: true, force: true });
       fs.rmSync(fakeBinDir, { recursive: true, force: true });
     }
-  }, 240_000);
+  }, CAPTURE_MS);
 });

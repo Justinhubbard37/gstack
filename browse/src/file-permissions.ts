@@ -155,8 +155,29 @@ export function restrictFilePermissions(filePath: string): void {
  * (CI = container inherit) inherit the single-user-full ACL — important
  * because child creations in `fs.writeFileSync(...)` without explicit
  * `restrictFilePermissions` still end up owner-only.
+ *
+ * Symlinked dirs are warned about and SKIPPED, never followed: both
+ * `chmod` and `icacls` dereference the link, so restricting through a
+ * symlink hardens whatever the link points at — a target the caller never
+ * vetted (and, with `/inheritance:r`, one we could lock its real owner out
+ * of). Skipping is best-effort-consistent with the rest of this module:
+ * the filesystem stays functional, we just don't hit the hardening target.
  */
 export function restrictDirectoryPermissions(dirPath: string): void {
+  try {
+    if (fs.lstatSync(dirPath).isSymbolicLink()) {
+      // biome-ignore lint/suspicious/noConsole: intentional user-facing warning
+      console.warn(
+        `[gstack] Refusing to restrict permissions through symlink ${dirPath} — skipping.\n` +
+        `  Restricting through a symlink would alter the link target instead. ` +
+        `Harden the real directory directly.`
+      );
+      return;
+    }
+  } catch {
+    // Path doesn't exist (or lstat failed) — fall through; both platform
+    // branches below already swallow failures on missing paths.
+  }
   if (process.platform === 'win32') {
     try {
       const user = currentUserPrincipal();

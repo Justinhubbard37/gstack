@@ -5,7 +5,8 @@
  * A real browse server is started and commands are sent via the CLI HTTP interface.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import * as os from 'os';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { startTestServer } from './test-server';
 import { BrowserManager } from '../src/browser-manager';
 import { resolveServerScript } from '../src/cli';
@@ -24,6 +25,24 @@ import * as os from 'os';
 // (Vercel) blanket-deny access(2) under /tmp for busy processes while
 // honoring TMPDIR overrides. Hardcoded /tmp is a portability smell.
 const tmpp = (name: string) => path.join(os.tmpdir(), name);
+
+
+// Per-FILE Chromium profile: this file launches an in-process persistent
+// context (BrowserManager.launch()), and sharing a profile dir with the
+// long-lived browse daemon a sibling file may have spawned kills one side's
+// Chromium (ProcessSingleton on user-data-dir). Scoped via hooks, never
+// module scope (see test/gstack-home-module-scope.test.ts's rationale).
+const ORIGINAL_CHROMIUM_PROFILE = process.env.CHROMIUM_PROFILE;
+let CHROMIUM_PROFILE_DIR: string | undefined;
+beforeAll(() => {
+  CHROMIUM_PROFILE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-test-profile-'));
+  process.env.CHROMIUM_PROFILE = CHROMIUM_PROFILE_DIR;
+});
+afterAll(() => {
+  if (ORIGINAL_CHROMIUM_PROFILE === undefined) delete process.env.CHROMIUM_PROFILE;
+  else process.env.CHROMIUM_PROFILE = ORIGINAL_CHROMIUM_PROFILE;
+  if (CHROMIUM_PROFILE_DIR) { try { fs.rmSync(CHROMIUM_PROFILE_DIR, { recursive: true, force: true }); } catch {} }
+});
 
 
 // Thin wrappers that bridge old test calls (bm as 3rd arg) to new signatures (session + bm)

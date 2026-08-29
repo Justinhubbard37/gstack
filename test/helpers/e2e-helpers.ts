@@ -61,7 +61,55 @@ export function computeDiffSelection(
   return selection.selected;
 }
 
-export let selectedTests: string[] | null = computeDiffSelection(E2E_TOUCHFILES, 'E2E'); // null = run all
+/**
+ * Parse the sharded paid runner's precomputed selection (EVALS_SELECTION_JSON,
+ * written by serializePaidDiffSelection in scripts/test-paid-shards.ts).
+ * Returns { selected: null } for run-all. THROWS on any parse/shape failure —
+ * resolveModuleSelection turns that into a fail-open local recompute.
+ */
+export function parseEvalsSelectionJson(raw: string): { selected: string[] | null; reason: string } {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+  const { selected, reason } = parsed as { selected?: unknown; reason?: unknown };
+  if (selected !== null
+    && !(Array.isArray(selected) && selected.every((s) => typeof s === 'string'))) {
+    throw new Error('selected must be null or string[]');
+  }
+  return {
+    selected: selected as string[] | null,
+    reason: typeof reason === 'string' ? reason : 'parent selection',
+  };
+}
+
+/**
+ * Resolve the module-load E2E selection: prefer the parent shard runner's
+ * EVALS_SELECTION_JSON — skipping this module's own git walk and, when
+ * touchfiles-data.ts is in the diff, the per-child bun subprocess that
+ * evaluates the old data file (test-selection.ts map-diff path, one per
+ * shard). On ANY parse/shape failure, fall back to computing locally
+ * (fail-open preserved) with one stderr warning.
+ */
+export function resolveModuleSelection(
+  raw: string | undefined,
+  compute: () => string[] | null,
+  stderrWrite: (text: string) => void = (text) => process.stderr.write(text),
+): string[] | null {
+  if (raw) {
+    try {
+      const { selected, reason } = parseEvalsSelectionJson(raw);
+      stderrWrite(`\nE2E selection (parent-propagated: ${reason}): ${selected === null ? 'all' : selected.length} tests\n`);
+      return selected;
+    } catch (err) {
+      stderrWrite(`WARNING: malformed EVALS_SELECTION_JSON (${err instanceof Error ? err.message : String(err)}) — falling back to local selection\n`);
+    }
+  }
+  return compute();
+}
+
+export let selectedTests: string[] | null = resolveModuleSelection(
+  evalsEnabled ? process.env.EVALS_SELECTION_JSON : undefined,
+  () => computeDiffSelection(E2E_TOUCHFILES, 'E2E'),
+); // null = run all
 
 // EVALS_TIER: filter tests by tier after diff-based selection.
 // 'gate' = gate tests only (CI default — blocks merge)

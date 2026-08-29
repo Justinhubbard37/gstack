@@ -18,6 +18,7 @@
  */
 
 import { describe, test, expect, afterAll } from 'bun:test';
+import { JUDGE_MS, CAPTURE_MS, CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import { EvalCollector } from './helpers/eval-store';
 import { extractSkillHead } from './helpers/skill-fixture';
@@ -67,6 +68,8 @@ function mkEvalRoot(suffix: string, includeOverlay: boolean): string {
   const result = spawnSync(
     'bun',
     ['run', 'scripts/gen-skill-docs.ts', '--model', includeOverlay ? 'opus-4-7' : 'claude'],
+    // LIVE-REPO CWD: gen-skill-docs reads .tmpl sources and regenerates the
+    // in-repo SKILL.md files (restored to default in afterAll below).
     { cwd: ROOT, stdio: 'pipe', encoding: 'utf-8', timeout: 60_000 },
   );
   if (result.status !== 0) {
@@ -169,6 +172,8 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
     // whichever model ran last. Reset to the default (claude) so the tree
     // matches what would be checked in.
     spawnSync('bun', ['run', 'scripts/gen-skill-docs.ts'], {
+      // LIVE-REPO CWD: restores the in-repo SKILL.md files to the default
+      // model render after mkEvalRoot's --model regens.
       cwd: ROOT,
       stdio: 'pipe',
       timeout: 60_000,
@@ -200,7 +205,7 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
             workingDirectory: armA,
             maxTurns: 5,
             allowedTools: ['Read', 'Bash', 'Glob', 'Grep'],
-            timeout: 90_000,
+            timeout: JUDGE_MS,
             testName: 'fanout-arm-overlay-on',
             runId,
             model: OPUS_47,
@@ -210,7 +215,7 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
             workingDirectory: armB,
             maxTurns: 5,
             allowedTools: ['Read', 'Bash', 'Glob', 'Grep'],
-            timeout: 90_000,
+            timeout: JUDGE_MS,
             testName: 'fanout-arm-overlay-off',
             runId,
             model: OPUS_47,
@@ -258,7 +263,7 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
         fs.rmSync(armB, { recursive: true, force: true });
       }
     },
-    240_000,
+    CAPTURE_MS,
   );
 
   test(
@@ -277,7 +282,7 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
               workingDirectory: root,
               maxTurns: 3,
               allowedTools: ['Skill', 'Read', 'Bash', 'Glob', 'Grep'],
-              timeout: 90_000,
+              timeout: JUDGE_MS,
               testName: `routing-${c.name}`,
               runId,
               model: OPUS_47,
@@ -344,6 +349,6 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     },
-    360_000,
+    CAPTURE_LONG_MS,
   );
 });

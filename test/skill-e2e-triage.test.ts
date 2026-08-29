@@ -19,6 +19,7 @@
  */
 
 import { test, expect, beforeAll, afterAll } from 'bun:test';
+import { CAPTURE_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import {
   ROOT, runId,
@@ -178,7 +179,7 @@ This is a solo repo (REPO_MODE=solo). For pre-existing failures, recommend fixin
       workingDirectory: triageDir,
       maxTurns: 20,
       allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      timeout: 180_000,
+      timeout: CAPTURE_MS,
       testName: 'ship-triage',
       runId,
     });
@@ -229,7 +230,7 @@ This is a solo repo (REPO_MODE=solo). For pre-existing failures, recommend fixin
     // Must have actually run both test files (exercises both failure classes)
     expect(ranMathTest).toBe(true);
     expect(ranStringTest).toBe(true);
-  }, 240_000);
+  }, CAPTURE_MS);
 });
 
 // Module-level afterAll — finalize eval collector after all tests complete

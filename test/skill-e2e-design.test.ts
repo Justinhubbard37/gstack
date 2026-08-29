@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { CAPTURE_MS, CAPTURE_LONG_MS } from './helpers/eval-budgets';
 import { runSkillTest } from './helpers/session-runner';
 import { callJudge } from './helpers/llm-judge';
 import {
@@ -113,7 +114,7 @@ Skip research — work from your design knowledge. Skip the font preview page. S
 Write DESIGN.md and CLAUDE.md (or update it) in the working directory.`,
       workingDirectory: designDir,
       maxTurns: 20,
-      timeout: 360_000,
+      timeout: CAPTURE_LONG_MS,
       testName: 'design-consultation-core',
       runId,
       model: 'claude-opus-4-7',
@@ -178,7 +179,7 @@ Write DESIGN.md and CLAUDE.md (or update it) in the working directory.`,
       const claude = fs.readFileSync(claudePath, 'utf-8');
       expect(claude.toLowerCase()).toContain('design.md');
     }
-  }, 420_000);
+  }, CAPTURE_LONG_MS);
 
   testConcurrentIfSelected('design-consultation-research', async () => {
     // Test WebSearch integration — research phase only, no DESIGN.md generation
@@ -202,7 +203,7 @@ Do NOT generate a full DESIGN.md — just research notes.`,
       // queued past the budget under concurrent API load. 90s budgets cannot
       // absorb one slow first completion; 300s is the repo's standard floor
       // for CI SDK tests. Outer timeout below rises to 360s for headroom.
-      timeout: 300_000,
+      timeout: CAPTURE_MS,
       testName: 'design-consultation-research',
       runId,
     });
@@ -232,7 +233,7 @@ Do NOT generate a full DESIGN.md — just research notes.`,
     }
 
     try { fs.rmSync(researchDir, { recursive: true, force: true }); } catch {}
-  }, 360_000);
+  }, CAPTURE_LONG_MS);
 
   testConcurrentIfSelected('design-consultation-existing', async () => {
     // Pre-create a minimal DESIGN.md (independent of core test)
@@ -250,7 +251,7 @@ There is already a DESIGN.md in this repo. Update it with a complete design syst
 Skip research. Skip font preview. Skip any AskUserQuestion calls — this is non-interactive.`,
       workingDirectory: designDir,
       maxTurns: 20,
-      timeout: 360_000,
+      timeout: CAPTURE_LONG_MS,
       testName: 'design-consultation-existing',
       runId,
       model: 'claude-opus-4-7',
@@ -279,7 +280,7 @@ Skip research. Skip font preview. Skip any AskUserQuestion calls — this is non
       expect(hasColor).toBe(true);
       expect(hasSpacing).toBe(true);
     }
-  }, 420_000);
+  }, CAPTURE_LONG_MS);
 
   testConcurrentIfSelected('design-consultation-preview', async () => {
     // Test preview HTML generation only — no DESIGN.md (covered by core test)
@@ -302,7 +303,7 @@ Do NOT write DESIGN.md — only the preview HTML.`,
       maxTurns: 8,
       // 300s, not 90s: this is the test that failed 3x at 0 turns/$0.00/93s
       // on PR #2533 CI — see the research test's comment for the class.
-      timeout: 300_000,
+      timeout: CAPTURE_MS,
       testName: 'design-consultation-preview',
       runId,
     });
@@ -331,7 +332,7 @@ Do NOT write DESIGN.md — only the preview HTML.`,
     }
 
     try { fs.rmSync(previewDir, { recursive: true, force: true }); } catch {}
-  }, 360_000);
+  }, CAPTURE_LONG_MS);
 });
 
 // --- Plan Design Review E2E (plan-mode) ---
@@ -398,7 +399,7 @@ Skip the preamble bash block. Skip any AskUserQuestion calls — this is non-int
 IMPORTANT: Do NOT try to browse any URLs or use a browse binary. This is a plan review, not a live site audit. Just read the plan file, review it, and edit it to fix the gaps.`,
         workingDirectory: reviewDir,
         maxTurns: 15,
-        timeout: 300_000,
+        timeout: CAPTURE_MS,
         testName: 'plan-design-review-plan-mode',
         runId,
       });
@@ -437,7 +438,7 @@ IMPORTANT: Do NOT try to browse any URLs or use a browse binary. This is a plan 
     } finally {
       try { fs.rmSync(reviewDir, { recursive: true, force: true }); } catch {}
     }
-  }, 360_000);
+  }, CAPTURE_LONG_MS);
 
   testConcurrentIfSelected('plan-design-review-no-ui-scope', async () => {
     const reviewDir = setupReviewDir();
@@ -472,7 +473,7 @@ Skip the preamble bash block. Skip any AskUserQuestion calls — this is non-int
 IMPORTANT: Do NOT try to browse any URLs or use a browse binary. This is a plan review, not a live site audit.`,
         workingDirectory: reviewDir,
         maxTurns: 10,
-        timeout: 180_000,
+        timeout: CAPTURE_MS,
         testName: 'plan-design-review-no-ui-scope',
         runId,
       });
@@ -496,7 +497,7 @@ IMPORTANT: Do NOT try to browse any URLs or use a browse binary. This is a plan 
     } finally {
       try { fs.rmSync(reviewDir, { recursive: true, force: true }); } catch {}
     }
-  }, 240_000);
+  }, CAPTURE_MS);
 });
 
 // --- Design Review E2E (live-site audit + fix) ---
@@ -602,7 +603,7 @@ Read design-review/SKILL.md for the design review + fix workflow.
 Review the site at ${serverUrl}. Use --quick mode. Skip any AskUserQuestion calls — this is non-interactive. Fix up to 3 issues max. Write your report to ./design-audit.md.`,
       workingDirectory: qaDesignDir,
       maxTurns: 30,
-      timeout: 360_000,
+      timeout: CAPTURE_LONG_MS,
       testName: 'design-review-fix',
       runId,
     });
@@ -634,7 +635,7 @@ Review the site at ${serverUrl}. Use --quick mode. Skip any AskUserQuestion call
       console.warn('No design-audit.md generated');
     }
     console.log(`Design fix commits: ${designFixCommits.length}`);
-  }, 420_000);
+  }, CAPTURE_LONG_MS);
 });
 
 // Module-level afterAll — finalize eval collector after all tests complete

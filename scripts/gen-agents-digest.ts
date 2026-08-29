@@ -78,10 +78,12 @@ scripts/gen-agents-digest.ts, not this file.
   return { content, bytes: Buffer.byteLength(content, 'utf-8') };
 }
 
-export function writeAgentsDigest(opts?: { root?: string }): { outPath: string; bytes: number } {
+export function writeAgentsDigest(opts?: { root?: string; outRoot?: string }): { outPath: string; bytes: number } {
   const root = opts?.root ?? ROOT;
   const { content, bytes } = generateAgentsDigest({ root });
-  const outPath = path.join(root, DIGEST_RELPATH);
+  // outRoot: outputs-only rule for --out-dir renders — inputs (VERSION) read
+  // from root, the artifact lands wherever the caller isolates outputs.
+  const outPath = path.join(opts?.outRoot ?? root, DIGEST_RELPATH);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, content);
   return { outPath, bytes };

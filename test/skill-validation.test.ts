@@ -1,11 +1,35 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, afterAll } from 'bun:test';
 import { validateSkill, extractRemoteSlugPatterns, extractWeightsFromTable } from './helpers/skill-parser';
 import { ALL_COMMANDS, COMMAND_DESCRIPTIONS, READ_COMMANDS, WRITE_COMMANDS, META_COMMANDS } from '../browse/src/commands';
 import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 const ROOT = path.resolve(import.meta.dir, '..');
+
+// ─── Codex-host render isolation ─────────────────────────────
+// .agents/ is gitignored and regenerated. This file used to regenerate it IN
+// PLACE at three sites (a tree-mutating hazard for concurrent readers).
+// Render the codex host ONCE into a module-level out-dir instead; every
+// codex-artifact assertion reads from here. Out-dir renders are byte-
+// identical to in-place external-host renders (pinned by
+// test/gen-skill-docs-out-dir.test.ts).
+const CODEX_OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-skillval-codex-'));
+{
+  const render = Bun.spawnSync(
+    ['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex', '--out-dir', CODEX_OUT],
+    { cwd: ROOT, stdout: 'pipe', stderr: 'pipe' },
+  );
+  if (render.exitCode !== 0) {
+    throw new Error(
+      `gen-skill-docs --host codex --out-dir failed (exit ${render.exitCode}):\n${render.stderr.toString()}`,
+    );
+  }
+}
+afterAll(() => {
+  fs.rmSync(CODEX_OUT, { recursive: true, force: true });
+});
 
 // Carved-skill aware (v2 plan T9 / Phase B): a carved skill is a skeleton SKILL.md
 // plus sections/*.md. Read the union so validations of content that moved into a
@@ -1556,15 +1580,12 @@ describe('Codex skill', () => {
   });
 
   test('codex-host ship/review do NOT contain adversarial review step', () => {
-    // .agents/ is gitignored — generate on demand
-    Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex'], {
-      cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-    });
-    const shipContent = fs.readFileSync(path.join(ROOT, '.agents', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
+    // Codex artifacts come from the module-level out-dir render (CODEX_OUT).
+    const shipContent = fs.readFileSync(path.join(CODEX_OUT, '.agents', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
     expect(shipContent).not.toContain('codex review --base');
     expect(shipContent).not.toContain('CODEX_REVIEWS');
 
-    const reviewContent = fs.readFileSync(path.join(ROOT, '.agents', 'skills', 'gstack-review', 'SKILL.md'), 'utf-8');
+    const reviewContent = fs.readFileSync(path.join(CODEX_OUT, '.agents', 'skills', 'gstack-review', 'SKILL.md'), 'utf-8');
     expect(reviewContent).not.toContain('codex review --base');
     expect(reviewContent).not.toContain('codex_reviews');
     expect(reviewContent).not.toContain('CODEX_REVIEWS');
@@ -1609,12 +1630,9 @@ describe('Codex skill', () => {
   });
 
   test('codex-host document-release does NOT contain the Codex doc review', () => {
-    // .agents/ is gitignored — generate on demand (codex never invokes itself)
-    Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex'], {
-      cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-    });
+    // Codex never invokes itself; artifacts come from the CODEX_OUT render.
     const content = fs.readFileSync(
-      path.join(ROOT, '.agents', 'skills', 'gstack-document-release', 'SKILL.md'), 'utf-8');
+      path.join(CODEX_OUT, '.agents', 'skills', 'gstack-document-release', 'SKILL.md'), 'utf-8');
     expect(content).not.toContain('Codex Documentation Review');
     expect(content).not.toContain('codex-doc-review');
   });
@@ -1841,12 +1859,9 @@ describe('Doc inventory cross-check', () => {
 // ─── Codex Skill Validation ──────────────────────────────────
 
 describe('Codex skill validation', () => {
-  const AGENTS_DIR = path.join(ROOT, '.agents', 'skills');
-
-  // .agents/ is gitignored (v0.11.2.0) — generate on demand for tests
-  Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', 'codex'], {
-    cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
-  });
+  // .agents/ is gitignored (v0.11.2.0) — read from the module-level out-dir
+  // render (CODEX_OUT) instead of regenerating the live tree in place.
+  const AGENTS_DIR = path.join(CODEX_OUT, '.agents', 'skills');
 
   // Discover all shared skills with templates.
   // Host-exclusive outside-voice skills are intentionally omitted here:

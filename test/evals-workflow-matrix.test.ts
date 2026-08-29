@@ -48,28 +48,29 @@ const KNOWN_MATRIX_GAPS = new Set([
   'test/skill-e2e-plan-design-with-ui.test.ts',
   'test/skill-e2e-plan-devex-finding-floor.test.ts',
   'test/skill-e2e-plan-devex-plan-mode.test.ts',
+  // Exposed by the 2026-08 dep-list self-registration sweep: these eight had
+  // zero gate-key dep-list membership before it, so the census never saw
+  // them as gate-hosting. Their gate tests run in NO CI lane today. The
+  // paid-lane re-platform (test-paid-shards.ts as the CI engine) runs every
+  // gate-tier file by construction and retires this whole ratchet.
+  'test/skill-e2e-cso.test.ts',
+  'test/skill-e2e-diagram.test.ts',
+  'test/skill-e2e-learnings.test.ts',
+  'test/skill-e2e-plan-tune.test.ts',
+  'test/skill-e2e-plan-tune-cathedral.test.ts',
+  'test/skill-e2e-review-army.test.ts',
+  'test/skill-e2e-session-intelligence.test.ts',
+  'test/skill-e2e-skillify.test.ts',
 ]);
 
 /**
  * Matrix files whose whole-file tier guard has no matching row `tier:`
- * property (pre-existing, found 2026-08-26). Consequences today:
- *  - codex-e2e / gemini-e2e declare 'periodic' → both jobs run ZERO tests and
- *    report green on every PR (vestigial rows; the periodic cron lane owns
- *    these suites).
- *  - the two PTY plan-mode smokes declare 'gate' → the e2e-pty-plan-smoke job
- *    spends ~7 min on container setup and skill registration, then bun test
- *    skips every describe — hollow-green since the files adopted
- *    describeE2ETier.
- * Fixing either means deliberately (re)activating paid suites on every PR —
- * tracked in the same TODOS burn-down. Fix = add `tier:` to the row (or
- * delete the vestigial row), then DELETE the entry here.
+ * property. Burned down to empty 2026-08-29: the vestigial codex/gemini rows
+ * were deleted (periodic-tier files, zero tests per PR) and
+ * e2e-pty-plan-smoke gained its `tier: gate`. The ratchet stays so a future
+ * row/file tier mismatch fails the suite instead of shipping hollow green.
  */
-const KNOWN_TIER_UNSET = new Map([
-  ['test/codex-e2e.test.ts', 'periodic'],
-  ['test/gemini-e2e.test.ts', 'periodic'],
-  ['test/skill-e2e-office-hours-auto-mode.test.ts', 'gate'],
-  ['test/skill-e2e-plan-mode-no-op.test.ts', 'gate'],
-]);
+const KNOWN_TIER_UNSET = new Map<string, string>([]);
 
 interface MatrixRow {
   name: string;

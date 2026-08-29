@@ -40,6 +40,8 @@ const INLINE_REF = '29785978'; // last pre-Phase-1 commit (v1.69.1.0 bump)
 
 function inlineSkill(): string {
   return execSync(`git show ${INLINE_REF}:plan-ceo-review/SKILL.md`, {
+    // LIVE-REPO CWD: git show needs this repo's history to read the
+    // pre-Phase-1 SKILL.md render at INLINE_REF.
     cwd: ROOT,
     encoding: 'utf-8',
     maxBuffer: 8 * 1024 * 1024,
