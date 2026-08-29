@@ -388,7 +388,6 @@ export const WORKER_HOSTILE: Record<string, string> = {
  * a renamed file fails the suite instead of silently dropping serialization.
  */
 export const TREE_MUTATING: Record<string, string> = {
-  'test/catalog-mode-full.test.ts': 'regenerates ALL SKILL.md in full-catalog mode, then restores',
   'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
   'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
   // Ratchet readers (measure the tree; need it quiet):
