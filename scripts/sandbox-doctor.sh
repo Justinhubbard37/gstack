@@ -114,6 +114,10 @@ export GSTACK_FREE_RETRY_FLAKY=1
 export DISPLAY=:99
 [ -e /dev/fd ] || sudo -n ln -sfn /proc/self/fd /dev/fd 2>/dev/null || true
 [ -e /tmp/.X11-unix/X99 ] || (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
+# The 4G /dev/shm remount does not survive sandbox restarts; a 64M shm makes
+# concurrent Chromium (multi-tab browse tests) fail under suite load.
+shm_kb="$(df -k /dev/shm 2>/dev/null | awk 'NR==2 {print $2}')"
+[ "${shm_kb:-0}" -gt 0 ] && [ "$shm_kb" -lt 1048576 ] && sudo -n mount -o remount,size=4G /dev/shm 2>/dev/null || true
 EOF
   say 'seeded ~/.bashrc test env'
 fi
