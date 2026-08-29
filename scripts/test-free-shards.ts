@@ -367,33 +367,23 @@ export const WORKER_HOSTILE: Record<string, string> = {
 
 /**
  * TREE-SERIAL files: run in ONE serial shard AFTER the parallel shards.
- * Two kinds live here:
- *   - MUTATORS: tests that regenerate shared repo artifacts in place (skill
- *     SKILL.md files or the .agents/ host outputs). A shard reading those
- *     files concurrently sees a moving target — this family produced an
- *     exactly-doubled catalog estimate, golden-file drift, and a spec-sync
- *     mismatch before serialization.
- *   - RATCHET READERS: tests that MEASURE the shared tree (parity caps,
- *     size budgets). Measuring while any concurrent test regenerates is
- *     undefined behavior — two runs failed with byte-identical inflated
- *     skeletons while the tree was clean before and after, so rather than
- *     hunt every present and future mutator, the measurers get a quiet
- *     tree by construction.
- * Order within the serial shard is alphabetical (the file census is sorted
- * and the serial shard is a filter over it) — safety does NOT depend on
- * mutators-before-readers ordering; it rests on every mutator restoring
- * default state itself. (CI's --shards matrix is unaffected: each CI shard
- * has its own checkout.)
+ * EMPTY since the 2026-08 dissolution — kept as a mechanism, not a museum:
+ * a test that must regenerate shared repo artifacts IN PLACE (and cannot
+ * render into an out-dir instead) earns an entry here with a reason, and
+ * the runner will serialize it again.
+ *
+ * How it emptied: gen-skill-docs gained a main() guard (imports stopped
+ * regenerating 71 files at load) and --out-dir grew to every host, so all
+ * eight mutators now render into mkdtemps — the live tree is never written
+ * by the suite (pinned by gen-skill-docs-import-purity + each migrated
+ * file's own porcelain/mtime assertions). With zero mutators, the four
+ * ratchet READERS (parity caps, size budgets, carve parity/ordering) get a
+ * quiet tree by construction in any shard, so they rejoined the parallel
+ * phase — the ~35-40s serial tail on every full-suite run is gone.
  * Keys are pinned against the live file census by test-free-shards.test.ts —
  * a renamed file fails the suite instead of silently dropping serialization.
  */
-export const TREE_MUTATING: Record<string, string> = {
-  // Ratchet readers (measure the tree; need it quiet):
-  'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
-  'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',
-  'test/carve-guard-completeness.test.ts': 'RATCHET READER — registry-vs-disk parity reads live sections/manifest.json files',
-  'test/carve-section-ordering.test.ts': 'RATCHET READER — checkOrdering(ROOT) reads live skeletons and sections',
-};
+export const TREE_MUTATING: Record<string, string> = {};
 
 export function normalizeRelativePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
