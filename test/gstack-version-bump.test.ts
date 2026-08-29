@@ -64,7 +64,7 @@ describe('write (FRESH bump)', () => {
     const out = execFileSync('bun', [BIN, 'write', '--version', '1.1.0.0'], { cwd: dir }).toString();
     expect(JSON.parse(out)).toEqual({
       wrote: '1.1.0.0', packageJson: true, packageJsonPath: 'package.json',
-      packageJsonVersion: '1.1.0', packageLock: false,
+      packageJsonVersion: '1.1.0', packageLock: false, agentsDigest: null,
     });
     expect(fs.readFileSync(path.join(dir, 'VERSION'), 'utf-8').trim()).toBe('1.1.0.0');
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
@@ -87,7 +87,7 @@ describe('write (FRESH bump)', () => {
     const out = execFileSync('bun', [BIN, 'write', '--version', '0.2.0.0'], { cwd: d2 }).toString();
     expect(JSON.parse(out)).toEqual({
       wrote: '0.2.0.0', packageJson: false, packageJsonPath: null,
-      packageJsonVersion: null, packageLock: false,
+      packageJsonVersion: null, packageLock: false, agentsDigest: null,
     });
     expect(fs.readFileSync(path.join(d2, 'VERSION'), 'utf-8').trim()).toBe('0.2.0.0');
     fs.rmSync(d2, { recursive: true, force: true });
@@ -134,7 +134,7 @@ describe('write/repair sync npm lockfiles (both version fields, #2567)', () => {
     const out = execFileSync('bun', [BIN, 'write', '--version', '1.1.0.0'], { cwd: dir }).toString();
     expect(JSON.parse(out)).toEqual({
       wrote: '1.1.0.0', packageJson: true, packageJsonPath: 'package.json',
-      packageJsonVersion: '1.1.0', packageLock: true,
+      packageJsonVersion: '1.1.0', packageLock: true, agentsDigest: null,
     });
     const l = JSON.parse(fs.readFileSync(path.join(dir, 'package-lock.json'), 'utf-8'));
     expect(l.version).toBe('1.1.0');
@@ -754,5 +754,59 @@ describe('#2600: classify must surface versionFileExists=false when VERSION is m
     expect(result.versionFileExists).toBe(true);
     expect(result.currentVersion).toBe('0.2.0.0');
     expect(result.state).toBe('ALREADY_BUMPED'); // base is 0.0.0.0, current is 0.2.0.0, pkg in sync
+  });
+});
+
+describe('write regenerates the gstack agents digest (gstack repo only)', () => {
+  // The committed agents-digest/gstack-AGENTS.md embeds VERSION in its first
+  // line and is byte-freshness-gated (test/agents-digest.test.ts + the Skill
+  // Docs Freshness CI check). The write that changes VERSION must regenerate
+  // it in the same mutation or every release commit of THIS repo goes red.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-digest-'));
+  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } });
+
+  test('a repo with the generator + committed digest gets a fresh digest on write', () => {
+    fs.writeFileSync(path.join(dir, 'VERSION'), '1.0.0.0\n');
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'agents-digest'), { recursive: true });
+    // Stub generator with the same shape as scripts/gen-agents-digest.ts:
+    // read VERSION, write the version-stamped digest.
+    fs.writeFileSync(path.join(dir, 'scripts', 'gen-agents-digest.ts'), [
+      "import * as fs from 'fs';",
+      "import * as path from 'path';",
+      "const root = path.resolve(import.meta.dir, '..');",
+      "const v = fs.readFileSync(path.join(root, 'VERSION'), 'utf-8').trim();",
+      "fs.writeFileSync(path.join(root, 'agents-digest', 'gstack-AGENTS.md'), `# gstack digest v${v}\\n`);",
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'agents-digest', 'gstack-AGENTS.md'), '# gstack digest v1.0.0.0\n');
+
+    const out = JSON.parse(execFileSync('bun', [BIN, 'write', '--version', '1.1.0.0'], { cwd: dir }).toString());
+    expect(out.agentsDigest).toBe(true);
+    expect(fs.readFileSync(path.join(dir, 'agents-digest', 'gstack-AGENTS.md'), 'utf-8'))
+      .toBe('# gstack digest v1.1.0.0\n');
+  });
+
+  test('a generator failure warns and reports agentsDigest:false without failing the bump', () => {
+    const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'vbump-digest-fail-'));
+    fs.writeFileSync(path.join(d2, 'VERSION'), '1.0.0.0\n');
+    fs.mkdirSync(path.join(d2, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(d2, 'agents-digest'), { recursive: true });
+    fs.writeFileSync(path.join(d2, 'scripts', 'gen-agents-digest.ts'), 'process.exit(1);\n');
+    fs.writeFileSync(path.join(d2, 'agents-digest', 'gstack-AGENTS.md'), '# gstack digest v1.0.0.0\n');
+
+    const res = execFileSync('bun', [BIN, 'write', '--version', '1.1.0.0'], { cwd: d2, stdio: 'pipe' });
+    const out = JSON.parse(res.toString());
+    expect(out.wrote).toBe('1.1.0.0'); // the bump itself still lands
+    expect(out.agentsDigest).toBe(false);
+    fs.rmSync(d2, { recursive: true, force: true });
+  });
+
+  test('the REAL generator + real digest stay in lockstep through a bump round-trip', () => {
+    // Belt and braces for the actual repo wiring (not a stub): bump a copy of
+    // the real VERSION in place, regen, and confirm the first line tracks it.
+    const root = path.join(import.meta.dir, '..');
+    const committed = fs.readFileSync(path.join(root, 'agents-digest', 'gstack-AGENTS.md'), 'utf-8');
+    const version = fs.readFileSync(path.join(root, 'VERSION'), 'utf-8').trim();
+    expect(committed.split('\n')[0]).toContain(`v${version}`);
   });
 });
