@@ -213,6 +213,11 @@ For each specialist (testing, maintainability, security, performance, data-migra
 - If skipped by gating: \`{"dispatched": false, "reason": "gated"}\`
 - If not applicable (e.g., red-team not activated): omit from the object
 
+Advisory findings COUNT in the stats \`findings\` field — the advisory
+carve-out governs the quality score and the findings-count header only.
+Logging simplification's advisories as \`findings: 0\` would auto-gate the
+lens into permanent silence after 10 dispatches.
+
 Include the Design specialist even though it uses \`design-checklist.md\` instead of the specialist schema files.
 Remember these stats — you will need them for the review-log entry in Step 5.8.`;
 }
