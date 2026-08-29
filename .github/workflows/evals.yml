@@ -148,10 +148,10 @@ jobs:
             tier: gate
           - name: e2e-routing
             file: test/skill-routing-e2e.test.ts
-          - name: e2e-codex
-            file: test/codex-e2e.test.ts
-          - name: e2e-gemini
-            file: test/gemini-e2e.test.ts
+          # (e2e-codex / e2e-gemini rows deleted: both files are whole-file
+          # periodic-tier, so with no row tier: they ran ZERO tests and
+          # reported green on every PR — ~2 min of runner per PR of pure
+          # false confidence. The periodic lane owns these suites.)
           # Real-PTY plan-mode smokes. Only the deterministically-reliable ones
           # are CI-gated: office-hours (asks its mode question first, caught by
           # the collapsed/bullet prose-AUQ detector) and plan-mode-no-op (no
@@ -161,6 +161,10 @@ jobs:
           # wedge on the fresh-container onboarding/API-key dialog.
           - name: e2e-pty-plan-smoke
             file: test/skill-e2e-office-hours-auto-mode.test.ts test/skill-e2e-plan-mode-no-op.test.ts
+            # Both files are whole-file describeE2ETier('gate') — without this
+            # row tier: the job burned ~7 min of setup then skipped every
+            # describe (hollow-green since the files adopted the self-gate).
+            tier: gate
             timeout: 35
             # The documented contention-heavy PTY family: ROTATING members
             # failed attempt 2 in consecutive PR #2593 rounds

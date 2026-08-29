@@ -52,24 +52,12 @@ const KNOWN_MATRIX_GAPS = new Set([
 
 /**
  * Matrix files whose whole-file tier guard has no matching row `tier:`
- * property (pre-existing, found 2026-08-26). Consequences today:
- *  - codex-e2e / gemini-e2e declare 'periodic' → both jobs run ZERO tests and
- *    report green on every PR (vestigial rows; the periodic cron lane owns
- *    these suites).
- *  - the two PTY plan-mode smokes declare 'gate' → the e2e-pty-plan-smoke job
- *    spends ~7 min on container setup and skill registration, then bun test
- *    skips every describe — hollow-green since the files adopted
- *    describeE2ETier.
- * Fixing either means deliberately (re)activating paid suites on every PR —
- * tracked in the same TODOS burn-down. Fix = add `tier:` to the row (or
- * delete the vestigial row), then DELETE the entry here.
+ * property. Burned down to empty 2026-08-29: the vestigial codex/gemini rows
+ * were deleted (periodic-tier files, zero tests per PR) and
+ * e2e-pty-plan-smoke gained its `tier: gate`. The ratchet stays so a future
+ * row/file tier mismatch fails the suite instead of shipping hollow green.
  */
-const KNOWN_TIER_UNSET = new Map([
-  ['test/codex-e2e.test.ts', 'periodic'],
-  ['test/gemini-e2e.test.ts', 'periodic'],
-  ['test/skill-e2e-office-hours-auto-mode.test.ts', 'gate'],
-  ['test/skill-e2e-plan-mode-no-op.test.ts', 'gate'],
-]);
+const KNOWN_TIER_UNSET = new Map<string, string>([]);
 
 interface MatrixRow {
   name: string;
