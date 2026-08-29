@@ -27,7 +27,8 @@ describe('runBin', () => {
       input: 'piped|',
       trim: true,
     });
-    expect(r.stdout).toBe('piped|padded');
+    // trim shapes the ENDS of the whole stream; interior whitespace stays.
+    expect(r.stdout).toBe('piped|  padded');
     expect(r.stderr).toBe('noLANG');
   });
 
