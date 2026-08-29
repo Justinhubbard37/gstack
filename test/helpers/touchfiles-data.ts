@@ -66,8 +66,8 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'review-army-quality-score':    ['review/**', 'scripts/resolvers/review-army.ts'],
   'review-army-json-findings':    ['review/**', 'scripts/resolvers/review-army.ts'],
   'review-army-red-team':         ['review/**', 'scripts/resolvers/review-army.ts'],
-  'review-army-simplification':   ['review/**', 'scripts/resolvers/review-army.ts'],
-  'review-army-simplification-precision': ['review/**', 'scripts/resolvers/review-army.ts'],
+  'review-army-simplification':   ['review/**', 'scripts/resolvers/review-army.ts', 'test/fixtures/review-army-overbuild.js', 'test/fixtures/review-army-lean-complete.js', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-simplification-precision': ['review/**', 'scripts/resolvers/review-army.ts', 'test/fixtures/review-army-overbuild.js', 'test/fixtures/review-army-lean-complete.js', 'test/skill-e2e-review-army.test.ts'],
   'review-army-consensus':        ['review/**', 'scripts/resolvers/review-army.ts'],
 
   // Office Hours
@@ -131,7 +131,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // numbered-option lists, multi-phase ordering, idempotency state echo).
   'preamble-script-ab':                        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-brain-sync-block.ts', 'scripts/resolvers/preamble.ts', 'plan-ceo-review/**', 'test/helpers/auq-sdk-capture.ts', 'test/skill-e2e-preamble-script-ab.test.ts'],
   'auq-format-gate':                           ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/helpers/llm-judge.ts'],
-  'auq-repetition-cut-ab':                     ['scripts/resolvers/preamble/generate-ask-user-format.ts', 'plan-ceo-review/**', 'test/helpers/auq-sdk-capture.ts', 'test/skill-e2e-auq-repetition-cut-ab.test.ts'],
+  'auq-repetition-cut-ab':                     ['scripts/resolvers/preamble/generate-ask-user-format.ts', 'plan-ceo-review/**', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/llm-judge.ts', 'test/fixtures/auq-pre-cut-plan-ceo-review-SKILL.md', 'test/skill-e2e-auq-repetition-cut-ab.test.ts'],
   'plan-ceo-mode-routing':       ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-ceo-mode-routing.test.ts'],
   'plan-design-with-ui-scope':   ['plan-design-review/**', 'test/fixtures/plans/ui-heavy-feature.md', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-design-with-ui.test.ts'],
   'budget-regression-pty':       ['test/helpers/eval-store.ts', 'test/skill-budget-regression.test.ts'],
@@ -455,6 +455,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'test/fixtures/arm-benchmark/**',
     'test/helpers/llm-judge.ts',
     'test/skill-e2e-arm-benchmark.test.ts',
+    'ship/SKILL.md',
   ],
   'arm-benchmark-crud-endpoint': [
     'scripts/resolvers/preamble/generate-search-before-building.ts',
@@ -462,6 +463,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'test/fixtures/arm-benchmark/**',
     'test/helpers/llm-judge.ts',
     'test/skill-e2e-arm-benchmark.test.ts',
+    'ship/SKILL.md',
   ],
   'arm-benchmark-bugfix-decoys': [
     'scripts/resolvers/preamble/generate-search-before-building.ts',
@@ -469,6 +471,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'test/fixtures/arm-benchmark/**',
     'test/helpers/llm-judge.ts',
     'test/skill-e2e-arm-benchmark.test.ts',
+    'ship/SKILL.md',
   ],
 
 };
