@@ -391,7 +391,6 @@ export const TREE_MUTATING: Record<string, string> = {
   'test/catalog-mode-full.test.ts': 'regenerates ALL SKILL.md in full-catalog mode, then restores',
   'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
   'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
-  'test/skill-validation.test.ts': 'regenerates .agents/ (codex host) artifacts in place (3 sites)',
   'test/gbrain-detection-override.test.ts':
     'regenerates SKILL.md in place with --respect-detection (gbrain variant), then git-restores — readers see inflated skeletons mid-window',
   'test/host-config.test.ts':
