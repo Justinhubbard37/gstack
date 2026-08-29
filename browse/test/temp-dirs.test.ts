@@ -10,7 +10,7 @@
  * client fetch files from an arbitrary TMPDIR (e.g. $HOME/tmp).
  */
 import { describe, it, expect } from 'bun:test';
-import { TEMP_DIR, TEMP_DIRS } from '../src/platform';
+import { TEMP_DIR, TEMP_DIRS, IS_WINDOWS, isPathWithin } from '../src/platform';
 import { SAFE_DIRECTORIES, validateOutputPath, validateReadPath, validateTempPath } from '../src/path-security';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -52,19 +52,39 @@ describe('local commands accept os.tmpdir() paths (TMPDIR-honoring environments)
 });
 
 describe('remote file serving stays pinned to TEMP_DIR alone (no exfil widening)', () => {
-  it('validateTempPath REJECTS a file under a distinct os.tmpdir() — local-only allowlist never reaches the remote surface', () => {
+  it('validateTempPath REJECTS a project file the local allowlist accepts — the actual exfil boundary, on every topology', () => {
+    // cwd is in SAFE_DIRECTORIES (local commands read project files) but must
+    // NEVER be servable to a remote agent. Unlike the os.tmpdir() case below,
+    // this holds regardless of where the environment points TMPDIR.
+    const f = path.join(process.cwd(), 'package.json');
+    expect(() => validateReadPath(f)).not.toThrow();
+    expect(() => validateTempPath(f)).toThrow(/temp directory/i);
+  });
+
+  it('validateTempPath and a distinct os.tmpdir(): rejected outside TEMP_DIR, allowed when nested inside it', () => {
     if (!tmpdirIsDistinct) {
-      // On hosts where os.tmpdir() IS /tmp the asymmetry is untestable this
-      // way — but then the allowlist must have collapsed to the single dir.
+      // On hosts where os.tmpdir() IS /tmp the widening is a no-op — the
+      // allowlist must have collapsed to the single dir.
       expect(TEMP_DIRS).toEqual([TEMP_DIR]);
       return;
     }
     const f = path.join(os.tmpdir(), `browse-tempdirs-remote-${Date.now()}.txt`);
     fs.writeFileSync(f, 'served?');
     try {
-      // Same file: fine for local commands, forbidden for remote serving.
+      // Local commands accept it on every topology.
       expect(() => validateReadPath(f)).not.toThrow();
-      expect(() => validateTempPath(f)).toThrow(/temp directory/i);
+      if (isPathWithin(real(os.tmpdir()), real(TEMP_DIR))) {
+        // CI shard topology: the runner nests each child's TMPDIR INSIDE
+        // /tmp (e.g. /tmp/gstack-free-shard-*/tmp). The file is under
+        // TEMP_DIR, so serving it remotely is legitimate — the boundary
+        // under test is TEMP_DIR, not os.tmpdir() identity.
+        expect(() => validateTempPath(f)).not.toThrow();
+      } else {
+        // os.tmpdir() genuinely outside TEMP_DIR (macOS /var/folders,
+        // TMPDIR=$HOME/tmp sandboxes): the local-only allowlist must never
+        // reach the remote surface.
+        expect(() => validateTempPath(f)).toThrow(/temp directory/i);
+      }
     } finally {
       fs.unlinkSync(f);
     }
@@ -76,6 +96,13 @@ describe('untrustable TMPDIR values never widen the allowlist', () => {
   // TMPDIR — so a daemon launched with TMPDIR=/ or TMPDIR=$HOME must not
   // trust that subtree for its whole lifetime. Probed via a subprocess so
   // each case gets a fresh module load.
+  //
+  // POSIX-only: on Windows TEMP_DIR is DEFINED as os.tmpdir() (which reads
+  // TEMP/TMP, not TMPDIR), so the fixed-dir + movable-dir topology the guard
+  // filters does not exist — overriding the temp env vars there moves
+  // TEMP_DIR itself, and there is never a second entry to distrust.
+  const itPosix = IS_WINDOWS ? it.skip : it;
+
   const probe = (tmpdir: string): string[] => {
     const r = Bun.spawnSync([
       process.execPath, '-e',
@@ -84,17 +111,17 @@ describe('untrustable TMPDIR values never widen the allowlist', () => {
     return JSON.parse(r.stdout.toString().trim().split('\n').pop()!);
   };
 
-  it('TMPDIR=/ and TMPDIR=$HOME collapse to TEMP_DIR alone; a cwd ancestor is rejected too', () => {
+  itPosix('TMPDIR=/ and TMPDIR=$HOME collapse to TEMP_DIR alone; a cwd ancestor is rejected too', () => {
     expect(probe('/')).toEqual([TEMP_DIR]);
     expect(probe(os.homedir())).toEqual([TEMP_DIR]);
     // Parent of the daemon cwd (the repo checkout's parent) — rejected.
     expect(probe(path.resolve(import.meta.dir, '..', '..', '..'))).toEqual([TEMP_DIR]);
   });
 
-  it('a benign distinct TMPDIR (e.g. $HOME/tmp) is still honored for local paths', () => {
+  itPosix('a benign distinct TMPDIR (e.g. $HOME/tmp) is still honored for local paths', () => {
     const benign = fs.mkdtempSync(path.join(os.homedir(), 'browse-tmp-probe-'));
     try {
-      expect(probe(benign)).toContain(fs.realpathSync(benign));
+      expect(probe(benign).map(real)).toContain(real(benign));
     } finally {
       fs.rmdirSync(benign);
     }
