@@ -54,6 +54,10 @@ import * as os from 'os';
 // near enough for a build-shaped ticket: read fixture, implement, run tests).
 const ARM_MAX_TURNS = 40;
 const ARM_TIMEOUT_MS = 8 * 60_000;
+/** Max diff bytes sent to the over-engineering judge. Truncation is loud
+ *  (logged + suffixed onto judge_reasoning) — a clipped patch can hide the
+ *  construct being scored, so a silent cap would corrupt cells invisibly. */
+const ARM_JUDGE_DIFF_CAP = 30_000;
 // Skill tool in BOTH arms so the tool surface is symmetric — the without-arm
 // simply has nothing installed to invoke. No Agent: build-discipline
 // dispatches no subagents.
@@ -148,10 +152,17 @@ ${body}
 interface ArmDirs {
   dir: string;
   originDir: string;
+  /** The seed commit — the immutable diff base for harvest (an agent that
+   *  disobeys "leave uncommitted" by committing AND pushing can move
+   *  origin/main, but it cannot move a recorded SHA). */
+  seedSha: string;
 }
 
 function run(cmd: string, args: string[], cwd: string): string {
-  const r = spawnSync(cmd, args, { cwd, stdio: 'pipe', encoding: 'utf-8', timeout: 15_000 });
+  // 64MB maxBuffer: the patch capture pipes the FULL staged diff through
+  // here, and the most over-built arm outcome (vendored dependency) is
+  // exactly the one the benchmark must not die on.
+  const r = spawnSync(cmd, args, { cwd, stdio: 'pipe', encoding: 'utf-8', timeout: 15_000, maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) {
     throw new Error(`${cmd} ${args.join(' ')} failed in ${cwd}: ${r.stderr || r.stdout}`);
   }
@@ -176,12 +187,19 @@ function setupArm(task: ArmTask, arm: Arm): ArmDirs {
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), baseClaudeMd);
   }
 
+  // node_modules never enters the harvest: an arm that npm-installs a
+  // dependency is a scoreable outcome, not a reason to stage 10k files.
+  if (!fs.existsSync(path.join(dir, '.gitignore'))) {
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n');
+  }
+
   run('git', ['init', '-b', 'main'], dir);
   run('git', ['config', 'user.email', 'arm-bench@example.com'], dir);
   run('git', ['config', 'user.name', 'Arm Bench'], dir);
   run('git', ['config', 'commit.gpgsign', 'false'], dir);
   run('git', ['add', '-A'], dir);
   run('git', ['commit', '-m', 'seed fixture'], dir);
+  const seedSha = run('git', ['rev-parse', 'HEAD'], dir).trim();
 
   // Local bare origin so merge-base-style commands work inside the arm.
   const originDir = fs.mkdtempSync(path.join(os.tmpdir(), `arm-${task.fixture}-${arm}-origin-`));
@@ -189,7 +207,7 @@ function setupArm(task: ArmTask, arm: Arm): ArmDirs {
   run('git', ['remote', 'add', 'origin', originDir], dir);
   run('git', ['push', '-u', 'origin', 'main'], dir);
 
-  return { dir, originDir };
+  return { dir, originDir, seedSha };
 }
 
 // --- Diff capture: git add -A && git diff --cached --stat (plan spec) ---
@@ -223,14 +241,15 @@ function parseDiffStat(stat: string): Pick<DiffHarvest, 'filesChanged' | 'insert
 /**
  * Rung 2: three lines of git beat a generalized manager (WorktreeManager only
  * harvests worktrees it created from the gstack repo — it cannot harvest
- * synthetic fixtures). Diffing the index against origin/main (the seed
- * commit) instead of HEAD keeps the capture honest even when the agent
- * disobeys "leave uncommitted" and commits its change.
+ * synthetic fixtures). Diffing the index against the RECORDED seed SHA (not
+ * origin/main, which an agent that commits AND pushes can move; not HEAD,
+ * which a plain commit moves) keeps the capture honest under every flavor of
+ * "leave uncommitted" disobedience.
  */
-function captureStagedDiff(dir: string): DiffHarvest {
+function captureStagedDiff(dir: string, seedSha: string): DiffHarvest {
   run('git', ['add', '-A'], dir);
-  const stat = run('git', ['diff', '--cached', 'origin/main', '--stat'], dir);
-  const patch = run('git', ['diff', '--cached', 'origin/main'], dir);
+  const stat = run('git', ['diff', '--cached', seedSha, '--stat'], dir);
+  const patch = run('git', ['diff', '--cached', seedSha], dir);
   return { ...parseDiffStat(stat), stat: stat.trim(), patch };
 }
 
@@ -281,7 +300,7 @@ async function runArmCell(task: ArmTask, arm: Arm): Promise<CellResult> {
     let harvest: DiffHarvest | null = null;
     let harvestError: string | null = null;
     try {
-      harvest = captureStagedDiff(dirs.dir);
+      harvest = captureStagedDiff(dirs.dir, dirs.seedSha);
     } catch (err) {
       harvestError = err instanceof Error ? err.message : String(err);
     }
@@ -290,9 +309,13 @@ async function runArmCell(task: ArmTask, arm: Arm): Promise<CellResult> {
     // judge_error cell (excluded from aggregates, surfaced in the report).
     let judge: ArmJudgeScore | null = null;
     let judgeError: string | null = null;
+    const judgeDiffTruncated = harvest !== null && harvest.patch.length > ARM_JUDGE_DIFF_CAP;
     if (harvest) {
+      if (judgeDiffTruncated) {
+        console.warn(`[arm-benchmark ${task.key}-${arm}] judge diff truncated to ${ARM_JUDGE_DIFF_CAP}B of ${harvest.patch.length}B — the judgement may miss constructs past the cap.`);
+      }
       try {
-        judge = await armJudge(task.ticket, harvest.patch.slice(0, 30_000));
+        judge = await armJudge(task.ticket, harvest.patch.slice(0, ARM_JUDGE_DIFF_CAP));
       } catch (err) {
         judgeError = err instanceof Error ? err.message : String(err);
       }
@@ -312,7 +335,7 @@ async function runArmCell(task: ArmTask, arm: Arm): Promise<CellResult> {
         : null,
       judge_scores: judge ? { over_engineering: judge.over_engineering } : undefined,
       judge_reasoning: judge
-        ? `construct: ${judge.construct} | ${judge.reasoning}`
+        ? `construct: ${judge.construct} | ${judge.reasoning}${judgeDiffTruncated ? ` | diff truncated to ${ARM_JUDGE_DIFF_CAP}B` : ''}`
         : judgeError ? `judge_error: ${judgeError}` : undefined,
       error: harvestError ?? undefined,
     });
@@ -491,7 +514,7 @@ describe('arm benchmark selftest (free, no API)', () => {
     const arm = setupArm(TASKS[2], 'without-skill');
     try {
       // Zero-diff arm: a VALID cell, zeros across the board.
-      const clean = captureStagedDiff(arm.dir);
+      const clean = captureStagedDiff(arm.dir, arm.seedSha);
       expect(clean.filesChanged).toBe(0);
       expect(clean.net).toBe(0);
       expect(clean.patch.trim()).toBe('');
@@ -499,7 +522,7 @@ describe('arm benchmark selftest (free, no API)', () => {
       // Modify + add a file: counts appear, patch carries the change.
       fs.appendFileSync(path.join(arm.dir, 'README.md'), 'appended line\n');
       fs.writeFileSync(path.join(arm.dir, 'new-file.txt'), 'one\ntwo\n');
-      const dirty = captureStagedDiff(arm.dir);
+      const dirty = captureStagedDiff(arm.dir, arm.seedSha);
       expect(dirty.filesChanged).toBe(2);
       expect(dirty.insertions).toBe(3);
       expect(dirty.deletions).toBe(0);
@@ -515,8 +538,9 @@ describe('arm benchmark selftest (free, no API)', () => {
     const goodDiff = fs.readFileSync(path.join(FIXTURES, 'reference', 'good-diff.patch'), 'utf-8');
     const badDiff = fs.readFileSync(path.join(FIXTURES, 'reference', 'bad-diff.patch'), 'utf-8');
     for (const diff of [goodDiff, badDiff]) {
-      const prompt = buildArmJudgePrompt(TASKS[0].ticket, diff);
-      expect(prompt).toContain('<<<UNTRUSTED_DIFF>>>');
+      const prompt = buildArmJudgePrompt(TASKS[0].ticket, diff, 'pinned0000');
+      expect(prompt).toContain('<<<UNTRUSTED_DIFF_pinned0000>>>');
+      expect(prompt).toContain('<<<END_UNTRUSTED_DIFF_pinned0000>>>');
       expect(prompt).toContain(diff);
       expect(prompt).toContain(TASKS[0].ticket);
       expect(prompt).toContain('0-3 scale');
@@ -529,6 +553,16 @@ describe('arm benchmark selftest (free, no API)', () => {
     // uses the platform.
     expect(badDiff).toContain('class CalendarWidget');
     expect(goodDiff).toContain('type="date"');
+
+    // Injection hardening: without an explicit sentinel, each call gets its
+    // own random block markers — an arm diff cannot pre-write a closing
+    // marker it has never seen.
+    const a = buildArmJudgePrompt(TASKS[0].ticket, goodDiff);
+    const b = buildArmJudgePrompt(TASKS[0].ticket, goodDiff);
+    const marker = (p: string) => /<<<UNTRUSTED_DIFF_([a-z0-9]+)>>>/.exec(p)?.[1];
+    expect(marker(a)).toBeTruthy();
+    expect(marker(b)).toBeTruthy();
+    expect(marker(a)).not.toBe(marker(b));
   });
 
   test('judge response parsing: reference-shaped verdicts accepted, malformed rejected', () => {
