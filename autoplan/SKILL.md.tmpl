@@ -490,6 +490,7 @@ AskUserQuestion options:
 **Option handling:**
 - A: mark APPROVED, write review logs, suggest /ship
 - B: ask which overrides, apply, re-present gate
+- B2: walk the User Challenges one at a time (accept or reject each). Rejected → note the user's direction stands, no plan change. Accepted → amend the plan for that challenge (a clearly-wrong premise accepted here reshapes scope the way a mid-run stop used to), then re-run Eng on the amended plan (same rule as D — the gate always reviews the final plan), then re-present the gate. Counts toward the same 3-cycle cap as D.
 - C: answer freeform, re-present gate
 - D: make changes, re-run affected phases (scope→1B, design→2, dx→2.5, test plan→3, arch→3; a re-run of any earlier phase re-runs Eng after it — the gate always reviews the final plan). Max 3 cycles.
 - E: start over
