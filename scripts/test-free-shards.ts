@@ -393,8 +393,6 @@ export const TREE_MUTATING: Record<string, string> = {
   'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
   'test/gbrain-detection-override.test.ts':
     'regenerates SKILL.md in place with --respect-detection (gbrain variant), then git-restores — readers see inflated skeletons mid-window',
-  'test/host-config.test.ts':
-    'golden tests read .agents/.factory artifacts produced by gen-skill-docs.test.ts, and its beforeAll generates them when missing (#2532) — must not race the parallel readers or run before the mutators window',
   // Ratchet readers (measure the tree; need it quiet):
   'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
   'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',

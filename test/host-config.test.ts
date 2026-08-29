@@ -3,8 +3,9 @@
  * host-config-export.ts, and golden-file regression checks.
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { validateHostConfig, validateAllConfigs, type HostConfig } from '../scripts/host-config';
 import {
@@ -428,34 +429,43 @@ describe('host-config-export.ts CLI', () => {
 describe('golden-file regression', () => {
   const GOLDEN_DIR = path.join(ROOT, 'test', 'fixtures', 'golden');
 
-  // #2532: the codex/factory goldens read gitignored .agents/ and .factory/
-  // artifacts that only gen-skill-docs.test.ts (a serial tree-mutating file)
-  // produces. On a clean clone — or when this file runs in isolation — those
-  // dirs don't exist and the goldens fail with ENOENT, an order dependency,
-  // not a regression. Self-provision: generate a host's artifacts iff its
-  // ship SKILL.md is missing. Existing artifacts are never overwritten here,
-  // so a genuinely stale artifact still fails the golden (that is the test's
-  // job; freshness enforcement lives in gen-skill-docs.test.ts).
+  // #2532 successor: the codex/factory goldens used to read gitignored
+  // .agents/ and .factory/ artifacts "produced by gen-skill-docs.test.ts" —
+  // an inter-test ordering dependency that failed with ENOENT on a clean
+  // clone or when this file ran in isolation. Severed: this describe
+  // UNCONDITIONALLY renders both hosts into its own --out-dir in beforeAll
+  // and reads its goldens only from that render — no when-missing check, no
+  // live-tree reads for the gitignored artifacts, no dependence on what any
+  // other test left on disk. Comparing a FRESH render to the golden is also
+  // strictly deterministic: a stale on-disk artifact can no longer mask (or
+  // fake) a generator regression.
+  const GOLDEN_OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-golden-out-'));
+
   beforeAll(() => {
-    const hostArtifacts: Array<[string, string]> = [
-      ['codex', path.join(ROOT, '.agents', 'skills', 'gstack-ship', 'SKILL.md')],
-      ['factory', path.join(ROOT, '.factory', 'skills', 'gstack-ship', 'SKILL.md')],
-    ];
-    for (const [host, artifact] of hostArtifacts) {
-      if (fs.existsSync(artifact)) continue;
-      const result = Bun.spawnSync(['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', host], {
-        cwd: ROOT,
-      });
+    for (const host of ['codex', 'factory']) {
+      const result = Bun.spawnSync(
+        ['bun', 'run', 'scripts/gen-skill-docs.ts', '--host', host, '--out-dir', GOLDEN_OUT],
+        { cwd: ROOT },
+      );
       if (result.exitCode !== 0) {
         throw new Error(
-          `golden-file beforeAll: gen-skill-docs --host ${host} failed (exit ${result.exitCode}):\n`
+          `golden-file beforeAll: gen-skill-docs --host ${host} --out-dir failed (exit ${result.exitCode}):\n`
           + result.stderr.toString(),
         );
       }
     }
   });
 
+  afterAll(() => {
+    fs.rmSync(GOLDEN_OUT, { recursive: true, force: true });
+  });
+
   test('Claude ship skill matches golden baseline', () => {
+    // Deliberately reads the TRACKED ship/SKILL.md (a read, not a write):
+    // the claude golden pins the committed render. Freshness of the tracked
+    // tree vs the templates is enforced by gen-skill-docs.test.ts. (An
+    // out-dir claude render would NOT byte-match this golden — --out-dir
+    // repoints section-base paths into the render by design.)
     const golden = fs.readFileSync(path.join(GOLDEN_DIR, 'claude-ship-SKILL.md'), 'utf-8');
     const current = fs.readFileSync(path.join(ROOT, 'ship', 'SKILL.md'), 'utf-8');
     expect(current).toBe(golden);
@@ -463,13 +473,13 @@ describe('golden-file regression', () => {
 
   test('Codex ship skill matches golden baseline', () => {
     const golden = fs.readFileSync(path.join(GOLDEN_DIR, 'codex-ship-SKILL.md'), 'utf-8');
-    const current = fs.readFileSync(path.join(ROOT, '.agents', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
+    const current = fs.readFileSync(path.join(GOLDEN_OUT, '.agents', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
     expect(current).toBe(golden);
   });
 
   test('Factory ship skill matches golden baseline', () => {
     const golden = fs.readFileSync(path.join(GOLDEN_DIR, 'factory-ship-SKILL.md'), 'utf-8');
-    const current = fs.readFileSync(path.join(ROOT, '.factory', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
+    const current = fs.readFileSync(path.join(GOLDEN_OUT, '.factory', 'skills', 'gstack-ship', 'SKILL.md'), 'utf-8');
     expect(current).toBe(golden);
   });
 });
