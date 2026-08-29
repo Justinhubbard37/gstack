@@ -47,7 +47,12 @@ const CODEX_AVAILABLE = (() => {
   } catch { return false; }
 })();
 const evalsEnabled = !!process.env.EVALS;
-const SKIP = !CODEX_AVAILABLE || !evalsEnabled;
+// External-service test — periodic tier only (CLAUDE.md tiering rule 3),
+// matching codex-e2e.test.ts / codex-e2e-sol-scope.test.ts. Without this
+// guard the sharded runner's "no whole-file tier guard" default would run
+// Codex spawns in the GATE tier on every PR.
+const tierOk = process.env.EVALS_TIER === 'periodic';
+const SKIP = !CODEX_AVAILABLE || !evalsEnabled || !tierOk;
 const describeCodex = SKIP ? describe.skip : describe;
 
 // --- Touchfiles ---

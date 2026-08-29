@@ -43,15 +43,22 @@ describe('paid test enumeration', () => {
     // kept here as a regression pin: its glob-invisibility is exactly how
     // two gate tests went unexecuted for ~8 releases before the rehoming.
     expect(isPaidTestFile('test/skill-e2e.test.ts')).toBe(false);
-    expect(isPaidTestFile('test/codex-e2e-recommendation-substance.test.ts')).toBe(false);
     expect(isPaidTestFile('test/paid-shards.test.ts')).toBe(false);
+    // The 2026-08 orphan fix: these four were API-spending files OUTSIDE the
+    // globs — self-skipping in the free suite and absent from the paid
+    // census, so they could never run in any lane.
+    expect(isPaidTestFile('test/codex-e2e-recommendation-substance.test.ts')).toBe(true);
+    expect(isPaidTestFile('test/codex-e2e-plan-format.test.ts')).toBe(true);
+    expect(isPaidTestFile('test/llm-judge-recommendation.test.ts')).toBe(true);
+    expect(isPaidTestFile('test/carve-section-loading.test.ts')).toBe(true);
+    expect(isPaidTestFile('test/skill-llm-eval-spec.test.ts')).toBe(true);
   });
 
   test('discovers files and gives each one its own shard', () => {
     const files = collectPaidTestFiles();
     expect(files.length).toBeGreaterThan(0);
     expect(files.every(isPaidTestFile)).toBe(true);
-    expect(PAID_TEST_GLOBS.length).toBe(6);
+    expect(PAID_TEST_GLOBS.length).toBe(7);
 
     const shards = planPaidShards(files);
     expect(shards.flat().sort()).toEqual([...files].sort());
