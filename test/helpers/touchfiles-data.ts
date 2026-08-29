@@ -454,6 +454,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'scripts/resolvers/preamble/generate-voice-directive.ts',
     'test/fixtures/arm-benchmark/**',
     'test/helpers/llm-judge.ts',
+    'test/helpers/arm-benchmark-harness.ts',
     'test/skill-e2e-arm-benchmark.test.ts',
     'ship/SKILL.md',
   ],
@@ -462,6 +463,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'scripts/resolvers/preamble/generate-voice-directive.ts',
     'test/fixtures/arm-benchmark/**',
     'test/helpers/llm-judge.ts',
+    'test/helpers/arm-benchmark-harness.ts',
     'test/skill-e2e-arm-benchmark.test.ts',
     'ship/SKILL.md',
   ],
@@ -470,6 +472,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'scripts/resolvers/preamble/generate-voice-directive.ts',
     'test/fixtures/arm-benchmark/**',
     'test/helpers/llm-judge.ts',
+    'test/helpers/arm-benchmark-harness.ts',
     'test/skill-e2e-arm-benchmark.test.ts',
     'ship/SKILL.md',
   ],
@@ -581,7 +584,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   //   gate: cheap, deterministic, run on every PR
   //   periodic: long-running or expensive (>$3/run), run weekly
   'preamble-script-ab':                      'periodic',   // Phase 1-3 A/B: script vs inline preamble; demoted post-Phase-3 (OV7)
-  'auq-repetition-cut-ab':                   'periodic',   // AUQ repetition-cut NOT-WORSE gate (passed pre-landing; re-runs on AUQ format changes)
+  'auq-repetition-cut-ab':                   'periodic',   // AUQ repetition-cut NOT-WORSE gate (passed pre-landing). Periodic runs force EVALS_ALL, so the dep list cannot auto-trigger it — an AUQ format edit carries a MANUAL re-run obligation (bun test test/skill-e2e-auq-repetition-cut-ab.test.ts with EVALS=1 EVALS_TIER=periodic)
   'auq-format-gate':                         'gate',       // ~$0.50/run, SDK capture, single skill probe
   'plan-ceo-mode-routing':     'periodic',   // ~$3/run, deep navigation through 8-12 prior AskUserQuestions
   'plan-design-with-ui-scope': 'gate',       // ~$0.80/run
