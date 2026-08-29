@@ -349,11 +349,12 @@ export const RESERVED_CPUS = 2;
 export function fullSuiteJobs(): number {
   const raw = process.env.GSTACK_FREE_JOBS;
   if (raw !== undefined && raw !== '') {
-    const value = Number.parseInt(raw, 10);
-    if (!Number.isInteger(value) || value <= 0) {
+    // Strict digits-only: parseInt would silently truncate "2abc" -> 2 and
+    // "3.7" -> 3, defeating the loud-failure contract the error text claims.
+    if (!/^\d+$/.test(raw.trim()) || Number.parseInt(raw, 10) <= 0) {
       throw new Error(`GSTACK_FREE_JOBS must be a positive integer, got: ${raw}`);
     }
-    return value;
+    return Number.parseInt(raw, 10);
   }
   return Math.max(1, Math.min(MAX_FULL_SUITE_JOBS, os.cpus().length - RESERVED_CPUS));
 }

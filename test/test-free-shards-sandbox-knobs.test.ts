@@ -55,7 +55,9 @@ describe('test-free-shards: fullSuiteJobs (GSTACK_FREE_JOBS override)', () => {
   });
 
   test('zero, negative, and non-numeric values throw loudly instead of silently defaulting', () => {
-    for (const bad of ['0', '-2', 'abc', 'NaN']) {
+    // '2abc' and '3.7' pin the strict digits-only check: parseInt would
+    // silently truncate them to 2 and 3, defeating the loud-failure contract.
+    for (const bad of ['0', '-2', 'abc', 'NaN', '2abc', '3.7']) {
       expect(() => withJobsEnv(bad, fullSuiteJobs)).toThrow(/positive integer/);
     }
   });
