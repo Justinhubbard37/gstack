@@ -113,6 +113,6 @@ describeE2E('/plan-ceo-review split-overflow regression (periodic)', () => {
         }
       }
     },
-    1_700_000,
+    1_500_000 /* physical ceiling: the 25-min CI job + 1800s shard wall cap what can actually execute */,
   );
 });
