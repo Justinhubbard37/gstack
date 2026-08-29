@@ -962,6 +962,20 @@ function findTemplates(): string[] {
 }
 
 const ALL_HOSTS: Host[] = ALL_HOST_NAMES as Host[];
+
+/**
+ * The generator's whole executable body. Import-purity contract: importing
+ * this module must NEVER touch the tree — test/gen-skill-docs.test.ts pulls
+ * assertSinglePreamble via require(), test/catalog-trim.test.ts imports
+ * helpers, and before this guard existed every such import regenerated all
+ * 71 SKILL.md in place at module-load time (the root cause of half the
+ * TREE_MUTATING serial shard; hazard class #2532). Pinned by
+ * test/gen-skill-docs-import-purity.test.ts.
+ *
+ * Returns the process exit code. Kept synchronous so the module stays
+ * require()-able (see the llms.txt IIFE note below).
+ */
+export function main(): number {
 const hostsToRun: Host[] = HOST_ARG_VAL === 'all' ? ALL_HOSTS : [HOST];
 const failures: { host: string; error: Error }[] = [];
 
@@ -1077,7 +1091,7 @@ for (const currentHost of hostsToRun) {
 
     if (DRY_RUN && hasChanges) {
       console.error(`\nGenerated SKILL.md files are stale (${currentHost} host). Run: bun run gen:skill-docs --host ${currentHost}`);
-      if (HOST_ARG_VAL !== 'all') process.exit(1);
+      if (HOST_ARG_VAL !== 'all') return 1;
       failures.push({ host: currentHost, error: new Error('Stale files detected') });
     }
 
@@ -1112,7 +1126,7 @@ for (const currentHost of hostsToRun) {
 // in the same commit" is only a real gate if every host failure is fatal here.
 if (failures.length > 0 && HOST_ARG_VAL === 'all') {
   console.error(`\n${failures.length} host(s) failed: ${failures.map(f => f.host).join(', ')}`);
-  process.exit(1);
+  return 1;
 }
 // Single host dry-run failure already handled above
 
@@ -1149,4 +1163,15 @@ if (!DRY_RUN) {
       console.error(`[gen-llms-txt] FAILED: ${msg}`);
     }
   })();
+}
+
+return 0;
+}
+
+if (import.meta.main) {
+  // Failure exits are immediate (matching the old top-level process.exit
+  // behavior); success leaves the event loop to drain so the llms.txt
+  // fire-and-forget IIFE inside main() finishes its write.
+  const code = main();
+  if (code !== 0) process.exit(code);
 }
