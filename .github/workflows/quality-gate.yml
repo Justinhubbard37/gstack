@@ -43,6 +43,14 @@ jobs:
       - name: Install frozen dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
+      # Advisory slop scan of branch-changed files. Lived inside `bun run
+      # test` before (silently appended, up to 240s invisible in the "~90s
+      # suite" claim); decoupling it from the pre-commit loop is only honest
+      # if a per-PR path still runs it — this is that path. || true: quality
+      # signal, never a gate (/review runs it interactively too).
+      - name: Slop scan (changed files, advisory)
+        run: bun run slop:diff || true
+
       - name: Scan changed text for credentials (added lines, own redact engine)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
