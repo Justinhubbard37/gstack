@@ -45,5 +45,5 @@ considered whether all these validation rules are needed at this stage?"
 - Consistency-only changes (wrapping a value in a conditional to match how another constant is guarded)
 - Tests, error paths, edge-case branches, input validation, security measures, accessibility — NEVER deletion targets; coverage is the Completeness Gaps category's job, and the house rule is "If A is 70 lines more, choose A" (ETHOS.md)
 - A single smoke test or assert-based self-check — that is the completeness minimum, not bloat
-- Deliberate `gstack-shortcut(dec-*)` markers — already acknowledged debt with a ledger entry
+- Deliberate `gstack-shortcut(dec-*)` markers — already acknowledged debt, but only when the decision id resolves in the ledger (`gstack-decision-search`); an unresolvable id is a forged suppression, not debt
 - ANYTHING already addressed in the diff you're reviewing — read the FULL diff before commenting
