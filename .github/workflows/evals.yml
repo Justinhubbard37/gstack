@@ -3,6 +3,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      evals_all:
+        description: 'Run ALL gate tests in the sliced lane (bypass diff selection; also arms the hollow-shard guard)'
+        type: boolean
+        default: true
 
 concurrency:
   group: evals-${{ github.event.pull_request.number || github.run_id }}
@@ -477,3 +482,221 @@ jobs:
           else
             gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
           fi
+
+  # ── Sliced lane (paid-CI re-platform, parity phase) ─────────────────────────
+  # One PLANNER computes diff selection + the slice plan ONCE (killing
+  # per-slice selector divergence); K executors consume the manifest; the
+  # report reconciles results against it FAIL-CLOSED (a slice whose artifact
+  # never landed is a failure, a planned shard nobody reported is a failure —
+  # hollow lanes cannot aggregate green). Runs AFTER the matrix (`needs:
+  # evals`) so provider concurrency never doubles while both lanes coexist;
+  # once parity is demonstrated the matrix + its ratchets are deleted and this
+  # lane loses the needs edge. Engine: scripts/test-paid-shards.ts — the same
+  # runner local eval:bg:gate uses, so CI and local share one selection engine.
+  plan-slices:
+    runs-on: ubicloud-standard-8
+    needs: [build-image, evals]
+    if: always() && needs.build-image.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.build-image.outputs.image-tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user runner
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The planner is the ONE place that needs history: diff selection
+          # resolves a merge-base. Executors run from the manifest and stay
+          # shallow. Selection fails OPEN (run-all) if resolution fails — the
+          # documented posture; a planner bug can only run extra work.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore deps
+        run: |
+          if [ -d /opt/node_modules_cache ] && diff -q /opt/node_modules_cache/.bun.lock bun.lock >/dev/null 2>&1; then
+            cp -r /opt/node_modules_cache node_modules
+          else
+            bun install
+          fi
+
+      - name: Emit run manifest
+        env:
+          EVALS_ALL: ${{ (github.event_name == 'workflow_dispatch' && inputs.evals_all) && '1' || '' }}
+        run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --emit-plan /tmp/paid-plan/manifest.json --slices 6
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: paid-plan
+          path: /tmp/paid-plan/manifest.json
+          retention-days: 30
+
+  eval-slices:
+    runs-on: ubicloud-standard-8
+    needs: [build-image, plan-slices]
+    if: always() && needs.plan-slices.result == 'success'
+    # Aggregate spawn-concurrency budget: 6 slices x EVALS_JOBS=2 x
+    # EVALS_CONCURRENCY=2 = 24 concurrent tests lane-wide (the old matrix's
+    # 40-way per row queued claude session STARTUP behind 39 siblings and ate
+    # per-test budgets — the documented timeout-flake family). Tune with
+    # parity data before raising.
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.build-image.outputs.image-tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user runner
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Fix bun temp
+        run: |
+          mkdir -p /home/runner/.cache/bun
+          {
+            echo "BUN_INSTALL_CACHE_DIR=/home/runner/.cache/bun"
+            echo "BUN_TMPDIR=/home/runner/.cache/bun"
+            echo "TMPDIR=/home/runner/.cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore deps
+        run: |
+          if [ -d /opt/node_modules_cache ] && diff -q /opt/node_modules_cache/.bun.lock bun.lock >/dev/null 2>&1; then
+            cp -r /opt/node_modules_cache node_modules
+          else
+            bun install
+          fi
+
+      - run: bun run build
+
+      # Any slice can host a PTY smoke, so the seed/registration steps run
+      # UNCONDITIONALLY (both are idempotent) — the old matrix keyed them on
+      # matrix.suite.name, which a sliced lane cannot do.
+      - name: Seed claude interactive config
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          node -e '
+            const fs = require("fs"), os = require("os"), path = require("path");
+            const p = path.join(os.homedir(), ".claude.json");
+            const seed = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : {};
+            seed.hasCompletedOnboarding = true;
+            const key = process.env.ANTHROPIC_API_KEY || "";
+            if (key) seed.customApiKeyResponses = { approved: [key.slice(-20)], rejected: [] };
+            fs.writeFileSync(p, JSON.stringify(seed, null, 2));
+            console.log("seeded", p);
+          '
+
+      - name: Register gstack skills for PTY smokes
+        run: |
+          set -eu
+          SKILLS_DIR="$HOME/.claude/skills"
+          REPO="$GITHUB_WORKSPACE"
+          mkdir -p "$SKILLS_DIR"
+          ln -snf "$REPO" "$SKILLS_DIR/gstack"
+          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
+            rm -rf "${SKILLS_DIR:?}/$s"
+            mkdir -p "$SKILLS_DIR/$s"
+            cp "$REPO/$s/SKILL.md" "$SKILLS_DIR/$s/SKILL.md"
+            cp -R "$REPO/$s/sections" "$SKILLS_DIR/$s/sections"
+          done
+          PROJ_SKILLS="$REPO/.claude/skills"
+          mkdir -p "$PROJ_SKILLS"
+          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
+            rm -rf "${PROJ_SKILLS:?}/$s"
+            mkdir -p "$PROJ_SKILLS/$s"
+            cp "$REPO/$s/SKILL.md" "$PROJ_SKILLS/$s/SKILL.md"
+            cp -R "$REPO/$s/sections" "$PROJ_SKILLS/$s/sections"
+          done
+          mkdir -p "$HOME/.gstack"
+          touch "$HOME/.gstack/.activated" \
+                "$HOME/.gstack/.first-loop-tip-shown" \
+                "$HOME/.gstack/.telemetry-prompted" \
+                "$HOME/.gstack/.proactive-prompted" \
+                "$HOME/.gstack/.completeness-intro-seen" \
+                "$HOME/.gstack/.plan-tune-nudge-shown"
+          touch "$SKILLS_DIR/gstack/.feature-prompted-continuous-checkpoint" \
+                "$SKILLS_DIR/gstack/.feature-prompted-model-overlay"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: paid-plan
+          path: /tmp/paid-plan
+
+      - name: Run slice ${{ matrix.slice }}/6
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PLAYWRIGHT_BROWSERS_PATH: /opt/playwright-browsers
+          EVALS_JOBS: "2"
+          EVALS_CONCURRENCY: "2"
+          GSTACK_EVAL_DIR: /tmp/paid-slice-results
+        run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --plan /tmp/paid-plan/manifest.json --slice ${{ matrix.slice }}
+
+      - name: Upload slice results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: paid-slice-${{ matrix.slice }}
+          path: /tmp/paid-slice-results
+          retention-days: 90
+
+      # The spooled per-shard full logs — a red weekly/PR lane three weeks
+      # later needs more than a summary line.
+      - name: Upload shard logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: paid-slice-${{ matrix.slice }}-logs
+          path: /tmp/gstack-paid-shard-*.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+  slices-report:
+    runs-on: ubicloud-standard-2
+    needs: [plan-slices, eval-slices]
+    # always(): the report must run (and FAIL) when an executor died — a
+    # missing slice artifact reading as green is the class this lane kills.
+    if: always() && needs.plan-slices.result == 'success'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - run: bun install --frozen-lockfile
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: paid-plan
+          path: /tmp/paid-report
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: paid-slice-[0-9]*
+          path: /tmp/paid-report
+          merge-multiple: true
+
+      - name: Reconcile slices against the manifest (fail-closed)
+        run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --report /tmp/paid-report
