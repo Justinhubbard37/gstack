@@ -407,6 +407,8 @@ export const TREE_MUTATING: Record<string, string> = {
     'golden tests read .agents/.factory artifacts produced by gen-skill-docs.test.ts, and its beforeAll generates them when missing (#2532) — must not race the parallel readers or run before the mutators window',
   'test/catalog-trim.test.ts':
     'imports scripts/gen-skill-docs.ts, whose top-level body regenerates the full claude host at import time (71 files; idempotent on a fresh tree, but a stale tree gets rewritten mid-window) — same hazard class as #2532',
+  'test/gen-skill-docs-out-dir.test.ts':
+    'PORCELAIN READER — its before/after git-status pin needs a quiet tree (a concurrent shard\'s transient fixture write raced it on Windows CI), and its spawned render rewrites llms.txt/agents-digest in place (idempotent on a fresh tree)',
   // Ratchet readers (measure the tree; need it quiet):
   'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
   'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',
