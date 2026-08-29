@@ -22,8 +22,8 @@
  */
 export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Browse core (+ test-server dependency)
-  'browse-basic':    ['browse/src/**', 'browse/test/test-server.ts'],
-  'browse-snapshot': ['browse/src/**', 'browse/test/test-server.ts'],
+  'browse-basic':    ['browse/src/**', 'browse/test/test-server.ts', 'test/skill-e2e-bws.test.ts'],
+  'browse-snapshot': ['browse/src/**', 'browse/test/test-server.ts', 'test/skill-e2e-bws.test.ts'],
 
   // Hermetic isolation canaries (hermetic-env.ts is also a GLOBAL touchfile;
   // these entries exist so the canaries themselves stay tier-classified)
@@ -37,21 +37,21 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'first-task-scaffold': ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'bin/gstack-first-task-detect', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'test/skill-e2e-first-task-scaffold.test.ts', 'test/helpers/session-runner.ts'],
 
   // SKILL.md setup + preamble (depend on ROOT SKILL.md + gen-skill-docs)
-  'skillmd-setup-discovery':  ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'skillmd-no-local-binary':  ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'skillmd-outside-git':      ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
+  'skillmd-setup-discovery':  ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-bws.test.ts'],
+  'skillmd-no-local-binary':  ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-bws.test.ts'],
+  'skillmd-outside-git':      ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-bws.test.ts'],
 
-  'session-awareness':        ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'operational-learning':     ['scripts/resolvers/preamble.ts', 'bin/gstack-learnings-log'],
+  'session-awareness':        ['SKILL.md', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-bws.test.ts'],
+  'operational-learning':     ['scripts/resolvers/preamble.ts', 'bin/gstack-learnings-log', 'test/skill-e2e-bws.test.ts'],
 
   // QA (+ test-server dependency)
-  'qa-quick':       ['qa/**', 'browse/src/**', 'browse/test/test-server.ts'],
-  'qa-b6-static':   ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/helpers/llm-judge.ts', 'browse/test/fixtures/qa-eval.html', 'test/fixtures/qa-eval-ground-truth.json'],
-  'qa-b7-spa':      ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/helpers/llm-judge.ts', 'browse/test/fixtures/qa-eval-spa.html', 'test/fixtures/qa-eval-spa-ground-truth.json'],
-  'qa-b8-checkout': ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/helpers/llm-judge.ts', 'browse/test/fixtures/qa-eval-checkout.html', 'test/fixtures/qa-eval-checkout-ground-truth.json'],
-  'qa-only-no-fix': ['qa-only/**', 'qa/templates/**'],
-  'qa-fix-loop':    ['qa/**', 'browse/src/**', 'browse/test/test-server.ts'],
-  'qa-bootstrap':   ['qa/**', 'ship/**'],
+  'qa-quick':       ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/skill-e2e-qa-workflow.test.ts'],
+  'qa-b6-static':   ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/helpers/llm-judge.ts', 'browse/test/fixtures/qa-eval.html', 'test/fixtures/qa-eval-ground-truth.json', 'test/skill-e2e-qa-bugs.test.ts'],
+  'qa-b7-spa':      ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/helpers/llm-judge.ts', 'browse/test/fixtures/qa-eval-spa.html', 'test/fixtures/qa-eval-spa-ground-truth.json', 'test/skill-e2e-qa-bugs.test.ts'],
+  'qa-b8-checkout': ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/helpers/llm-judge.ts', 'browse/test/fixtures/qa-eval-checkout.html', 'test/fixtures/qa-eval-checkout-ground-truth.json', 'test/skill-e2e-qa-bugs.test.ts'],
+  'qa-only-no-fix': ['qa-only/**', 'qa/templates/**', 'test/skill-e2e-qa-workflow.test.ts'],
+  'qa-fix-loop':    ['qa/**', 'browse/src/**', 'browse/test/test-server.ts', 'test/skill-e2e-qa-workflow.test.ts'],
+  'qa-bootstrap':   ['qa/**', 'ship/**', 'test/skill-e2e-qa-workflow.test.ts'],
 
   // Review
   'review-sql-injection':     ['review/**', 'test/fixtures/review-eval-vuln.rb', 'test/skill-e2e-review.test.ts'],
@@ -60,27 +60,27 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'review-design-lite':       ['review/**', 'test/fixtures/review-eval-design-slop.*', 'test/skill-e2e-review.test.ts'],
 
   // Review Army (specialist dispatch)
-  'review-army-migration-safety': ['review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope'],
-  'review-army-perf-n-plus-one':  ['review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope'],
-  'review-army-delivery-audit':   ['review/**', 'scripts/resolvers/review.ts', 'scripts/resolvers/review-army.ts'],
-  'review-army-quality-score':    ['review/**', 'scripts/resolvers/review-army.ts'],
-  'review-army-json-findings':    ['review/**', 'scripts/resolvers/review-army.ts'],
-  'review-army-red-team':         ['review/**', 'scripts/resolvers/review-army.ts'],
-  'review-army-consensus':        ['review/**', 'scripts/resolvers/review-army.ts'],
+  'review-army-migration-safety': ['review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-perf-n-plus-one':  ['review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-delivery-audit':   ['review/**', 'scripts/resolvers/review.ts', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-quality-score':    ['review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-json-findings':    ['review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-red-team':         ['review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts'],
+  'review-army-consensus':        ['review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts'],
 
   // Office Hours
-  'office-hours-spec-review':     ['office-hours/**', 'scripts/gen-skill-docs.ts'],
-  'office-hours-forcing-energy':  ['office-hours/**', 'scripts/resolvers/preamble.ts', 'test/fixtures/mode-posture/**', 'test/helpers/llm-judge.ts'],
-  'office-hours-builder-wildness': ['office-hours/**', 'scripts/resolvers/preamble.ts', 'test/fixtures/mode-posture/**', 'test/helpers/llm-judge.ts'],
+  'office-hours-spec-review':     ['office-hours/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
+  'office-hours-forcing-energy':  ['office-hours/**', 'scripts/resolvers/preamble.ts', 'test/fixtures/mode-posture/**', 'test/helpers/llm-judge.ts', 'test/skill-e2e-office-hours.test.ts'],
+  'office-hours-builder-wildness': ['office-hours/**', 'scripts/resolvers/preamble.ts', 'test/fixtures/mode-posture/**', 'test/helpers/llm-judge.ts', 'test/skill-e2e-office-hours.test.ts'],
 
   // Plan reviews
-  'plan-ceo-review':                  ['plan-ceo-review/**'],
-  'plan-ceo-review-selective':        ['plan-ceo-review/**'],
-  'plan-ceo-review-benefits':         ['plan-ceo-review/**', 'scripts/gen-skill-docs.ts'],
-  'plan-ceo-review-expansion-energy': ['plan-ceo-review/**', 'scripts/resolvers/preamble.ts', 'test/fixtures/mode-posture/**', 'test/helpers/llm-judge.ts'],
-  'plan-eng-review':           ['plan-eng-review/**'],
-  'plan-eng-review-artifact':  ['plan-eng-review/**'],
-  'plan-review-report':        ['plan-eng-review/**', 'scripts/gen-skill-docs.ts'],
+  'plan-ceo-review':                  ['plan-ceo-review/**', 'test/skill-e2e-plan.test.ts'],
+  'plan-ceo-review-selective':        ['plan-ceo-review/**', 'test/skill-e2e-plan.test.ts'],
+  'plan-ceo-review-benefits':         ['plan-ceo-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
+  'plan-ceo-review-expansion-energy': ['plan-ceo-review/**', 'scripts/resolvers/preamble.ts', 'test/fixtures/mode-posture/**', 'test/helpers/llm-judge.ts', 'test/skill-e2e-plan.test.ts'],
+  'plan-eng-review':           ['plan-eng-review/**', 'test/skill-e2e-plan.test.ts'],
+  'plan-eng-review-artifact':  ['plan-eng-review/**', 'test/skill-e2e-plan.test.ts'],
+  'plan-review-report':        ['plan-eng-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
 
   // Plan-mode smoke tests — gate-tier safety regression tests. Each test file
   // contains TWO test cases as of v1.21: the baseline plan-mode case and the
@@ -91,7 +91,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // regression test outcome between 'asked' and 'auto_decided'.
   'plan-ceo-review-plan-mode':    ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-ceo-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-ceo-plan-mode.test.ts'],
   'plan-eng-review-plan-mode':    ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-eng-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-eng-plan-mode.test.ts'],
-  'plan-design-review-plan-mode': ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-design-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-design-plan-mode.test.ts'],
+  'plan-design-review-plan-mode': ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-design-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-design-plan-mode.test.ts', 'test/skill-e2e-design.test.ts'],
   'plan-devex-review-plan-mode':  ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'scripts/resolvers/review.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-devex-plan-mode.test.ts'],
   // Covers ceo (preamble misfire) + eng/design (scope-gate bypass must not
   // fire outside plan mode) + the named-target exception case. 4 PTY runs;
@@ -117,7 +117,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // written a never-ask preference, AUQ should still auto-decide rather than
   // surfacing the question. Touches the question-tuning + preference
   // infrastructure plus the resolvers that own the AUTO_DECIDE preamble.
-  'auto-decide-preserved':        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-completion-status.ts', 'plan-ceo-review/**', 'bin/gstack-question-preference', 'bin/gstack-config', 'bin/gstack-slug', 'hosts/claude/hooks/question-preference-hook.ts', 'lib/is-conductor.ts', 'test/helpers/claude-pty-runner.ts'],
+  'auto-decide-preserved':        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-completion-status.ts', 'plan-ceo-review/**', 'bin/gstack-question-preference', 'bin/gstack-config', 'bin/gstack-slug', 'hosts/claude/hooks/question-preference-hook.ts', 'lib/is-conductor.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-auto-decide-preserved.test.ts'],
 
   // Conductor → prose decision brief (Conductor signal makes prose the default;
   // the PreToolUse hook denies the flaky tool). Touches the resolver that owns
@@ -128,18 +128,18 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Each one tests behavior the SDK harness can't observe (rendered TTY,
   // numbered-option lists, multi-phase ordering, idempotency state echo).
   'preamble-script-ab':                        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-brain-sync-block.ts', 'scripts/resolvers/preamble.ts', 'plan-ceo-review/**', 'test/helpers/auq-sdk-capture.ts', 'test/skill-e2e-preamble-script-ab.test.ts'],
-  'auq-format-gate':                           ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/helpers/llm-judge.ts'],
+  'auq-format-gate':                           ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/helpers/llm-judge.ts', 'test/skill-e2e-ask-user-question-format-compliance.test.ts'],
   'plan-ceo-mode-routing':       ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-ceo-mode-routing.test.ts'],
   'plan-design-with-ui-scope':   ['plan-design-review/**', 'test/fixtures/plans/ui-heavy-feature.md', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-design-with-ui.test.ts'],
   'budget-regression-pty':       ['test/helpers/eval-store.ts', 'test/skill-budget-regression.test.ts'],
   'ship-idempotency-pty':        ['ship/**', 'bin/gstack-next-version', 'bin/gstack-version-bump', 'scripts/resolvers/sections.ts', 'lib/worktree.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-ship-idempotency.test.ts'],
   'ship-section-loading':        ['ship/**', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/skill-e2e-ship-section-loading.test.ts'],
-  'plan-ceo-section-loading':    ['plan-ceo-review/**', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts'],
+  'plan-ceo-section-loading':    ['plan-ceo-review/**', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/skill-e2e-plan-ceo-review-section-loading.test.ts'],
   // Data-driven behavioral guard for the 'plan'/'prompt' carves (eng, design,
   // devex, office-hours + future PR2 carves). One file iterating CARVE_GUARDS;
   // the selector sets GSTACK_CARVE_SKILL=<name> to scope cost to the changed
   // skill (D-CODEX A). Touching the registry/helper or sections.ts runs all.
-  'carve-section-loading':       ['design-html/**', 'design-shotgun/**', 'qa/**', 'browse/**', 'retro/**', 'autoplan/**', 'spec/**', 'setup-gbrain/**', 'review/**', 'codex/**', 'land-and-deploy/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'office-hours/**', 'document-release/**', 'design-consultation/**', 'cso/**', 'test/helpers/carve-guards.ts', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts'],
+  'carve-section-loading':       ['design-html/**', 'design-shotgun/**', 'qa/**', 'browse/**', 'retro/**', 'autoplan/**', 'spec/**', 'setup-gbrain/**', 'review/**', 'codex/**', 'land-and-deploy/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'office-hours/**', 'document-release/**', 'design-consultation/**', 'cso/**', 'test/helpers/carve-guards.ts', 'scripts/resolvers/sections.ts', 'scripts/gen-skill-docs.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/carve-section-loading.test.ts'],
   'autoplan-chain-pty':          ['autoplan/**', 'plan-ceo-review/**', 'plan-design-review/**', 'plan-eng-review/**', 'plan-devex-review/**', 'test/fixtures/plans/ui-heavy-feature.md', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-autoplan-chain.test.ts'],
   'e2e-harness-audit':            ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-completion-status.ts', 'test/helpers/agent-sdk-runner.ts', 'test/helpers/claude-pty-runner.ts'],
 
@@ -185,18 +185,18 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
 
   // AskUserQuestion format regression (RECOMMENDATION + Completeness: N/10)
   // Fires when either template OR the two preamble resolvers change.
-  'plan-ceo-review-format-mode':      ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts'],
-  'plan-ceo-review-format-approach':  ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts'],
-  'plan-eng-review-format-coverage':  ['plan-eng-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts'],
-  'plan-eng-review-format-kind':      ['plan-eng-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts'],
+  'plan-ceo-review-format-mode':      ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts', 'test/skill-e2e-plan-format.test.ts'],
+  'plan-ceo-review-format-approach':  ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts', 'test/skill-e2e-plan-format.test.ts'],
+  'plan-eng-review-format-coverage':  ['plan-eng-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts', 'test/skill-e2e-plan-format.test.ts'],
+  'plan-eng-review-format-kind':      ['plan-eng-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/helpers/llm-judge.ts', 'test/skill-e2e-plan-format.test.ts'],
 
   // v1.7.0.0 Pros/Cons format cadence + format + negative-escape evals.
   // Dependencies: same as format-mode + the 4 plan-review templates + overlay.
   // All periodic-tier (non-deterministic Opus 4.7 behavior).
-  'plan-ceo-review-prosons-cadence':  ['plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md'],
-  'plan-review-prosons-format':       ['plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md'],
-  'plan-review-prosons-hardstop-neg': ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md'],
-  'plan-review-prosons-neutral-neg':  ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md'],
+  'plan-ceo-review-prosons-cadence':  ['plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/skill-e2e-plan-prosons.test.ts'],
+  'plan-review-prosons-format':       ['plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**', 'plan-devex-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/skill-e2e-plan-prosons.test.ts'],
+  'plan-review-prosons-hardstop-neg': ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/skill-e2e-plan-prosons.test.ts'],
+  'plan-review-prosons-neutral-neg':  ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md', 'test/skill-e2e-plan-prosons.test.ts'],
 
   // Expanded coverage (CT3) — 6 non-plan-review skills inherit Pros/Cons via preamble
   'ship-prosons-format':              ['ship/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md'],
@@ -208,24 +208,24 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'document-release-prosons-format':  ['document-release/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'model-overlays/opus-4-7.md'],
 
   // /plan-tune (v1 observational)
-  'plan-tune-inspect':         ['plan-tune/**', 'scripts/question-registry.ts', 'scripts/psychographic-signals.ts', 'scripts/one-way-doors.ts', 'bin/gstack-question-log', 'bin/gstack-question-preference', 'bin/gstack-developer-profile'],
+  'plan-tune-inspect':         ['plan-tune/**', 'scripts/question-registry.ts', 'scripts/psychographic-signals.ts', 'scripts/one-way-doors.ts', 'bin/gstack-question-log', 'bin/gstack-question-preference', 'bin/gstack-developer-profile', 'test/skill-e2e-plan-tune.test.ts'],
 
   // /plan-tune cathedral (T16 — 5 E2E scenarios, all gate per D12)
-  'plan-tune-hook-capture':      ['hosts/claude/hooks/**', 'bin/gstack-question-log', 'bin/gstack-developer-profile', 'plan-tune/**'],
-  'plan-tune-enforcement':       ['hosts/claude/hooks/**', 'bin/gstack-question-preference', 'scripts/question-registry.ts'],
-  'plan-tune-annotation':        ['hosts/claude/hooks/**', 'scripts/declared-annotation.ts', 'scripts/psychographic-signals.ts', 'scripts/question-registry.ts'],
-  'plan-tune-codex-import':      ['bin/gstack-codex-session-import', 'bin/gstack-question-log', 'docs/spikes/codex-session-format.md'],
-  'plan-tune-dream-cycle':       ['bin/gstack-distill-free-text', 'bin/gstack-distill-apply', 'hosts/claude/hooks/**', 'plan-tune/**'],
+  'plan-tune-hook-capture':      ['hosts/claude/hooks/**', 'bin/gstack-question-log', 'bin/gstack-developer-profile', 'plan-tune/**', 'test/skill-e2e-plan-tune-cathedral.test.ts'],
+  'plan-tune-enforcement':       ['hosts/claude/hooks/**', 'bin/gstack-question-preference', 'scripts/question-registry.ts', 'test/skill-e2e-plan-tune-cathedral.test.ts'],
+  'plan-tune-annotation':        ['hosts/claude/hooks/**', 'scripts/declared-annotation.ts', 'scripts/psychographic-signals.ts', 'scripts/question-registry.ts', 'test/skill-e2e-plan-tune-cathedral.test.ts'],
+  'plan-tune-codex-import':      ['bin/gstack-codex-session-import', 'bin/gstack-question-log', 'docs/spikes/codex-session-format.md', 'test/skill-e2e-plan-tune-cathedral.test.ts'],
+  'plan-tune-dream-cycle':       ['bin/gstack-distill-free-text', 'bin/gstack-distill-apply', 'hosts/claude/hooks/**', 'plan-tune/**', 'test/skill-e2e-plan-tune-cathedral.test.ts'],
 
   // Codex offering verification
-  'codex-offered-office-hours':  ['office-hours/**', 'scripts/gen-skill-docs.ts'],
-  'codex-offered-ceo-review':    ['plan-ceo-review/**', 'scripts/gen-skill-docs.ts'],
-  'codex-offered-design-review': ['plan-design-review/**', 'scripts/gen-skill-docs.ts'],
-  'codex-offered-eng-review':    ['plan-eng-review/**', 'scripts/gen-skill-docs.ts'],
+  'codex-offered-office-hours':  ['office-hours/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
+  'codex-offered-ceo-review':    ['plan-ceo-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
+  'codex-offered-design-review': ['plan-design-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
+  'codex-offered-eng-review':    ['plan-eng-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-plan.test.ts'],
 
   // Ship
   'ship-base-branch': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-review-attribution.test.ts'],
-  'ship-local-workflow': ['ship/**', 'scripts/gen-skill-docs.ts'],
+  'ship-local-workflow': ['ship/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-workflow.test.ts'],
   'review-dashboard-via': ['ship/**', 'scripts/resolvers/review.ts', 'codex/**', 'autoplan/**', 'land-and-deploy/**', 'test/skill-e2e-review-attribution.test.ts'],
 
   // Retro
@@ -236,51 +236,51 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'global-discover':   ['bin/gstack-global-discover.ts', 'test/global-discover.test.ts'],
 
   // CSO
-  'cso-full-audit':   ['cso/**'],
-  'cso-diff-mode':    ['cso/**'],
-  'cso-infra-scope':  ['cso/**'],
+  'cso-full-audit':   ['cso/**', 'test/skill-e2e-cso.test.ts'],
+  'cso-diff-mode':    ['cso/**', 'test/skill-e2e-cso.test.ts'],
+  'cso-infra-scope':  ['cso/**', 'test/skill-e2e-cso.test.ts'],
 
   // Learnings
-  'learnings-show': ['learn/**', 'bin/gstack-learnings-search', 'bin/gstack-learnings-log', 'scripts/resolvers/learnings.ts'],
+  'learnings-show': ['learn/**', 'bin/gstack-learnings-search', 'bin/gstack-learnings-log', 'scripts/resolvers/learnings.ts', 'test/skill-e2e-learnings.test.ts'],
 
   // Session Intelligence (timeline, context recovery, /context-save + /context-restore)
-  'timeline-event-flow':            ['bin/gstack-timeline-log', 'bin/gstack-timeline-read'],
-  'context-recovery-artifacts':     ['scripts/resolvers/preamble.ts', 'bin/gstack-timeline-log', 'bin/gstack-slug', 'learn/**'],
-  'context-save-writes-file':       ['context-save/**', 'bin/gstack-slug'],
-  'context-restore-loads-latest':   ['context-restore/**', 'bin/gstack-slug'],
+  'timeline-event-flow':            ['bin/gstack-timeline-log', 'bin/gstack-timeline-read', 'test/skill-e2e-session-intelligence.test.ts'],
+  'context-recovery-artifacts':     ['scripts/resolvers/preamble.ts', 'bin/gstack-timeline-log', 'bin/gstack-slug', 'learn/**', 'test/skill-e2e-session-intelligence.test.ts'],
+  'context-save-writes-file':       ['context-save/**', 'bin/gstack-slug', 'test/skill-e2e-session-intelligence.test.ts'],
+  'context-restore-loads-latest':   ['context-restore/**', 'bin/gstack-slug', 'test/skill-e2e-session-intelligence.test.ts'],
 
   // Context skills E2E (live-fire, Skill-tool routing path) — see
   // test/skill-e2e-context-skills.test.ts. These are periodic-tier because
   // each one spawns claude -p and costs ~$0.20-$0.40. Collectively they
   // verify the thing the /checkpoint → /context-save rename was for.
-  'context-save-routing':                  ['context-save/**', 'scripts/resolvers/preamble.ts'],
-  'context-save-then-restore-roundtrip':   ['context-save/**', 'context-restore/**', 'bin/gstack-slug'],
-  'context-restore-fragment-match':        ['context-restore/**'],
-  'context-restore-empty-state':           ['context-restore/**'],
-  'context-restore-list-delegates':        ['context-restore/**'],
-  'context-restore-legacy-compat':         ['context-restore/**'],
-  'context-save-list-current-branch':      ['context-save/**'],
-  'context-save-list-all-branches':        ['context-save/**'],
+  'context-save-routing':                  ['context-save/**', 'scripts/resolvers/preamble.ts', 'test/skill-e2e-context-skills.test.ts'],
+  'context-save-then-restore-roundtrip':   ['context-save/**', 'context-restore/**', 'bin/gstack-slug', 'test/skill-e2e-context-skills.test.ts'],
+  'context-restore-fragment-match':        ['context-restore/**', 'test/skill-e2e-context-skills.test.ts'],
+  'context-restore-empty-state':           ['context-restore/**', 'test/skill-e2e-context-skills.test.ts'],
+  'context-restore-list-delegates':        ['context-restore/**', 'test/skill-e2e-context-skills.test.ts'],
+  'context-restore-legacy-compat':         ['context-restore/**', 'test/skill-e2e-context-skills.test.ts'],
+  'context-save-list-current-branch':      ['context-save/**', 'test/skill-e2e-context-skills.test.ts'],
+  'context-save-list-all-branches':        ['context-save/**', 'test/skill-e2e-context-skills.test.ts'],
 
   // Document-release
-  'document-release': ['document-release/**'],
+  'document-release': ['document-release/**', 'test/skill-e2e-workflow.test.ts'],
 
   // Codex (Claude E2E — tests /codex skill via Claude)
-  'codex-review': ['codex/**'],
+  'codex-review': ['codex/**', 'test/skill-e2e-workflow.test.ts'],
 
   // Codex E2E (tests skills via Codex CLI + worktree)
-  'codex-discover-skill':  ['codex/**', '.agents/skills/**', 'test/helpers/codex-session-runner.ts', 'lib/worktree.ts'],
-  'codex-review-findings': ['review/**', '.agents/skills/gstack-review/**', 'codex/**', 'test/helpers/codex-session-runner.ts', 'lib/worktree.ts'],
+  'codex-discover-skill':  ['codex/**', '.agents/skills/**', 'test/helpers/codex-session-runner.ts', 'lib/worktree.ts', 'test/codex-e2e.test.ts'],
+  'codex-review-findings': ['review/**', '.agents/skills/gstack-review/**', 'codex/**', 'test/helpers/codex-session-runner.ts', 'lib/worktree.ts', 'test/codex-e2e.test.ts'],
 
   // GPT-5.6 Sol scope-termination E2E (Codex CLI, full generated investigate skill)
   'codex-sol-scope-termination': ['model-overlays/gpt-5.6-sol.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts', 'scripts/resolvers/preamble/**', 'investigate/**', 'test/helpers/codex-session-runner.ts', 'test/codex-e2e-sol-scope.test.ts'],
 
   // Gemini E2E — smoke test only (Gemini gets lost in worktrees on complex tasks)
-  'gemini-smoke':  ['.agents/skills/**', 'test/helpers/gemini-session-runner.ts', 'lib/worktree.ts'],
+  'gemini-smoke':  ['.agents/skills/**', 'test/helpers/gemini-session-runner.ts', 'lib/worktree.ts', 'test/gemini-e2e.test.ts'],
 
 
   // Coverage audit (shared fixture) + triage + gates
-  'ship-coverage-audit': ['ship/**', 'test/fixtures/coverage-audit-fixture.ts', 'bin/gstack-repo-mode'],
+  'ship-coverage-audit': ['ship/**', 'test/fixtures/coverage-audit-fixture.ts', 'bin/gstack-repo-mode', 'test/skill-e2e-workflow.test.ts'],
   'review-coverage-audit': ['review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
   'plan-eng-coverage-audit': ['plan-eng-review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
   'ship-triage': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-triage.test.ts'],
@@ -292,12 +292,12 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'review-plan-completion': ['review/**', 'scripts/gen-skill-docs.ts'],
 
   // Design
-  'design-consultation-core':       ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/helpers/llm-judge.ts'],
-  'design-consultation-existing':   ['design-consultation/**', 'scripts/gen-skill-docs.ts'],
-  'design-consultation-research':   ['design-consultation/**', 'scripts/gen-skill-docs.ts'],
-  'design-consultation-preview':    ['design-consultation/**', 'scripts/gen-skill-docs.ts'],
-  'plan-design-review-no-ui-scope': ['plan-design-review/**', 'scripts/gen-skill-docs.ts'],
-  'design-review-fix':              ['design-review/**', 'browse/src/**', 'scripts/gen-skill-docs.ts'],
+  'design-consultation-core':       ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/helpers/llm-judge.ts', 'test/skill-e2e-design.test.ts'],
+  'design-consultation-existing':   ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
+  'design-consultation-research':   ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
+  'design-consultation-preview':    ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
+  'plan-design-review-no-ui-scope': ['plan-design-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
+  'design-review-fix':              ['design-review/**', 'browse/src/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
 
   // Design Shotgun
   'design-shotgun-path':            ['design-shotgun/**', 'design/src/**', 'scripts/resolvers/design.ts'],
@@ -306,24 +306,24 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
 
   // /diagram (diagram-render bundle consumers). Triplet = deterministic
   // functional (gate); authoring quality = LLM-judged benchmark (periodic).
-  'diagram-triplet':            ['diagram/**', 'lib/diagram-render/**', 'browse/src/write-commands.ts', 'browse/src/read-commands.ts'],
-  'diagram-authoring-quality':  ['diagram/**', 'lib/diagram-render/**', 'test/helpers/llm-judge.ts'],
+  'diagram-triplet':            ['diagram/**', 'lib/diagram-render/**', 'browse/src/write-commands.ts', 'browse/src/read-commands.ts', 'test/skill-e2e-diagram.test.ts'],
+  'diagram-authoring-quality':  ['diagram/**', 'lib/diagram-render/**', 'test/helpers/llm-judge.ts', 'test/skill-e2e-diagram.test.ts'],
 
   // gstack-upgrade
-  'gstack-upgrade-happy-path': ['gstack-upgrade/**'],
+  'gstack-upgrade-happy-path': ['gstack-upgrade/**', 'test/skill-e2e-workflow.test.ts'],
 
   // Deploy skills
-  'land-and-deploy-workflow':      ['land-and-deploy/**', 'scripts/gen-skill-docs.ts'],
-  'land-and-deploy-first-run':     ['land-and-deploy/**', 'scripts/gen-skill-docs.ts', 'bin/gstack-slug'],
-  'land-and-deploy-review-gate':   ['land-and-deploy/**', 'bin/gstack-review-read'],
-  'canary-workflow':               ['canary/**', 'browse/src/**'],
-  'benchmark-workflow':            ['benchmark/**', 'browse/src/**'],
-  'setup-deploy-workflow':         ['setup-deploy/**', 'scripts/gen-skill-docs.ts'],
+  'land-and-deploy-workflow':      ['land-and-deploy/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-deploy.test.ts'],
+  'land-and-deploy-first-run':     ['land-and-deploy/**', 'scripts/gen-skill-docs.ts', 'bin/gstack-slug', 'test/skill-e2e-deploy.test.ts'],
+  'land-and-deploy-review-gate':   ['land-and-deploy/**', 'bin/gstack-review-read', 'test/skill-e2e-deploy.test.ts'],
+  'canary-workflow':               ['canary/**', 'browse/src/**', 'test/skill-e2e-deploy.test.ts'],
+  'benchmark-workflow':            ['benchmark/**', 'browse/src/**', 'test/skill-e2e-deploy.test.ts'],
+  'setup-deploy-workflow':         ['setup-deploy/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-deploy.test.ts'],
 
 
   // Autoplan
   'autoplan-core':  ['autoplan/**', 'plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**'],
-  'autoplan-dual-voice': ['autoplan/**', 'codex/**', 'bin/gstack-codex-probe', 'scripts/resolvers/review.ts', 'scripts/resolvers/design.ts'],
+  'autoplan-dual-voice': ['autoplan/**', 'codex/**', 'bin/gstack-codex-probe', 'scripts/resolvers/review.ts', 'scripts/resolvers/design.ts', 'test/skill-e2e-autoplan-dual-voice.test.ts'],
 
   // Multi-provider benchmark adapters — live API smoke against real claude/codex/gemini CLIs
   'benchmark-providers-live': ['bin/gstack-model-benchmark', 'test/helpers/providers/**', 'test/helpers/benchmark-runner.ts', 'test/helpers/pricing.ts', 'test/skill-e2e-benchmark-providers.test.ts'],
@@ -336,41 +336,46 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'scrape-match-path': [
     'scrape/**', 'browse/src/browser-skills.ts', 'browse/src/browser-skill-commands.ts',
     'browser-skills/hackernews-frontpage/**',
+    'test/skill-e2e-skillify.test.ts',
   ],
   'scrape-prototype-path': [
     'scrape/**', 'browse/src/browser-skills.ts', 'browse/src/browser-skill-commands.ts',
+    'test/skill-e2e-skillify.test.ts',
   ],
   'skillify-happy-path': [
     'skillify/**', 'scrape/**', 'browse/src/browser-skill-write.ts',
     'browse/src/browser-skills.ts', 'browse/src/browser-skill-commands.ts',
+    'test/skill-e2e-skillify.test.ts',
   ],
   'skillify-provenance-refusal': [
     'skillify/**', 'browse/src/browser-skill-write.ts',
+    'test/skill-e2e-skillify.test.ts',
   ],
   'skillify-approval-reject': [
     'skillify/**', 'scrape/**', 'browse/src/browser-skill-write.ts',
+    'test/skill-e2e-skillify.test.ts',
   ],
 
   // Skill routing — journey-stage tests (depend on ALL skill descriptions)
-  'journey-ideation':       ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-plan-eng':       ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-debug':          ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-qa':             ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-code-review':    ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-ship':           ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-docs':           ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-retro':          ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-design-system':  ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
-  'journey-visual-qa':      ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
+  'journey-ideation':       ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-plan-eng':       ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-debug':          ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-qa':             ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-code-review':    ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-ship':           ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-docs':           ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-retro':          ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-design-system':  ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
+  'journey-visual-qa':      ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-routing-e2e.test.ts'],
 
   // Opus 4.7 behavior evals — keys match testName: values in the test file.
   // Routing sub-tests use template literal `routing-${c.name}` testNames,
   // which the touchfile completeness scanner skips; they inherit selection
   // from the file-level touchfile entry via GLOBAL_TOUCHFILES.
   'fanout-arm-overlay-on':
-    ['model-overlays/claude.md', 'model-overlays/opus-4-7.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts'],
+    ['model-overlays/claude.md', 'model-overlays/opus-4-7.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts', 'test/skill-e2e-opus-47.test.ts'],
   'fanout-arm-overlay-off':
-    ['model-overlays/claude.md', 'model-overlays/opus-4-7.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts'],
+    ['model-overlays/claude.md', 'model-overlays/opus-4-7.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts', 'test/skill-e2e-opus-47.test.ts'],
 
   // Overlay efficacy harness (SDK) — measures whether overlay nudges change
   // behavior under @anthropic-ai/claude-agent-sdk (closer to real Claude Code
@@ -754,49 +759,49 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
  * LLM-judge test touchfiles — keyed by test description string.
  */
 export const LLM_JUDGE_TOUCHFILES: Record<string, string[]> = {
-  'command reference table':          ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'browse/src/commands.ts'],
-  'snapshot flags reference':         ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'browse/src/snapshot.ts'],
-  'browse/SKILL.md reference':        ['browse/sections/**', 'browse/SKILL.md', 'browse/SKILL.md.tmpl', 'browse/src/**'],
-  'setup block':                      ['SKILL.md', 'SKILL.md.tmpl'],
-  'regression vs baseline':           ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'browse/src/commands.ts', 'test/fixtures/eval-baselines.json'],
-  'qa/SKILL.md workflow':             ['qa/sections/**', 'qa/SKILL.md', 'qa/SKILL.md.tmpl'],
-  'qa/SKILL.md health rubric':        ['qa/sections/**', 'qa/SKILL.md', 'qa/SKILL.md.tmpl'],
-  'qa/SKILL.md anti-refusal':         ['qa/sections/**', 'qa/SKILL.md', 'qa/SKILL.md.tmpl', 'qa-only/SKILL.md', 'qa-only/SKILL.md.tmpl'],
-  'cross-skill greptile consistency': ['review/SKILL.md', 'review/SKILL.md.tmpl', 'ship/SKILL.md', 'ship/SKILL.md.tmpl', 'review/greptile-triage.md', 'retro/SKILL.md', 'retro/SKILL.md.tmpl'],
-  'baseline score pinning':           ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'test/fixtures/eval-baselines.json'],
+  'command reference table':          ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'browse/src/commands.ts', 'test/skill-llm-eval.test.ts'],
+  'snapshot flags reference':         ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'browse/src/snapshot.ts', 'test/skill-llm-eval.test.ts'],
+  'browse/SKILL.md reference':        ['browse/sections/**', 'browse/SKILL.md', 'browse/SKILL.md.tmpl', 'browse/src/**', 'test/skill-llm-eval.test.ts'],
+  'setup block':                      ['SKILL.md', 'SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'regression vs baseline':           ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'browse/src/commands.ts', 'test/fixtures/eval-baselines.json', 'test/skill-llm-eval.test.ts'],
+  'qa/SKILL.md workflow':             ['qa/sections/**', 'qa/SKILL.md', 'qa/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'qa/SKILL.md health rubric':        ['qa/sections/**', 'qa/SKILL.md', 'qa/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'qa/SKILL.md anti-refusal':         ['qa/sections/**', 'qa/SKILL.md', 'qa/SKILL.md.tmpl', 'qa-only/SKILL.md', 'qa-only/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'cross-skill greptile consistency': ['review/SKILL.md', 'review/SKILL.md.tmpl', 'ship/SKILL.md', 'ship/SKILL.md.tmpl', 'review/greptile-triage.md', 'retro/SKILL.md', 'retro/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'baseline score pinning':           ['browse/sections/**', 'SKILL.md', 'SKILL.md.tmpl', 'test/fixtures/eval-baselines.json', 'test/skill-llm-eval.test.ts'],
 
   // Ship & Release
-  'ship/SKILL.md workflow':               ['ship/SKILL.md', 'ship/SKILL.md.tmpl'],
-  'document-release/SKILL.md workflow':   ['document-release/SKILL.md', 'document-release/SKILL.md.tmpl'],
+  'ship/SKILL.md workflow':               ['ship/SKILL.md', 'ship/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'document-release/SKILL.md workflow':   ['document-release/SKILL.md', 'document-release/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
 
   // Plan Reviews
-  'plan-ceo-review/SKILL.md modes':       ['plan-ceo-review/SKILL.md', 'plan-ceo-review/SKILL.md.tmpl'],
-  'plan-eng-review/SKILL.md sections':    ['plan-eng-review/SKILL.md', 'plan-eng-review/SKILL.md.tmpl'],
+  'plan-ceo-review/SKILL.md modes':       ['plan-ceo-review/SKILL.md', 'plan-ceo-review/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'plan-eng-review/SKILL.md sections':    ['plan-eng-review/SKILL.md', 'plan-eng-review/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
 
   // /spec authored-spec quality (paid LLM-judge — periodic-tier).
-  'plan-design-review/SKILL.md passes':   ['plan-design-review/SKILL.md', 'plan-design-review/SKILL.md.tmpl'],
+  'plan-design-review/SKILL.md passes':   ['plan-design-review/SKILL.md', 'plan-design-review/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
 
   // Design skills
-  'design-review/SKILL.md fix loop':      ['design-review/SKILL.md', 'design-review/SKILL.md.tmpl'],
-  'design-consultation/SKILL.md research': ['design-consultation/SKILL.md', 'design-consultation/SKILL.md.tmpl'],
+  'design-review/SKILL.md fix loop':      ['design-review/SKILL.md', 'design-review/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'design-consultation/SKILL.md research': ['design-consultation/SKILL.md', 'design-consultation/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
 
   // Office Hours
   'office-hours/SKILL.md spec review':    ['office-hours/SKILL.md', 'office-hours/SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
   'office-hours/SKILL.md design sketch':  ['office-hours/SKILL.md', 'office-hours/SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
 
   // Deploy skills
-  'land-and-deploy/SKILL.md workflow':    ['land-and-deploy/SKILL.md', 'land-and-deploy/SKILL.md.tmpl', 'land-and-deploy/sections/**'],
-  'canary/SKILL.md monitoring loop':      ['canary/SKILL.md', 'canary/SKILL.md.tmpl'],
-  'benchmark/SKILL.md perf collection':   ['benchmark/SKILL.md', 'benchmark/SKILL.md.tmpl'],
-  'setup-deploy/SKILL.md platform setup': ['setup-deploy/SKILL.md', 'setup-deploy/SKILL.md.tmpl'],
+  'land-and-deploy/SKILL.md workflow':    ['land-and-deploy/SKILL.md', 'land-and-deploy/SKILL.md.tmpl', 'land-and-deploy/sections/**', 'test/skill-llm-eval.test.ts'],
+  'canary/SKILL.md monitoring loop':      ['canary/SKILL.md', 'canary/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'benchmark/SKILL.md perf collection':   ['benchmark/SKILL.md', 'benchmark/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'setup-deploy/SKILL.md platform setup': ['setup-deploy/SKILL.md', 'setup-deploy/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
 
   // Other skills
-  'retro/SKILL.md instructions':          ['retro/sections/**', 'retro/SKILL.md', 'retro/SKILL.md.tmpl'],
-  'qa-only/SKILL.md workflow':            ['qa-only/SKILL.md', 'qa-only/SKILL.md.tmpl'],
-  'gstack-upgrade/SKILL.md upgrade flow': ['gstack-upgrade/SKILL.md', 'gstack-upgrade/SKILL.md.tmpl'],
+  'retro/SKILL.md instructions':          ['retro/sections/**', 'retro/SKILL.md', 'retro/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'qa-only/SKILL.md workflow':            ['qa-only/SKILL.md', 'qa-only/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
+  'gstack-upgrade/SKILL.md upgrade flow': ['gstack-upgrade/SKILL.md', 'gstack-upgrade/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
 
   // Voice directive
-  'voice directive tone':                 ['scripts/resolvers/preamble.ts', 'review/SKILL.md', 'review/SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
+  'voice directive tone':                 ['scripts/resolvers/preamble.ts', 'review/SKILL.md', 'review/SKILL.md.tmpl', 'scripts/gen-skill-docs.ts', 'test/skill-llm-eval.test.ts'],
 };
 
 /**
