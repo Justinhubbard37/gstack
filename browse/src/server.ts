@@ -812,8 +812,17 @@ function parentWatchdogTick(parentPid: number = BROWSE_PARENT_PID): void {
     }
   }
 }
+// Poll cadence. Env-overridable as a test seam: watchdog.test.ts shrinks it
+// (250ms) so a free-tier test can observe a real tick deciding on a dead
+// parent instead of sleeping through the 15s production cadence. Production
+// launchers never set this; unparsable or non-positive values fall back to 15s.
+const rawWatchdogIntervalMs = parseInt(process.env.BROWSE_PARENT_WATCHDOG_INTERVAL_MS || '', 10);
+const PARENT_WATCHDOG_INTERVAL_MS =
+  Number.isFinite(rawWatchdogIntervalMs) && rawWatchdogIntervalMs > 0
+    ? rawWatchdogIntervalMs
+    : 15_000;
 if (BROWSE_PARENT_PID > 0 && !IS_HEADED_WATCHDOG) {
-  setInterval(parentWatchdogTick, 15_000);
+  setInterval(parentWatchdogTick, PARENT_WATCHDOG_INTERVAL_MS);
 } else if (IS_HEADED_WATCHDOG) {
   console.log('[browse] Parent-process watchdog disabled (headed mode)');
 } else if (BROWSE_PARENT_PID === 0) {
