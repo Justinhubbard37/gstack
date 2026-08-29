@@ -557,18 +557,19 @@ coverage fill. Remaining, in rough priority order:
 - **P3 — codex-e2e-plan-format's testIfSelected names have no map keys**
   (run-all only today) + 15 E2E / 2 judge PHANTOM touchfiles keys select
   tests that exist nowhere — add keys or delete, one sweep. Effort S.
-- **P2 — first-execution rot found by the sliced lane's first live run**
-  (PR #2721): (a) `skill-e2e-skillify` "provenance-refusal" fails
-  deterministically (CI x2 + local) — its child reports "The skillify skill
-  is not registered in this environment"; the test's `HOME: workDir` env
-  override breaks project-skill registration under the hermetic env while
-  its 5 sibling tests (same fixture, no HOME override) load skills fine.
-  Start by diffing the passing siblings' env. (b)
-  `skill-e2e-session-intelligence` "context-restore loads latest" failed
-  twice in CI but passes locally (4/4) — CI-container/stochastic shape;
-  watch across runs. (c) `tpa-apple-ban` failed only on retry attempt 2 —
-  flake watch. All three are the coverage contract WORKING (these files ran
-  in no CI lane before). Effort S each.
+- **P3 — first-execution rot from the sliced lane's first live runs: 2 of 3
+  FIXED** (PR #2721): (a) ✅ skillify family — root cause was HOME==cwd
+  making claude treat <cwd>/.claude/skills as the PERSONAL dir (project
+  skills never registered); all three tests now use a fresh HOME subdir,
+  the refusal test gained a not-registered tripwire + assistant-text-only
+  matching (the skill body echo could pass vacuously), and the siblings now
+  genuinely exercise the Skill-tool path (verified paid, 5/5).
+  (b) ✅ session-intelligence context-restore — assertion was prose-matching
+  over stochastic wording; now verbatim RESTORED-marker + tool-call
+  corroboration with a stronger older-file negative (3/3 paid green).
+  (c) `tpa-apple-ban` failed only on retry attempt 2 once — flake watch
+  only. The lane finding these on first execution is the coverage contract
+  working.
 - **P2 — make-pdf image promotion is per-render nondeterministic on CI**:
   two renders of the same fixture SECONDS apart in one CI job produced 2 vs
   3 landscape pages (an image's promotion depends on load timing at render).
