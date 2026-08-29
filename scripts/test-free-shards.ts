@@ -282,12 +282,18 @@ const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
   {
     file: 'browse/test/file-permissions.test.ts',
     // Trips the POSIX-mode-bitmask pattern, but every `mode & 0o777` assertion
-    // is platform-guarded (win32 returns early / takes the icacls branch).
+    // is platform-guarded: win32-only tests return early, POSIX-only tests
+    // guard the bitmask behind `process.platform !== 'win32'`, and the
+    // symlink-skip regression test both wraps symlinkSync in try/catch
+    // (runners without Developer Mode can't create symlinks) and guards its
+    // bitmask — on win32 it asserts behavior (warns, skips, doesn't throw,
+    // target stays usable), never fake Windows mode bits (dirs stat 0o777
+    // there, so a 0o755 expectation fails on runner semantics, not our code).
     // This file carries the win32-only icacls-by-SID regression tests, which
     // can ONLY execute on windows-latest — excluding it here means the
     // machine-account ACL lockout regression is never exercised on the one
     // platform it bricks.
-    reason: 'mode-bitmask hits are POSIX-branch only; win32-only ACL regression tests must run on windows-latest',
+    reason: 'every mode-bitmask assertion is guarded off win32 (behavior asserted instead); win32-only ACL regression tests must run on windows-latest',
   },
   {
     file: 'browse/test/terminal-agent-owner-watchdog.test.ts',
