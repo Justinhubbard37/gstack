@@ -389,7 +389,6 @@ export const WORKER_HOSTILE: Record<string, string> = {
  */
 export const TREE_MUTATING: Record<string, string> = {
   'test/spec-template-sync.test.ts': 'regenerates all SKILL.md in place to compare spec/SKILL.md',
-  'test/gen-skill-docs-idempotency.test.ts': 'regenerates all SKILL.md twice to prove idempotency',
   // Ratchet readers (measure the tree; need it quiet):
   'test/parity-suite.test.ts': 'RATCHET READER — parity caps measure live SKILL.md/section bytes',
   'test/skill-size-budget.test.ts': 'RATCHET READER — per-skill and corpus size budgets measure the live tree',
