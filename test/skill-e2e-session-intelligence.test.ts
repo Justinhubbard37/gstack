@@ -274,7 +274,17 @@ IMPORTANT:
   // claude -p. Verify the agent identifies the newer file (by filename prefix)
   // and presents its content, regardless of the current branch.
   testConcurrentIfSelected('context-restore-loads-latest', async () => {
-    const projectDir = path.join(gstackHome, 'projects', slug);
+    // PRIVATE home for this test: the suite runs concurrently, and the shared
+    // gstackHome's checkpoints dir also receives the context-save test's
+    // freshly-written checkpoint (a 2026-08-29 filename prefix — always the
+    // "newest"). In CI, save completed before this test's agent listed the
+    // dir, so the agent CORRECTLY restored the sibling's checkpoint and the
+    // assertions failed; locally the ordering happened to run restore first.
+    // An isolated home makes the fixture set closed regardless of ordering
+    // (the agent may derive the dir from GSTACK_HOME/projects/<slug>, so the
+    // whole home moves, not just the checkpoint path we hand it).
+    const restoreHome = path.join(workDir, '.gstack-restore-home');
+    const projectDir = path.join(restoreHome, 'projects', slug);
     const checkpointDir = path.join(projectDir, 'checkpoints');
     fs.mkdirSync(checkpointDir, { recursive: true });
 
@@ -333,7 +343,7 @@ This is the newest saved context. Cross-branch restore should load THIS file.
 ${restoreSection.slice(0, 2500)}
 
 IMPORTANT:
-- Use GSTACK_HOME="${gstackHome}" as an environment variable when running bin scripts.
+- Use GSTACK_HOME="${restoreHome}" as an environment variable when running bin scripts.
 - The bin scripts are at ./bin/ (relative to this directory), not at ~/.claude/skills/gstack/bin/.
 - Look in ${checkpointDir} for saved context files.
 - Current branch is "main" — do NOT filter by current branch. Load across all branches.

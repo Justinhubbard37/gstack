@@ -239,7 +239,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: paid-slice-${{ matrix.slice }}-logs
-          path: /tmp/gstack-paid-shard-*.log
+          # The Fix-bun-temp step points TMPDIR at /home/runner/.cache, so the
+          # runner's spool lands THERE, not /tmp — the original /tmp glob
+          # uploaded nothing and a red slice's diagnostics were unreachable.
+          path: |
+            /home/runner/.cache/gstack-paid-shard-*.log
+            /tmp/gstack-paid-shard-*.log
           if-no-files-found: ignore
           retention-days: 30
 
