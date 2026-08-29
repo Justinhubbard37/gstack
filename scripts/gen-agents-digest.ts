@@ -27,7 +27,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const ROOT = path.resolve(import.meta.dir, '..');
-export const DIGEST_RELPATH = path.join('agents-digest', 'gstack-AGENTS.md');
+// Repo-relative with FORWARD slashes on every platform: this constant is
+// compared against literals in shell scripts, host configs, and docs (the
+// wiring test), where a Windows path.join backslash form would never match.
+// path.join(root, DIGEST_RELPATH) at the write site normalizes it fine.
+export const DIGEST_RELPATH = 'agents-digest/gstack-AGENTS.md';
 export const DIGEST_BYTE_BUDGET = 2048;
 
 export function generateAgentsDigest(opts?: { root?: string }): { content: string; bytes: number } {
