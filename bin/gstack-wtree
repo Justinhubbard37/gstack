@@ -42,7 +42,13 @@ case "$REAL_INDEX" in
   *) REAL_INDEX="$TOP/$REAL_INDEX" ;;
 esac
 if [ -n "$REAL_INDEX" ] && [ -f "$REAL_INDEX" ] && cp "$REAL_INDEX" "$TMPIDX" 2>/dev/null; then
-  : # stat-cache-preserving seed
+  # Carry the real index's mtime onto the copy. Git's racy-git protection
+  # re-hashes any entry whose cached mtime is not older than the index file
+  # itself; `cp` stamps the copy "now", which silently marks every entry
+  # non-racy and lets a same-size rewrite in the same second as the original
+  # `git add` keep its stale stat-cache entry — the content change vanishes
+  # from the fingerprint. touch -r restores the original racy window.
+  touch -r "$REAL_INDEX" "$TMPIDX" 2>/dev/null || true
 else
   git -C "$TOP" read-tree HEAD 2>/dev/null || exit 1
 fi
