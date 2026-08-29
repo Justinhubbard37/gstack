@@ -68,7 +68,11 @@ describe('run manifest (planner)', () => {
   });
 
   test('parse round-trips and rejects malformed manifests', () => {
-    const manifest = buildRunManifest({ tier: 'gate', sliceCount: 2, evalsAll: false, env: {} });
+    // EVALS_ALL short-circuits diff selection BEFORE any git walk: selection
+    // is deliberately fail-closed on git errors, and CI's shallow free-tests
+    // checkout has no base ref (first CI run failed here with
+    // "ambiguous argument 'main...HEAD'").
+    const manifest = buildRunManifest({ tier: 'gate', sliceCount: 2, evalsAll: false, env: { EVALS_ALL: '1' } });
     expect(parseRunManifest(JSON.stringify(manifest))).toEqual(manifest);
     expect(() => parseRunManifest('{}')).toThrow(/version/);
     expect(() => parseRunManifest(JSON.stringify({ ...manifest, tier: 'e2e' }))).toThrow(/tier/);

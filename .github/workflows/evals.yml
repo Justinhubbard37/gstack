@@ -568,6 +568,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Full history: files with SELF-derived selection (the LLM-judge
+          # map, routing) walk git at module load, and selection is
+          # fail-closed on git errors — a shallow checkout crashed those
+          # shards on the lane's first live run ("ambiguous argument
+          # 'main...HEAD'"). The manifest still governs WHICH shards run.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Fix bun temp
