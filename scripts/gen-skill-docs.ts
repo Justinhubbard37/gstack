@@ -1158,6 +1158,9 @@ if (!DRY_RUN) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[gen-agents-digest] FAILED: ${msg}`);
+      // The digest is a committed freshness-gated artifact: a local build
+      // that silently ships it stale defers the red to CI. Fail the build.
+      process.exitCode = 1;
     }
   })();
 }
