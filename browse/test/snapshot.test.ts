@@ -222,11 +222,7 @@ describe('Ref staleness detection', () => {
     expect(bm.getRefCount()).toBeGreaterThan(0);
   });
 
-  // QUARANTINED (pre-existing): fails identically on origin/main v1.64.1.0,
-  // solo, on dev machines (blame protocol, 2026-08 test-infra pass). Main's
-  // CI lane skip-lists this whole FILE; we quarantine only this test so the
-  // rest keeps guarding. Un-skip when the underlying env dependency is fixed.
-  test.skip('stale ref after DOM removal gives descriptive error', async () => {
+  test('stale ref after DOM removal gives descriptive error', async () => {
     await handleWriteCommand('goto', [baseUrl + '/snapshot.html'], bm);
     const snap = await handleMetaCommand('snapshot', ['-i'], bm, shutdown);
     // Find a button ref
@@ -276,11 +272,7 @@ describe('Snapshot diff', () => {
     expect(result).toContain('baseline');
   });
 
-  // QUARANTINED (pre-existing): fails identically on origin/main v1.64.1.0,
-  // solo, on dev machines (blame protocol, 2026-08 test-infra pass). Main's
-  // CI lane skip-lists this whole FILE; we quarantine only this test so the
-  // rest keeps guarding. Un-skip when the underlying env dependency is fixed.
-  test.skip('snapshot -D shows diff after change', async () => {
+  test('snapshot -D shows diff after change', async () => {
     await handleWriteCommand('goto', [baseUrl + '/snapshot.html'], bm);
     // Take first snapshot
     await handleMetaCommand('snapshot', [], bm, shutdown);
@@ -367,11 +359,7 @@ describe('Annotated screenshots', () => {
     if (fs.existsSync(screenshotPath)) fs.unlinkSync(screenshotPath);
   });
 
-  // QUARANTINED (pre-existing): fails identically on origin/main v1.64.1.0,
-  // solo, on dev machines (blame protocol, 2026-08 test-infra pass). Main's
-  // CI lane skip-lists this whole FILE; we quarantine only this test so the
-  // rest keeps guarding. Un-skip when the underlying env dependency is fixed.
-  test.skip('annotation overlays are cleaned up', async () => {
+  test('annotation overlays are cleaned up', async () => {
     await handleWriteCommand('goto', [baseUrl + '/snapshot.html'], bm);
     await handleMetaCommand('snapshot', ['-a'], bm, shutdown);
     // Check that overlays are removed
