@@ -568,6 +568,8 @@ Findings get action, not just listed. Obvious mechanical fixes (dead code, stale
 
 `/review` now flags shortcut implementations where the complete version costs less than 30 minutes of CC time. If you chose the 80% solution and the 100% solution is a lake, not an ocean, the review will call it out.
 
+One exception: a shortcut you took deliberately and logged. A `gstack-shortcut(dec-<id>)` marker whose decision id resolves in the decision ledger downgrades the finding to acknowledged debt. An orphan marker — one with no ledger entry behind it — doesn't suppress anything; the gap is reported normally and the marker itself gets flagged.
+
 ### Example
 
 Suppose the smart listing flow is implemented and the tests are green.
@@ -937,7 +939,7 @@ This is my **review autopilot mode**.
 
 Running `/plan-ceo-review`, then `/plan-design-review`, then `/plan-eng-review` individually means answering 15-30 intermediate questions. Each question is valuable, but sometimes you want the gauntlet to run without stopping for every decision.
 
-`/autoplan` reads the review skills from disk and runs them sequentially: CEO → Design (if UI scope) → DX (if developer-facing scope) → Eng, always last — the required shipping gate reviews the final amended plan, not a stale one. It makes decisions automatically using six encoded principles (prefer completeness, match existing patterns, choose reversible options, prefer the option the user chose for similar past decisions, defer ambiguous items, and escalate security). Taste decisions (close approaches, borderline scope expansions, cross-model disagreements) get saved and presented at a final approval gate.
+`/autoplan` reads the review skills from disk and runs them sequentially: CEO → Design (if UI scope) → DX (if developer-facing scope) → Eng, always last — the required shipping gate reviews the final amended plan, not a stale one. It makes decisions automatically: each question resolves to its recommended option by default, with six encoded principles (prefer completeness, match existing patterns, choose reversible options, prefer the option the user chose for similar past decisions, defer ambiguous items, and escalate security) breaking ties and deciding questions that carry no recommendation. Taste decisions (close approaches, borderline scope expansions, cross-model disagreements) get saved and presented at a final approval gate.
 
 One command, fully reviewed plan out.
 

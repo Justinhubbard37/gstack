@@ -49,14 +49,16 @@ run green: run `scripts/sandbox-doctor.sh` once per boot. It documents and
 treats the full failure taxonomy (missing /dev/fd, 64M /dev/shm, spurious
 access(2) EACCES from the seccomp supervisor under load, full-capability
 processes defeating chmod-denial tests, no X server, no git identity, and
-Conductor's git-shim exit-code laundering). Then:
+Conductor's git-shim exit-code laundering). The doctor seeds `TMPDIR`,
+`DISPLAY`, and the runner knobs into `~/.bashrc`, so open a new shell (or
+`source ~/.bashrc`) before running the suite. Then:
 
 ```bash
 setpriv --ambient-caps=-all --bounding-set=-all bun run test
 ```
 
 Two runner knobs exist for these environments (both no-ops unless set):
-`GSTACK_FREE_JOBS` caps shard concurrency (2 is the measured sweet spot — one
+`GSTACK_FREE_JOBS` overrides the shard count in either direction (2 is the measured sweet spot — one
 serial mega-shard and 6-way sharding both saturate the per-process syscall
 supervisor), and `GSTACK_FREE_RETRY_FLAKY=1` re-runs attributed failures once
 serially, downgrading a clean retry to a loud FLAKY-PASS (capped at 5 files so

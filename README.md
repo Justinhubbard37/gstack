@@ -119,6 +119,7 @@ Or target a specific agent with `./setup --host <name>`:
 | Factory Droid | `--host factory` | Full install → `~/.factory/skills/gstack-*/` |
 | Kiro | `--host kiro` | Full install → `~/.kiro/skills/gstack-*/` |
 | Slate | `--host slate` | Pointer to the Claude install (Slate reads `.claude/skills` as a fallback) |
+| OpenClaw | `--host openclaw` | ACP spawn pointers + methodology artifacts via `gen:skill-docs --host openclaw` + the instruction-only digest below (full guide: [docs/OPENCLAW.md](docs/OPENCLAW.md)) |
 | Hermes | `--host hermes` | Methodology artifacts via `gen:skill-docs --host hermes` + the instruction-only digest below |
 | GBrain (mod) | `--host gbrain` | Brain-aware skill variants, shipped from the GBrain repo |
 
