@@ -38,6 +38,10 @@ export interface ArmTask {
   /** E2E_TOUCHFILES / E2E_TIERS key. Quoted literals below keep the parent
    *  shard mapper (test-paid-shards) able to attribute this file. */
   key: string;
+  /** Deterministic functional check run against the arm's working tree after
+   *  harvest (the plan's metric order is diff-quality FIRST: correctness
+   *  before LOC). Absent for fixtures with no runnable oracle. */
+  checkCmd?: string[];
   fixture: string;
   ticket: string;
 }
@@ -58,6 +62,7 @@ Leave your changes uncommitted in the working tree.`,
   {
     key: 'arm-benchmark-crud-endpoint',
     fixture: 'crud-endpoint',
+    checkCmd: ['node', 'run-tests.js'],
     ticket: `Ticket: users need to delete notes.
 
 You are in a small git repo containing an in-memory notes API (app.js, wired to HTTP in server.js).
@@ -68,6 +73,7 @@ Leave your changes uncommitted in the working tree.`,
   {
     key: 'arm-benchmark-bugfix-decoys',
     fixture: 'bugfix-decoys',
+    checkCmd: ['node', 'run-tests.js'],
     ticket: `Bug report: receipts print $10.5 for a $10.05 item.
 
 You are in a small git repo. \`node run-tests.js\` currently fails on formatPrice(1005).
@@ -217,3 +223,13 @@ export function captureStagedDiff(dir: string, seedSha: string): DiffHarvest {
   return { ...parseDiffStat(stat), stat: stat.trim(), patch };
 }
 
+
+/** Run the task's functional check in the arm dir. 'none' when the task has
+ *  no oracle; never throws — a crashing check is a 'fail', not a dead cell. */
+export function runChecks(task: ArmTask, dir: string): 'pass' | 'fail' | 'none' {
+  if (!task.checkCmd || task.checkCmd.length === 0) return 'none';
+  const r = spawnSync(task.checkCmd[0], task.checkCmd.slice(1), {
+    cwd: dir, stdio: 'pipe', encoding: 'utf-8', timeout: 60_000,
+  });
+  return r.status === 0 ? 'pass' : 'fail';
+}

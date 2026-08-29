@@ -45,7 +45,7 @@ import { armJudge, type ArmJudgeScore } from './helpers/llm-judge';
 import {
   ARM_MAX_TURNS, ARM_TIMEOUT_MS, ARM_JUDGE_DIFF_CAP, ARM_ALLOWED_TOOLS,
   TASK_TEST_TIMEOUT_MS, SKILL_NAME, TASKS,
-  setupArm, captureStagedDiff,
+  setupArm, captureStagedDiff, runChecks,
   type Arm, type ArmTask, type DiffHarvest,
 } from './helpers/arm-benchmark-harness';
 import * as fs from 'fs';
@@ -61,6 +61,10 @@ interface CellResult {
   harvestError: string | null;
   judge: ArmJudgeScore | null;
   judgeError: string | null;
+  /** Deterministic functional-check outcome ('none' = task has no oracle).
+   *  Correctness comes before LOC in the metric order — a refusal, a broken
+   *  implementation, and working code must be distinguishable in the cells. */
+  checks: 'pass' | 'fail' | 'none';
   consulted: boolean;
   costUsd: number;
   tokens: number;
@@ -102,6 +106,7 @@ async function runArmCell(task: ArmTask, arm: Arm): Promise<CellResult> {
     } catch (err) {
       harvestError = err instanceof Error ? err.message : String(err);
     }
+    const checks = runChecks(task, dirs.dir);
 
     // Judge taxonomy: still malformed after armJudge's bounded retries ->
     // judge_error cell (excluded from aggregates, surfaced in the report).
@@ -131,7 +136,9 @@ async function runArmCell(task: ArmTask, arm: Arm): Promise<CellResult> {
           net: harvest.net,
         }
         : null,
-      judge_scores: judge ? { over_engineering: judge.over_engineering } : undefined,
+      judge_scores: judge
+        ? { over_engineering: judge.over_engineering, ...(checks !== 'none' ? { checks_pass: checks === 'pass' ? 1 : 0 } : {}) }
+        : undefined,
       judge_reasoning: judge
         ? `construct: ${judge.construct} | ${judge.reasoning}${judgeDiffTruncated ? ` | diff truncated to ${ARM_JUDGE_DIFF_CAP}B` : ''}`
         : judgeError ? `judge_error: ${judgeError}` : undefined,
@@ -146,6 +153,7 @@ async function runArmCell(task: ArmTask, arm: Arm): Promise<CellResult> {
       harvestError,
       judge,
       judgeError,
+      checks,
       consulted,
       costUsd: result.costEstimate.estimatedCost,
       tokens: result.costEstimate.estimatedTokens,
@@ -166,7 +174,7 @@ function cellLine(c: CellResult): string {
   const loc = c.harvest
     ? `+${c.harvest.insertions}/-${c.harvest.deletions} net ${c.harvest.net} in ${c.harvest.filesChanged} file(s)`
     : `harvest FAILED: ${c.harvestError}`;
-  return `  ${c.arm.padEnd(14)} score=${score}  loc=${loc}  turns=${c.turns}  `
+  return `  ${c.arm.padEnd(14)} score=${score}  checks=${c.checks}  loc=${loc}  turns=${c.turns}  `
     + `tokens=${(c.tokens / 1000).toFixed(1)}k  cost=$${c.costUsd.toFixed(2)}  consulted=${c.consulted}`;
 }
 

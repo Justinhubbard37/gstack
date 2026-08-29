@@ -9,7 +9,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   TASKS, FIXTURES, SKILL_NAME,
-  buildBehavioralSkill, run, setupArm, parseDiffStat, captureStagedDiff,
+  buildBehavioralSkill, run, setupArm, parseDiffStat, captureStagedDiff, runChecks,
 } from './helpers/arm-benchmark-harness';
 import {
   armJudge, buildArmJudgePrompt, parseArmJudgeResponse,
@@ -204,5 +204,32 @@ describe('arm benchmark selftest (free, no API)', () => {
     await expect(armJudge('ticket', 'diff --git a/x b/x\n+1\n', { call: alwaysBad }))
       .rejects.toThrow(/no well-formed verdict after 2 attempts/);
     expect(badCalls).toBe(ARM_JUDGE_ATTEMPTS);
+  });
+});
+
+describe('functional checks (correctness before LOC)', () => {
+  test('every fixture with a run-tests.js oracle declares checkCmd; the trap fixtures behave as planted', () => {
+    for (const task of TASKS) {
+      const oracle = path.join(FIXTURES, task.fixture, 'run-tests.js');
+      if (fs.existsSync(oracle)) {
+        expect(task.checkCmd, `${task.key} has run-tests.js but no checkCmd — its cells would report checks=none`).toEqual(['node', 'run-tests.js']);
+      } else {
+        expect(task.checkCmd).toBeUndefined();
+      }
+    }
+
+    // Pre-fix, the bugfix fixture MUST fail its own oracle (the planted bug),
+    // and a task with no oracle reports 'none' — never a throw.
+    const arm = setupArm(TASKS[2], 'without-skill');
+    const noOracle = setupArm(TASKS[0], 'without-skill');
+    try {
+      expect(runChecks(TASKS[2], arm.dir)).toBe('fail');
+      expect(runChecks(TASKS[0], noOracle.dir)).toBe('none');
+    } finally {
+      for (const a of [arm, noOracle]) {
+        fs.rmSync(a.dir, { recursive: true, force: true });
+        fs.rmSync(a.originDir, { recursive: true, force: true });
+      }
+    }
   });
 });
