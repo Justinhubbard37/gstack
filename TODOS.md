@@ -514,7 +514,7 @@ people to ignore gate reds.
 `ab66193e^`, reachable only from the token-usage-reduction branch — shallow
 clones fail today, all clones fail after that branch is pruned. Vendor the
 pre-carve render as a fixture the way `auq-pre-cut-plan-ceo-review-SKILL.md`
-was vendored for the repetition-cut A/B (v1.73.0.0), or repoint at a
+was vendored for the repetition-cut A/B (v1.75.0.0), or repoint at a
 main-reachable commit.
 
 **Effort:** S. **Priority:** P2 (weekly periodic breaks silently later).
