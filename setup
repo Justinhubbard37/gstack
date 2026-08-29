@@ -204,6 +204,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Shared by the instruction-tier explainer arms (openclaw, hermes). The digest
+# path is anchored to the script's own directory — $(pwd) would print a
+# nonexistent path when setup is invoked from anywhere else.
+print_instruction_tier() {
+  echo ""
+  echo "Instruction-only tier (no install): copy the 2KB rules digest into a"
+  echo "location your agent reads (e.g. append to your project's AGENTS.md)."
+  echo "It carries gstack's ethos, reuse ladder, and voice rules:"
+  echo ""
+  echo "  $SOURCE_GSTACK_DIR/agents-digest/gstack-AGENTS.md"
+  echo ""
+  echo "Re-copy it after upgrading gstack — the digest's first line shows its version."
+  echo ""
+}
+
 case "$HOST" in
   claude|codex|kiro|factory|opencode|cursor|auto) ;;
   slate)
@@ -226,15 +241,7 @@ case "$HOST" in
     echo "  1. Tell your OpenClaw agent: 'install gstack for openclaw'"
     echo "  2. Or generate artifacts: bun run gen:skill-docs --host openclaw"
     echo "  3. See docs/OPENCLAW.md for the full architecture"
-    echo ""
-    echo "Instruction-only tier (no install): copy the 2KB rules digest into a"
-    echo "location your agent reads (e.g. append to your project's AGENTS.md)."
-    echo "It carries gstack's ethos, reuse ladder, and voice rules:"
-    echo ""
-    echo "  $(pwd)/agents-digest/gstack-AGENTS.md"
-    echo ""
-    echo "Re-copy it after upgrading gstack — the digest's first line shows its version."
-    echo ""
+    print_instruction_tier
     exit 0 ;;
   hermes)
     echo ""
@@ -244,15 +251,7 @@ case "$HOST" in
     echo "To integrate gstack with Hermes:"
     echo "  1. Tell your Hermes agent: 'install gstack for hermes'"
     echo "  2. Or generate artifacts: bun run gen:skill-docs --host hermes"
-    echo ""
-    echo "Instruction-only tier (no install): copy the 2KB rules digest into a"
-    echo "location your agent reads (e.g. append to your project's AGENTS.md)."
-    echo "It carries gstack's ethos, reuse ladder, and voice rules:"
-    echo ""
-    echo "  $(pwd)/agents-digest/gstack-AGENTS.md"
-    echo ""
-    echo "Re-copy it after upgrading gstack — the digest's first line shows its version."
-    echo ""
+    print_instruction_tier
     exit 0 ;;
   gbrain)
     echo ""
