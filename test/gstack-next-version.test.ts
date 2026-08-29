@@ -982,3 +982,57 @@ describe("integration (smoke)", () => {
     expect(parsed).toHaveProperty("version_path", "Tinas Second Brain/health-tracker/VERSION");
   }, 30_000);
 });
+
+describe("fetchGitClaimed — laundered ls-remote (exit 0, empty output) is never trusted", () => {
+  // Some sandbox git wrappers launder exit codes: `git ls-remote --heads origin`
+  // exits 0 with EMPTY output even when no origin exists (observed on the
+  // Conductor /conductor/bin/git shim). Without the originConfigured guard,
+  // that empty "success" reads as a live queue with zero claims — the exact
+  // duplicate-allocation bug the guard closes. On healthy hosts the guarded
+  // and unguarded paths are indistinguishable (ls-remote genuinely fails), so
+  // only a laundering shim can pin the guard against reverts.
+  test("no origin + shim that lies: claims still come from local refs, with the staleness warning", () => {
+    const { chmodSync } = require("node:fs") as typeof import("node:fs");
+    const dir = mkdtempSync(join(tmpdir(), "nextver-launder-"));
+    const stubDir = join(dir, "stub-bin");
+    mkdirSync(stubDir);
+    const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(
+      join(stubDir, "git"),
+      `#!/bin/sh\nif [ "$1" = "ls-remote" ]; then exit 0; fi\nexec ${realGit} "$@"\n`,
+    );
+    chmodSync(join(stubDir, "git"), 0o755);
+
+    const git = (cwd: string, ...args: string[]) =>
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+
+    const cwd = process.cwd();
+    const oldPath = process.env.PATH;
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+      const sibSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sibSha);
+
+      process.chdir(dir);
+      process.env.PATH = `${stubDir}:${oldPath}`;
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      // The empty exit-0 probe must NOT be believed as "live queue is empty":
+      expect(versions).toContain("0.1.67.0");
+      expect(warnings.join(" ")).toContain("stale local refs/remotes/origin");
+    } finally {
+      process.env.PATH = oldPath;
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
