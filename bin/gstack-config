@@ -198,6 +198,10 @@ _sha256_hex() {
 }
 
 # Compute sha8 of a string. Used for endpoint hashing.
+# shasum is macOS/perl; most Linux distros ship only coreutils sha256sum —
+# resolve whichever exists (same fallback chain as the codex-probe timeout
+# wrapper). Without this, any Linux user with a git email hit exit 127 in
+# resolve-user-slug's Layer-3 fallback.
 sha8_of() {
   printf '%s' "$1" | _sha256_hex | cut -c1-8
 }

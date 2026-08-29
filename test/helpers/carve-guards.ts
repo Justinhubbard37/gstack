@@ -150,7 +150,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-ship-section-loading.test.ts',
-    maxSkeletonBytes: 73_090, // ponytail-import wave: reuse ladder + bounded closer + shortcut trail (AUQ repetition cut netted -236B, gated); measured 72_482
+    maxSkeletonBytes: 75_420, // ponytail-import wave + v1.72 Aside third-party-actions contract (merged); measured 74_811
     minUnionBytes: 181_000, // token-reduction Phases 1-2 (v1.69.x branch); measured union 201,464
     mustContain: ['VERSION', 'CHANGELOG', 'review', 'merge', 'PR'],
     // v1.58.5.0: pre-push-guard install (#2077) stacks on the shared first-run-guidance preamble.
@@ -295,7 +295,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     // the #538 opt-out + D1 evidence directive — ratio 1.104 measured.
     // #2499 project-scope MCP jq in the brain-sync block grew every tier-2+
     // skeleton ~1.5KB (entry resolution emitted once per SKILL.md).
-    maxSkeletonBytes: 69_500, // ponytail-import wave: reuse ladder + bounded closer + shortcut trail (AUQ repetition cut netted -236B, gated); measured 68_895
+    maxSkeletonBytes: 72_120, // ponytail-import wave + v1.72 Aside third-party-actions contract (merged); measured 71_511
     minUnionBytes: 115_800, // Phase 4 wave 4; measured union 118,175
     mustContain: ['design doc', 'problem statement'],
     maxSizeRatio: 1.12,
@@ -477,7 +477,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
       gateAfterStop: undefined, // operational skill
     },
     behavioral: 'prompt',
-    maxSkeletonBytes: 58_370, // ponytail-import wave: reuse ladder + bounded closer + shortcut trail (AUQ repetition cut netted -236B, gated); measured 57_761
+    maxSkeletonBytes: 60_980, // ponytail-import wave + v1.72 Aside third-party-actions contract (merged); measured 60_377
     minUnionBytes: 91_000, // Phase 4 wave 1; estimated union ~94.9KB
     mustContain: ['readiness', 'merge', 'canary', 'revert', 'staging'],
   },
@@ -541,7 +541,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
       gateAfterStop: undefined,
     },
     behavioral: 'prompt',
-    maxSkeletonBytes: 53_330, // ponytail-import wave: reuse ladder + bounded closer + shortcut trail (AUQ repetition cut netted -236B, gated); measured 52_724
+    maxSkeletonBytes: 55_660, // ponytail-import wave + v1.72 Aside third-party-actions contract (merged); measured 55_053
     minUnionBytes: 64_500, // measured union 67,430
     mustContain: ['HARD GATE', 'dedupe', 'quality gate', 'acceptance criteria', 'archive'],
   },
