@@ -1,5 +1,68 @@
 # Changelog
 
+## [1.73.0.0] - 2026-08-29
+
+**Your review now hunts over-built code, not just broken code.**
+**And every skill's advice starts with "reuse before you build."**
+
+This release imports the best of ponytail, the code-minimalism ruleset, without importing its build-less posture. /review gains an eighth lens: a simplification specialist that flags unrequested structure (hand-rolled stdlib, one-implementation abstractions, dead flexibility, dependencies duplicating platform features) in a closed five-tag vocabulary. It is advisory only. It cannot dent your quality score, its fixes are never auto-applied, and on a lean diff it tells you something no reviewer ever says: "lean already — nothing to cut." Every tier-2+ skill also gains the reuse ladder (stop at the first rung that holds: this repo, stdlib, native platform, an installed dependency... then build the complete version of what remains) and a bounded closer, so completion reports stop touring every edit. Accepted shortcuts now leave a durable trail: a decision-ledger entry plus a `gstack-shortcut(dec-<id>)` marker in code, harvested into a debt ledger by /retro. Agent hosts without a full install (Zed, Amp, Cursor side projects) get a 1.8KB rules digest to copy into their own rules file. And /autoplan now runs the Eng review last, always, so the required shipping gate reviews the final amended plan instead of a stale one.
+
+### The numbers that matter
+
+Source: this branch's own runs, recorded under `~/.gstack/projects/<slug>/evals/` and the commit receipts.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| /review lenses | 7 | 8 (simplification, advisory) | +1 |
+| Simplification lens on this branch's own 5,190-line diff | n/a | `net: -37 lines possible` | dogfooded |
+| AskUserQuestion preamble section, per skill | baseline | -236 B (~9.7 KB across 41 skills) | gated by a live A/B: post-cut 7/7 format elements, substance equal to pre-cut |
+| Instruction-tier artifact for rules-reading hosts | none | 1,765 B committed digest (2,048 B budget) | new |
+| Skills-earn-their-tokens benchmark | none | 3 tasks x 2 arms (with/without skill), judged on the diff left behind | new |
+| /autoplan phase order | CEO, Design, Eng, DX | CEO, Design, DX, Eng always last | the gate sees the final plan |
+
+The A/B receipt is the one to trust: the AskUserQuestion cut only landed because a two-arm eval on real SDK captures showed the shorter render lost nothing (the gate outranked the approval, by design).
+
+### What this means for your workflow
+
+Run /review on a branch you suspect is over-built and read the `[ADVISORY]` rows plus the `net: -N lines possible` footer; nothing blocks, nothing auto-applies, you decide. Take a shortcut in an AskUserQuestion and it stops rotting silently: /retro reads the ledger back to you with its upgrade trigger. If you work in a rules-reading editor without a gstack install, copy `agents-digest/gstack-AGENTS.md` into your rules file and the ethos rides along.
+
+### Itemized changes
+
+### Added
+
+- **Simplification review specialist** (`review/specialists/simplification.md`): closed tag vocabulary (`delete:` / `stdlib:` / `native:` / `speculative:` / `shrink:`), dispatched on diffs over 100 lines, `--simplification` force flag. Advisory carve-out end to end: excluded from the quality score and findings-count header, ASK-only in Fix-First, `[ADVISORY]` labels, parent-printed `net: -N lines possible` footer, and a `Simplification: lean already — nothing to cut.` zero-findings line. Precision guarded by a false-flag fixture (a complete-but-lean diff must yield NO FINDINGS) and coverage-vs-structure boundary text (tests, error paths, and edge cases are never deletion targets).
+- **Reuse ladder in Search Before Building** (every tier-2+ skill): before writing new code, stop at the first rung that holds — a helper already in the repo, the stdlib, a native platform feature, an already-installed dependency — then build the complete version of what remains. Root-cause rule included: one guard in the shared function beats a guard in every caller.
+- **Bounded closer** (every tier-2+ skill): after completing work, report what changed, what was skipped, what to watch — a few short lines, with report-shaped skills (/qa-only, /plan-*-review, /retro, /document-generate) explicitly exempt because their report IS the work.
+- **Shortcut debt ledger**: accepting a Completeness ≤ 7 option on a durable-scope call now logs the ceiling and upgrade trigger to the decision ledger and marks each cut corner with `gstack-shortcut(dec-<id>): <ceiling>, upgrade when <trigger>`; /retro Step 11.5 harvests the markers, joins them on decision ids, and tags `unlinked` and `no-trigger` rot risks. Markers survive the redaction engine (pinned by test).
+- **Instruction-only host tier**: `agents-digest/gstack-AGENTS.md`, a committed, generated, budget-capped (2,048 B) digest of the ethos, reuse ladder, and voice rules. Setup's openclaw/hermes explainer arms print its path for copy-in; setup never writes a user's AGENTS.md (tripwire-tested, including laundered write shapes). README's host table now matches what setup actually does.
+- **With/without-skill arm benchmark** (periodic eval): three build-shaped tasks (a native-platform overbuild trap, a CRUD endpoint, a bugfix with planted decoys) run through real `claude -p` sessions twice — with the behavioral-layer skill installed and without — and the staged diff each arm leaves is judged for over-engineering on a 0-3 rubric with a full failure taxonomy (judge_error cells excluded from aggregates but surfaced; zero-diff arms are valid cells). Each cell also runs the fixture's own functional oracle (`checks=pass|fail|none`), so a refusal, a broken implementation, and working code stay distinguishable — correctness before LOC. A research instrument, not a gate.
+- **/autoplan runs Eng last, always**: mandatory order is now CEO → Design (if UI scope) → DX (if developer-facing scope) → Eng, with a single final approval gate; clearly-wrong premises queue as User-Challenge items instead of stopping mid-run, and accepting one at the gate amends the plan and re-runs Eng on the amended plan. Static test pins the Eng-terminal order.
+
+### Changed
+
+- **AskUserQuestion preamble section slimmed** (-236 B per skill, ~9.7 KB across the corpus): duplicate statements of the completeness rule, auto-decide marker, and tool-not-prose rule removed while keeping every verbosity floor and all 14 format pins. Landed only after a live NOT-WORSE A/B (pre-cut vs post-cut render, identical prompt, SDK capture) showed zero format-element loss and equal recommendation substance.
+- **Terse-mode label tells the truth**: the claimed savings is now the measured 2.6 KB, not "~3-5 KB".
+- `/review` checklist knows Completeness Gaps and Simplification are orthogonal (coverage up, structure down), and a `gstack-shortcut` marker downgrades a would-be gap finding to acknowledged debt — but only when its decision id resolves in the ledger; an orphan marker is reported as a forged suppression (cross-model adversarial catch).
+
+### Fixed
+
+- **Version bumps no longer strand the agents digest**: `gstack-version-bump write --regen-digest` reruns the repo's digest generator in the same mutation (explicit opt-in — a plain `write` never executes repo files it merely finds), and both ship's and land-and-deploy's evidence gates allow-list the digest alongside VERSION. Without this, every release commit of this repo would have failed the freshness CI check.
+- **The free-suite flaky retry can no longer mask real failures**: the retry pass vetoes on ANY unattributable failure evidence (headerless failures, unhandled errors between tests, truncated runs), an empty shard carries an empty failing-files list instead of crashing the retry, and a dead conditional was removed.
+- **Version allocation distrusts laundered git**: `gstack-next-version` consults `ls-remote` only when origin is actually configured, and a configured origin that "successfully" advertises zero heads (the Conductor git shim's failure shape) now falls back to local refs with a loud warning instead of reading an empty queue and reallocating a taken version. Both shim shapes are pinned by regression tests.
+- **Browse temp paths are portable**: local file serving accepts both the browse TEMP_DIR and the OS tmpdir (`TEMP_DIRS` allowlist), while remote serving stays pinned to TEMP_DIR only (the security asymmetry is test-enforced). An untrustable TMPDIR (`/`, `$HOME`, an ancestor of the daemon's cwd) is ignored rather than trusted for the daemon's lifetime.
+- Setup's instruction-tier pointer prints a script-anchored digest path instead of a cwd-relative one that broke when invoked from another directory.
+- /retro's shortcut harvest no longer reports phantom debt from files that merely document the marker convention (placeholder filter + judgment prose).
+- The arm benchmark harvests against a recorded seed commit (immune to agents that commit and push), ignores node_modules, survives multi-megabyte patches, names its judge-diff cap and reports truncation loudly, and wraps untrusted diffs in per-call random sentinels so a faked closing marker cannot steer the judge.
+- The AUQ A/B eval treats a judge failure on either side as inconclusive instead of coercing it to a fake degradation-or-mask, and reads its pre-cut arm from a vendored fixture instead of a branch-local SHA that dies with the branch.
+
+### For contributors
+
+- `bun run test` gains sandbox knobs: `GSTACK_FREE_JOBS` overrides shard count (digits-only, loud on garbage) and `GSTACK_FREE_RETRY_FLAKY=1` opts into one serial retry pass for syscall-supervised sandboxes (default stays OFF — dev boxes should see flakes). `scripts/sandbox-doctor.sh` makes a Vercel/Conductor cloud sandbox run the suite green in one idempotent command (documented in docs/TESTING_INTERNALS.md): atomic git-shim patching with a backup, loud on patch-pattern drift, :99-socket Xvfb detection, dnf-gated installs, and it survives a missing /dev/shm. A failed digest regen now fails `bun run gen:skill-docs` locally instead of deferring the red to CI.
+- The arm-benchmark selftest (fixture integrity, judge plumbing, install asymmetry) now runs FREE in `bun run test` on every PR via `test/arm-benchmark-selftest.test.ts` — the paid periodic instrument can no longer burn money on broken fixtures.
+- Eval-store schema v2: harvest records carry `{insertions, deletions, net}`; `recordE2E` now populates `tokens_used`.
+- Touchfiles dep lists closed gaps (fixtures, judge helper, harness, ship render) and the context-budget ratchet fixture was re-captured, locking the AskUserQuestion reduction so it cannot silently regress.
+- New coverage: TEMP_DIRS widening + remote-serving asymmetry, shortcut-marker writer/harvester grammar joint, sandbox-doctor shell guards, GSTACK_FREE_JOBS parsing, laundered-ls-remote shims, digest freshness/budget/writer tripwires, and a real generator round-trip through the version bump.
+
 ## [1.72.0.0] - 2026-08-28
 
 **"Go register an API key" now drives your real browser.**
