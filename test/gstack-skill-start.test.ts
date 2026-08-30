@@ -197,6 +197,61 @@ describe('gstack-skill-start behavior', () => {
     }
   });
 
+  test('spawned override suppresses CONDUCTOR_SESSION, emits SPAWNED_SESSION + block, gates onboarding (#2733)', () => {
+    const freshGh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-spawned-'));
+    fs.writeFileSync(path.join(freshGh, 'config.yaml'), 'update_check: false\n');
+    try {
+      const out = runStart([], {
+        GSTACK_SESSION_KIND: 'spawned',
+        CONDUCTOR_WORKSPACE_PATH: '/x',
+        GSTACK_HOME: freshGh,
+      });
+      expect(out).toMatch(/^SESSION_KIND: spawned$/m);
+      // spawned outranks Conductor: prose-to-nobody is always wrong.
+      expect(out).not.toContain('CONDUCTOR_SESSION: true');
+      expect(out).toMatch(/^SPAWNED_SESSION: true$/m);
+      // The ONLY instruction block a spawned session gets is spawned-session —
+      // none of the 11 interactive-onboarding blocks may emit (no human is
+      // watching; auto-answered prompts would write config nobody approved).
+      const ids = (out.match(/^GSTACK_INSTRUCTION_BEGIN: (\S+)/gm) ?? []).map(
+        (h) => h.replace(/^GSTACK_INSTRUCTION_BEGIN: /, ''),
+      );
+      expect(ids).toEqual(['spawned-session']);
+      // Script-side ack-at-emit markers stay UNWRITTEN, so the one-time
+      // prompts fire intact on the next human session.
+      expect(fs.existsSync(path.join(freshGh, '.activated'))).toBe(false);
+      expect(fs.existsSync(path.join(freshGh, '.first-loop-tip-shown'))).toBe(false);
+      expect(fs.existsSync(path.join(freshGh, '.completeness-intro-seen'))).toBe(false);
+      expect(fs.existsSync(path.join(freshGh, '.telemetry-prompted'))).toBe(false);
+    } finally {
+      fs.rmSync(freshGh, { recursive: true, force: true });
+    }
+  });
+
+  test('legacy OPENCLAW_SESSION still gets full spawned behavior through the kind-keyed gates', () => {
+    // Regression pin for the raw-marker → $_SESSION_KIND migration (#2733):
+    // OpenClaw sessions must behave exactly as before the re-keying.
+    const freshGh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-openclaw-'));
+    fs.writeFileSync(path.join(freshGh, 'config.yaml'), 'update_check: false\n');
+    try {
+      const out = runStart([], {
+        OPENCLAW_SESSION: '1',
+        CONDUCTOR_WORKSPACE_PATH: '/x',
+        GSTACK_HOME: freshGh,
+      });
+      expect(out).toMatch(/^SESSION_KIND: spawned$/m);
+      expect(out).not.toContain('CONDUCTOR_SESSION: true');
+      expect(out).toMatch(/^SPAWNED_SESSION: true$/m);
+      const ids = (out.match(/^GSTACK_INSTRUCTION_BEGIN: (\S+)/gm) ?? []).map(
+        (h) => h.replace(/^GSTACK_INSTRUCTION_BEGIN: /, ''),
+      );
+      expect(ids).toEqual(['spawned-session']);
+      expect(fs.existsSync(path.join(freshGh, '.activated'))).toBe(false);
+    } finally {
+      fs.rmSync(freshGh, { recursive: true, force: true });
+    }
+  });
+
   test('display-only tips ack at emit and never re-fire (OV6)', () => {
     const freshGh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-refire-'));
     fs.writeFileSync(path.join(freshGh, 'config.yaml'), 'update_check: false\n');
