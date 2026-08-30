@@ -293,6 +293,21 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'plan-eng-coverage-audit': ['plan-eng-review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
   'ship-triage': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-triage.test.ts'],
   'ship-docsync': ['ship/**', 'document-release/**', 'scripts/gen-skill-docs.ts', 'scripts/resolvers/sections.ts', 'test/skill-e2e-ship-docsync.test.ts'],
+  // #2733 behavioral proof: the JSON contract survives a firing gate inside a
+  // spawned-marked subagent. Deps name every behavior under test — the
+  // session-kind override, the skill-start gates, both hooks + the shared
+  // directive, and the AUQ prose rule — so changing any of them selects it.
+  'docsync-spawned': [
+    'document-release/**',
+    'ship/sections/pr-body.md',
+    'bin/gstack-session-kind',
+    'bin/gstack-skill-start',
+    'hosts/claude/hooks/question-preference-hook.ts',
+    'hosts/claude/hooks/auq-error-fallback-hook.ts',
+    'hosts/claude/hooks/spawned-directive.ts',
+    'scripts/resolvers/preamble/generate-ask-user-format.ts',
+    'test/skill-e2e-docsync-spawned.test.ts',
+  ],
 
   // Plan completion audit + verification
   'ship-plan-completion': ['ship/**', 'scripts/gen-skill-docs.ts'],
@@ -702,6 +717,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'ship-coverage-audit': 'gate',
   'ship-triage': 'gate',
   'ship-docsync': 'gate',
+  'docsync-spawned': 'gate',   // #2733 JSON-contract-through-a-firing-gate proof (deterministic safety)
   'ship-plan-completion': 'gate',
   'ship-plan-verification': 'gate',
 

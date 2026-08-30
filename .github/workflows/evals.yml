@@ -159,6 +159,12 @@ jobs:
           - name: e2e-ship-docsync
             file: test/skill-e2e-ship-docsync.test.ts
             tier: gate
+          # #2733 behavioral proof: the document-release JSON contract survives
+          # a firing AUQ gate inside a spawned-marked subagent. Whole-file
+          # tier-gated like ship-docsync, so the row carries tier: gate.
+          - name: e2e-docsync-spawned
+            file: test/skill-e2e-docsync-spawned.test.ts
+            tier: gate
           # Consent-gate guardrail for the Third-Party Web Actions contract
           # (Aside recommended-driver rewrite): hermetic shims, deterministic
           # grep assertions, gate tier in E2E_TIERS.
