@@ -82,6 +82,12 @@ function runHook(stdin: object, cwd?: string, extraEnv?: Record<string, string>)
   // via extraEnv.
   delete env.CONDUCTOR_WORKSPACE_PATH;
   delete env.CONDUCTOR_PORT;
+  // Same reasoning for the spawned markers (#2733): running the suite inside
+  // an OpenClaw/spawned-marked session would flip the [conductor] prose deny
+  // into the [conductor][spawned] auto-choose deny. Spawned cases opt back in
+  // explicitly via extraEnv.
+  delete env.OPENCLAW_SESSION;
+  delete env.GSTACK_SESSION_KIND;
   env.GSTACK_QUESTION_LOG_NO_DERIVE = '1';
   if (extraEnv) Object.assign(env, extraEnv);
   const res = spawnSync(HOOK, [], {
@@ -526,6 +532,72 @@ describe('Conductor prose redirect', () => {
       CONDUCTOR,
     );
     expectPassThrough(r);
+  });
+
+  test('prose deny carries the spawned-subagent escape sentence (#2733)', () => {
+    // A per-command env prefix in a subagent's bash can never reach this hook
+    // (hooks inherit the harness env), so the deny TEXT must carry the escape
+    // hatch — otherwise a marked subagent that slips and calls AUQ is
+    // instructed to prose-STOP, recreating the bug through the hook layer.
+    const r = runHook({
+      session_id: 'c7',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'tu-c7',
+      tool_input: {
+        questions: [
+          { question: '<gstack-qid:test-q> Need approval?', options: ['A) Yes (recommended)', 'B) No'] },
+        ],
+      },
+    }, undefined, CONDUCTOR);
+    const reason = r.parsed?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toMatch(/spawned subagent[\s\S]*auto-choose the recommended option/i);
+    // Destructive exclusion rides the same sentence (unified semantics).
+    expect(reason).toMatch(/destructive or irreversible gate[\s\S]*conservative/i);
+  });
+});
+
+// ----------------------------------------------------------------------
+// Conductor + env-detected spawned: auto-choose deny, not prose (#2733)
+// ----------------------------------------------------------------------
+
+describe('Conductor spawned deny (#2733)', () => {
+  const Q = {
+    questions: [
+      { question: '<gstack-qid:test-q> Bump VERSION?', options: ['A) Skip (recommended)', 'B) Bump'] },
+    ],
+  };
+
+  test('Conductor + OPENCLAW_SESSION → [conductor][spawned] auto-choose deny, not prose', () => {
+    const r = runHook(
+      { session_id: 's1', tool_name: 'AskUserQuestion', tool_use_id: 'tu-s1', tool_input: Q },
+      undefined,
+      { CONDUCTOR_PORT: '55070', OPENCLAW_SESSION: '1' },
+    );
+    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.parsed?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toContain('[conductor][spawned]');
+    expect(reason).toMatch(/auto-choose the recommended option/i);
+    expect(reason).not.toMatch(/reply with a letter/i);
+  });
+
+  test('Conductor + GSTACK_SESSION_KIND=spawned env → same auto-choose deny', () => {
+    const r = runHook(
+      { session_id: 's2', tool_name: 'AskUserQuestion', tool_use_id: 'tu-s2', tool_input: Q },
+      undefined,
+      { CONDUCTOR_WORKSPACE_PATH: '/Users/x/conductor/ws', GSTACK_SESSION_KIND: 'spawned' },
+    );
+    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.parsed?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toContain('[conductor][spawned]');
+    expect(reason).toMatch(/never auto-approve a destructive or irreversible option/i);
+  });
+
+  test('both hooks source their spawned directive from the shared constant (drift guard)', () => {
+    const hooksDir = path.join(ROOT, 'hosts', 'claude', 'hooks');
+    for (const f of ['question-preference-hook.ts', 'auq-error-fallback-hook.ts']) {
+      const src = fs.readFileSync(path.join(hooksDir, f), 'utf-8');
+      expect(src, `${f} must import the shared spawned directive`).toContain("from './spawned-directive'");
+    }
   });
 });
 

@@ -74,6 +74,15 @@ describe('directiveFor — per-session-kind instruction', () => {
   test('spawned directive auto-chooses', () => {
     expect(directiveFor('spawned')).toMatch(/auto-choose/i);
   });
+
+  test('interactive directive carries the spawned escape sentence (#2733)', () => {
+    // The sessionKind() shell-out runs in the HARNESS env, so a subagent
+    // marked spawned via a per-command prefix classifies interactive here —
+    // the directive text is the only lever for that topology.
+    const d = directiveFor('interactive');
+    expect(d).toMatch(/spawned subagent[\s\S]*auto-choose the recommended option/i);
+    expect(d).toMatch(/destructive or irreversible gate[\s\S]*conservative/i);
+  });
 });
 
 /** Spawn the hook with synthetic stdin + controlled env; parse its JSON stdout. */
@@ -110,6 +119,15 @@ describe('hook integration — invoked as PostToolUse', () => {
       { tool_name: 'AskUserQuestion', tool_response: { is_error: true } },
       { OPENCLAW_SESSION: '1' },
     );
+    expect(out.additionalContext).toMatch(/auto-choose/i);
+  });
+
+  test('error result + GSTACK_SESSION_KIND=spawned env → override beats Conductor-interactive (#2733)', () => {
+    const out = runHook(
+      { tool_name: 'AskUserQuestion', tool_response: { is_error: true } },
+      { GSTACK_SESSION_KIND: 'spawned', CONDUCTOR_PORT: '55010' },
+    );
+    expect(out.additionalContext).toMatch(/SESSION_KIND=spawned/);
     expect(out.additionalContext).toMatch(/auto-choose/i);
   });
 

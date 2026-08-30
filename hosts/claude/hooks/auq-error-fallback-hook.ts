@@ -32,6 +32,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { runBin } from './spawn-bin';
+import { SPAWNED_ESCAPE_SENTENCE } from './spawned-directive';
 
 interface HookStdin {
   tool_name?: string;
@@ -158,12 +159,17 @@ export function directiveFor(kind: 'spawned' | 'headless' | 'interactive'): stri
       );
     case 'interactive':
     default:
+      // #2733: the shell-out above runs in the HARNESS env, so a subagent
+      // marked spawned via a per-command env prefix still classifies as
+      // interactive here — the escape sentence is the only lever for that
+      // topology (see spawned-directive.ts).
       return (
         lead +
         'SESSION_KIND=interactive — render the decision as a PROSE message now: a clear ELI10 of the issue, ' +
         'then a Recommendation line, then ONE paragraph per choice carrying its `(recommended)` marker, its ' +
         '`Completeness: X/10`, and 2-4 sentences of reasoning. Tell the user to reply with a letter, then STOP. ' +
-        '(Retry the call once first only if no answer could have surfaced.)'
+        '(Retry the call once first only if no answer could have surfaced.) ' +
+        SPAWNED_ESCAPE_SENTENCE
       );
   }
 }

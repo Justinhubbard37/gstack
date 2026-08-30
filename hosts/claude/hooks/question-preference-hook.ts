@@ -46,6 +46,7 @@ import * as os from 'os';
 import { runBin, repoRoot } from './spawn-bin';
 import { isConductor } from '../../../lib/is-conductor';
 import { classifyQuestion } from '../../../scripts/one-way-doors';
+import { SPAWNED_ESCAPE_SENTENCE, CONDUCTOR_SPAWNED_DENY_REASON, spawnedByEnv } from './spawned-directive';
 
 interface HookStdin {
   session_id?: string;
@@ -484,6 +485,17 @@ async function main(): Promise<void> {
   // preference, or door type — including one-way doors, which must reach the
   // human via prose rather than the unreliable tool.
   if (isConductor()) {
+    // #2733: env-level spawned sessions (OpenClaw inside a Conductor
+    // workspace, or a harness launched with GSTACK_SESSION_KIND=spawned in
+    // its env) get an auto-choose deny — a prose brief has no reader there.
+    // LIMITATION: a per-command GSTACK_SESSION_KIND prefix inside a
+    // subagent's bash never reaches this hook (hooks inherit the harness
+    // env); that case is covered by the escape sentence below plus the
+    // dispatching skill's prompt.
+    if (spawnedByEnv()) {
+      deny(CONDUCTOR_SPAWNED_DENY_REASON + (memoryContext ? `\n${memoryContext}` : ''));
+      return;
+    }
     const conductorReason =
       '[conductor] AskUserQuestion is unreliable in Conductor (native disabled, MCP variant flaky). ' +
       'Do NOT call AskUserQuestion (native or any mcp__*__AskUserQuestion). Render this decision as a ' +
@@ -491,7 +503,8 @@ async function main(): Promise<void> {
       'paragraph per choice carrying its `(recommended)` marker and `Completeness: X/10`; tell the user ' +
       'to reply with a letter, then STOP. For a one-way/destructive confirmation, require an explicit ' +
       'typed confirmation and do NOT proceed on a vague reply. Capture the decision with gstack-question-log ' +
-      '(PostToolUse will not fire on a prose path).' +
+      '(PostToolUse will not fire on a prose path). ' +
+      SPAWNED_ESCAPE_SENTENCE +
       (memoryContext ? `\n${memoryContext}` : '');
     deny(conductorReason);
     return;
