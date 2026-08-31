@@ -314,6 +314,7 @@ describe('gstack-skill-start behavior', () => {
     const env = { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: freshGh };
     try {
       const checkpoint = execFileSync(localStart, ['--skill', 'testskill'], {
+        timeout: 30_000,
         encoding: 'utf-8',
         cwd: projectRoot,
         env,
@@ -328,6 +329,7 @@ describe('gstack-skill-start behavior', () => {
 
       fs.writeFileSync(path.join(freshGh, '.feature-prompted-continuous-checkpoint'), '');
       const overlay = execFileSync(localStart, ['--skill', 'testskill'], {
+        timeout: 30_000,
         encoding: 'utf-8',
         cwd: projectRoot,
         env,
