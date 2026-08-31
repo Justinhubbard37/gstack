@@ -267,6 +267,10 @@ function hasNear(
  *   - `git@<known-host>` for the major forges, whose bare form appears in docs
  *     and in `ssh -T git@github.com` connectivity checks with no path at all.
  */
+/** Lookahead window for the scp-path suffix check — long enough for any real
+ *  remote path, bounded so a pathological unbroken line can't grow the scan. */
+const SSH_REMOTE_PATH_LOOKAHEAD_CHARS = 512;
+
 function isSshGitRemote(email: string, text: string, spanStart: number): boolean {
   const at = email.lastIndexOf("@");
   if (at < 0) return false;
@@ -278,7 +282,10 @@ function isSshGitRemote(email: string, text: string, spanStart: number): boolean
 
   // Any host in `<user>@<host>:<path>.git` position. The path stops at
   // whitespace or a quote so a trailing delimiter never defeats the suffix.
-  const rest = text.slice(spanStart + email.length, spanStart + email.length + 512);
+  const rest = text.slice(
+    spanStart + email.length,
+    spanStart + email.length + SSH_REMOTE_PATH_LOOKAHEAD_CHARS,
+  );
   const scp = /^:(?!\/)([^\s'"`<>]*)/.exec(rest);
   if (scp && /\.git\/?$/.test(scp[1])) return true;
 
