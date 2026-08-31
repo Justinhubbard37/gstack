@@ -786,11 +786,23 @@ function getVersion(): string {
 // claude-CLI TUI drift only after long flake hunts — stamping the version
 // into every run record makes that correlation a grep instead of an
 // archaeology dig.
+//
+// GSTACK_CLAUDE_CLI_VERSION short-circuits the spawn entirely: the paid
+// runner's parent resolves the version once and passes it to every shard,
+// so test processes never block on it. The fallback spawn is SYNCHRONOUS on
+// the same thread that polls PTY sessions — the judgePtyState blocking
+// class — so its budget is a tight 3s, not a generous one: a slow/hung CLI
+// costs one bounded stall per process and records 'unknown'.
 let claudeCliVersionCache: string | null = null;
 export function getClaudeCliVersion(): string {
   if (claudeCliVersionCache !== null) return claudeCliVersionCache;
+  const fromEnv = process.env.GSTACK_CLAUDE_CLI_VERSION;
+  if (fromEnv) {
+    claudeCliVersionCache = fromEnv;
+    return claudeCliVersionCache;
+  }
   try {
-    const result = spawnSync('claude', ['--version'], { stdio: 'pipe', timeout: 10_000 });
+    const result = spawnSync('claude', ['--version'], { stdio: 'pipe', timeout: 3_000 });
     claudeCliVersionCache = result.stdout?.toString().split('\n')[0].trim() || 'unknown';
   } catch {
     claudeCliVersionCache = 'unknown';

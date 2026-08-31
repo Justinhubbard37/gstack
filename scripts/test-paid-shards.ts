@@ -64,7 +64,7 @@ import {
 } from './test-strict-output';
 import { PAID_TEST_GLOBS, isPaidTestFile } from '../test/helpers/paid-test-set';
 import { PERIODIC_CI_EXCLUDE } from '../test/helpers/periodic-exclude-data';
-import { getProjectEvalDir } from '../test/helpers/eval-store';
+import { getProjectEvalDir, getClaudeCliVersion } from '../test/helpers/eval-store';
 import { preflightAnthropicApi } from '../test/helpers/anthropic-preflight';
 import {
   detectBaseBranch,
@@ -492,6 +492,12 @@ export async function runPaidShard(
   const env = { ...(options.env ?? process.env) };
   if (options.evalDirBase) {
     env.GSTACK_EVAL_DIR = path.join(options.evalDirBase, 'shards', shardSlug(files));
+  }
+  // Resolve `claude --version` ONCE in the parent (cached across shards) and
+  // hand it to every child: eval-store's fallback is a synchronous spawn on
+  // the same thread that polls PTY sessions, so children must never pay it.
+  if (!env.GSTACK_CLAUDE_CLI_VERSION) {
+    env.GSTACK_CLAUDE_CLI_VERSION = getClaudeCliVersion();
   }
 
   const startedAt = Date.now();
