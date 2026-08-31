@@ -114,6 +114,11 @@ describe('EvalCollector', () => {
     expect(data.total_duration_ms).toBe(3000);
     expect(data.timestamp).toBeTruthy();
     expect(data.hostname).toBeTruthy();
+    // CLI version stamping: always a non-empty string ('unknown' when the
+    // claude binary is absent — the field must exist either way so flake
+    // investigations can correlate runs with the TUI they exercised).
+    expect(typeof data.claude_cli_version).toBe('string');
+    expect(data.claude_cli_version!.length).toBeGreaterThan(0);
   });
 
   test('finalize creates directory if missing', async () => {

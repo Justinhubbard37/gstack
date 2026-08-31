@@ -118,6 +118,10 @@ export interface EvalResult {
   git_sha: string;
   timestamp: string;
   hostname: string;
+  /** `claude --version` first line at run time (schema-additive, optional).
+   *  TUI drift broke the PTY harness three times before runs recorded which
+   *  CLI they actually exercised. */
+  claude_cli_version?: string;
   tier: 'e2e' | 'llm-judge';
   total_tests: number;
   passed: number;
@@ -777,6 +781,23 @@ function getVersion(): string {
   }
 }
 
+// Cached per process: savePartial runs after EVERY test and must not pay a
+// CLI spawn each time. Three separate harness breakages were traced to
+// claude-CLI TUI drift only after long flake hunts — stamping the version
+// into every run record makes that correlation a grep instead of an
+// archaeology dig.
+let claudeCliVersionCache: string | null = null;
+export function getClaudeCliVersion(): string {
+  if (claudeCliVersionCache !== null) return claudeCliVersionCache;
+  try {
+    const result = spawnSync('claude', ['--version'], { stdio: 'pipe', timeout: 10_000 });
+    claudeCliVersionCache = result.stdout?.toString().split('\n')[0].trim() || 'unknown';
+  } catch {
+    claudeCliVersionCache = 'unknown';
+  }
+  return claudeCliVersionCache;
+}
+
 export class EvalCollector {
   private tier: 'e2e' | 'llm-judge';
   private tests: EvalTestEntry[] = [];
@@ -812,6 +833,7 @@ export class EvalCollector {
         git_sha: git.sha,
         timestamp: new Date().toISOString(),
         hostname: os.hostname(),
+        claude_cli_version: getClaudeCliVersion(),
         tier: this.tier,
         total_tests: this.tests.length,
         passed,
@@ -849,6 +871,7 @@ export class EvalCollector {
       git_sha: git.sha,
       timestamp,
       hostname: os.hostname(),
+      claude_cli_version: getClaudeCliVersion(),
       tier: this.tier,
       total_tests: this.tests.length,
       passed,
