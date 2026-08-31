@@ -1002,6 +1002,23 @@ async function main(): Promise<number> {
       for (const problem of verdict.problems) console.error(`  ✗ ${problem}`);
       return 1;
     }
+    // Flake honesty (WS1): surface every test that needed a retry to pass.
+    // WARNS, never fails — a flaky pass must not block merges; it must also
+    // never be invisible (bun's own output hides retried passes entirely).
+    // Source: the finalized eval-store JSONs inside the slice artifacts.
+    const flaky: Array<{ name: string; attempts: number; file: string }> = [];
+    for (const name of fs.readdirSync(options.reportDir, { recursive: true }) as string[]) {
+      if (!/\.json$/.test(name) || /manifest\.json$|slice-\d+\.json$|^_partial|\/_partial/.test(name)) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(options.reportDir, name), 'utf-8')) as { flaky_retries?: Array<{ name: string; attempts: number }> };
+        for (const f of parsed.flaky_retries ?? []) flaky.push({ ...f, file: name });
+      } catch { /* non-eval JSON — not this report's business */ }
+    }
+    if (flaky.length > 0) {
+      console.log(`[test:paid] report: ⚠ ${flaky.length} test(s) passed only on retry this run (recorded, not blocking):`);
+      for (const f of flaky) console.log(`  ⚠ ${f.name} (x${f.attempts}) — ${f.file}`);
+    }
+
     // Census honesty: a 'passed' shard whose every test skipped verified
     // nothing (external-service binary absent on the runner). Not a failure —
     // service availability is host state, not a repo regression — but the
