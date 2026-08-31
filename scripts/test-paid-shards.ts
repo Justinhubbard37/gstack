@@ -85,11 +85,16 @@ export type PaidTier = 'gate' | 'periodic';
 export const DEFAULT_TIER: PaidTier = 'gate';
 export const DEFAULT_SHARD_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_MAX_FILES_PER_SHARD = 1;
-export const DEFAULT_JOBS = 4;
-// Within one shard's bun process. 4 jobs × 4 ≈ the legacy single-process
-// default of 15, keeping total in-flight `claude` sessions inside known-safe
-// API rate headroom.
-export const DEFAULT_WITHIN_SHARD_CONCURRENCY = 4;
+// 8 jobs × 2 within-shard ≈ 10-13 real in-flight sessions (39 of 75
+// skill-e2e files hold exactly ONE test, so within-shard concurrency is
+// dead weight for most shards) — under the documented-safe ~15 the legacy
+// 40-way runner established. The old 4×4 yielded only ~4-6 in-flight and a
+// 13-wave local gate worst case (~6.5h); 8×2 halves it. Watch the WS1
+// flake telemetry for sustained 429 storms across 2 PR cycles — that is
+// the rollback trigger. Prerequisite (landed): per-shard TMPDIR/
+// CHROMIUM_PROFILE isolation in runPaidShard.
+export const DEFAULT_JOBS = 8;
+export const DEFAULT_WITHIN_SHARD_CONCURRENCY = 2;
 
 export function collectPaidTestFiles(rootDir = ROOT): string[] {
   const testDir = path.join(rootDir, 'test');
