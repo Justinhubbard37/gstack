@@ -211,6 +211,40 @@ describe('gstack-wtree', () => {
     });
   });
 
+  // #2687 hardening: `touch -r ... || true` meant a FAILED touch silently
+  // reopened the racy-window hole (the temp index copy keeps its "now" stamp
+  // and every entry reads non-racy). A failed touch must fall through to the
+  // read-tree HEAD seed, which re-hashes everything.
+  test('racy-git window stays closed even when touch fails (stubbed-touch fallback)', () => {
+    withScratchRepo((repoDir, _wtree) => {
+      const file = path.join(repoDir, 'a.txt');
+      const indexPath = path.join(repoDir, '.git', 'index');
+      gitIn(repoDir, 'config core.trustctime false');
+      const pinned = new Date('2026-01-01T12:00:00Z');
+      fs.utimesSync(file, pinned, pinned);
+      gitIn(repoDir, 'add a.txt');
+      // PATH-stubbed `touch` that always fails.
+      const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-touch-stub-'));
+      fs.writeFileSync(path.join(stubDir, 'touch'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const wtreeStubbed = () =>
+        execSync(`${BIN}/gstack-wtree`, {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          timeout: 10000,
+          env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ''}` },
+        }).trim();
+      try {
+        const clean = wtreeStubbed();
+        fs.writeFileSync(file, 'howdy\n'); // same byte length as 'hello\n'
+        fs.utimesSync(file, pinned, pinned);
+        fs.utimesSync(indexPath, pinned, pinned);
+        expect(wtreeStubbed()).not.toBe(clean);
+      } finally {
+        fs.rmSync(stubDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   test('exits non-zero outside a git repo', () => {
     const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-wtree-nongit-'));
     try {
