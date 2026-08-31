@@ -62,7 +62,7 @@ interface FakeEnv {
  */
 function makeEnv(opts: {
   withGbrain?: boolean;
-  gbrainBehavior?: "ok" | "broken-db" | "broken-config" | "engine-locked" | "engine-locked-v43" | "throws" | "slow" | "thin-refusal";
+  gbrainBehavior?: "ok" | "broken-db" | "broken-config" | "engine-locked" | "engine-locked-v43" | "throws" | "slow" | "slow-version" | "thin-refusal";
   withConfig?: boolean;
   /** #2051: config carries gbrain's remote_mcp thin-client marker. */
   thinClientConfig?: boolean;
@@ -116,8 +116,18 @@ function makeEnv(opts: {
 }
 
 function makeFakeGbrainScript(
-  behavior: "ok" | "broken-db" | "broken-config" | "engine-locked" | "engine-locked-v43" | "throws" | "slow" | "thin-refusal",
+  behavior: "ok" | "broken-db" | "broken-config" | "engine-locked" | "engine-locked-v43" | "throws" | "slow" | "slow-version" | "thin-refusal",
 ): string {
+  // "slow-version": gbrain IS installed but even `--version` blows the
+  // (test-lowered) budget — the #2716 bun-shim-on-a-loaded-POSIX-box shape.
+  // Must classify as "timeout" (usable, --is-ok forgives), never "no-cli".
+  if (behavior === "slow-version") {
+    return `#!/bin/sh
+sleep 2
+echo "gbrain 0.43.0.0"
+exit 0
+`;
+  }
   // "slow": healthy engine on a cold pooler connection (#1964) — sleeps past
   // the (test-lowered) probe timeout, then would answer fine.
   if (behavior === "slow") {
@@ -220,6 +230,21 @@ describe("lib/gbrain-local-status — status classification", () => {
     env = makeEnv({ withGbrain: false });
     restoreEnv = applyEnv(env);
     expect(localEngineStatus({ noCache: true })).toBe("no-cli");
+  });
+
+  // #2716: a present-but-slow gbrain (bun-shim install on a loaded POSIX box)
+  // used to collapse into the same `null` as a missing binary — classified
+  // "no-cli", which `--is-ok` does NOT forgive, so every brain-aware block
+  // silently disappeared. Slow-but-present must classify "timeout" (forgiven).
+  it("returns 'timeout' (not 'no-cli') when the --version probe blows its budget", () => {
+    env = makeEnv({ withGbrain: true, gbrainBehavior: "slow-version", withConfig: true });
+    restoreEnv = applyEnv(env);
+    process.env.GSTACK_GBRAIN_VERSION_PROBE_TIMEOUT_MS = "300";
+    try {
+      expect(localEngineStatus({ noCache: true })).toBe("timeout");
+    } finally {
+      delete process.env.GSTACK_GBRAIN_VERSION_PROBE_TIMEOUT_MS;
+    }
   });
 
   it("returns 'missing-config' when CLI is present but ~/.gbrain/config.json absent", () => {
