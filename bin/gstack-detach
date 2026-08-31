@@ -106,10 +106,18 @@ def child_run(args, log):
                 except Exception:
                     pass
                 time.sleep(5)
+                # Group SIGKILL after the grace, not a direct-child kill:
+                # eval runs spawn claude/codex grandchildren that survive a
+                # proc.kill() and burn cores + API for hours (the observed
+                # 15-hour-orphan class). ESRCH here just means the group
+                # honored the SIGTERM.
                 try:
-                    proc.kill()
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
-                    pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
                 code = "timeout"
         else:
             code = proc.wait()

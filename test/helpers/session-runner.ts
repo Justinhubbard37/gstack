@@ -9,8 +9,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from 'child_process';
+import { Readable } from 'node:stream';
 import { getProjectEvalDir } from './eval-store';
 import { hermeticChildEnv, isHermeticEnabled } from './hermetic-env';
+import { killProcessGroup } from '../../scripts/test-strict-output';
 
 const GSTACK_DEV_DIR = path.join(os.homedir(), '.gstack-dev');
 const HEARTBEAT_PATH = path.join(GSTACK_DEV_DIR, 'e2e-live.json'); // heartbeat stays global
@@ -174,8 +177,13 @@ export async function runSkillTest(options: {
   if (isHermeticEnabled()) args.push('--strict-mcp-config');
 
   // Spawn claude directly with array-form args (no shell interpolation).
-  // Prompt is piped via stdin using a Blob to avoid temp files and shell escaping.
-  const proc = Bun.spawn(['claude', ...args], {
+  // node:child_process spawn (not Bun.spawn): `detached` puts the child in
+  // its OWN process group, so the timeout handler can killpg the whole tree.
+  // Bun.spawn has no detached option, and its bare proc.kill() signalled only
+  // claude itself — tool subprocesses claude spawned survived as orphans
+  // burning shared API rate for the rest of the shard's lifetime.
+  // Prompt is piped via stdin to avoid temp files and shell escaping.
+  const proc = spawn('claude', args, {
     cwd: workingDirectory,
     // Hermetic by default (see test/helpers/hermetic-env.ts): operator
     // session context (CONDUCTOR_*, CLAUDECODE, ~/.claude config, ~/.gstack)
@@ -185,9 +193,17 @@ export async function runSkillTest(options: {
     // suite exercising the INTERACTIVE prose-fallback path opts out by passing
     // `env: { GSTACK_HEADLESS: '' }` — extraEnv wins because it spreads last.
     env: hermeticChildEnv({ GSTACK_HEADLESS: '1', ...extraEnv }),
-    stdin: new Blob([prompt]),
-    stdout: 'pipe',
-    stderr: 'pipe',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  });
+  proc.stdin!.on('error', () => { /* child died before reading the prompt — exit handling reports it */ });
+  proc.stdin!.write(prompt);
+  proc.stdin!.end();
+  const stdoutWeb = Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>;
+  const stderrWeb = Readable.toWeb(proc.stderr!) as ReadableStream<Uint8Array>;
+  const procExited: Promise<number> = new Promise((resolve) => {
+    proc.on('close', (code) => resolve(code ?? 1));
+    proc.on('error', () => resolve(1));
   });
 
   // Race against timeout
@@ -197,13 +213,14 @@ export async function runSkillTest(options: {
 
   const timeoutId = setTimeout(() => {
     timedOut = true;
-    proc.kill();
-    // proc.kill() signals claude itself (direct spawn, no shell wrapper),
-    // but tool subprocesses claude spawned can survive as orphans that
-    // inherited our stdout/stderr pipes, so without cancel() the read loop
-    // below blocks until the orphan finally exits (observed: a 600s timeout
-    // stretching past 1400s and tripping bun's per-test timeout instead of
-    // returning a result).
+    // Group SIGKILL (mirrors runShardChild): claude AND every tool
+    // subprocess it spawned die together — a bare proc.kill() left orphans
+    // that inherited our stdout/stderr pipes and kept the API burning
+    // (observed: a 600s timeout stretching past 1400s while an orphan held
+    // the pipes open).
+    killProcessGroup(proc, 'SIGKILL');
+    // Belt and braces with the group kill: even if an orphan survives (EPERM
+    // fallback path), cancel() unblocks the read loop below.
     reader.cancel().catch(() => { /* stream already closed */ });
   }, timeout);
 
@@ -214,9 +231,9 @@ export async function runSkillTest(options: {
   let firstResponseMs = 0;
   let lastToolTime = 0;
   let maxInterTurnMs = 0;
-  const stderrPromise = new Response(proc.stderr).text();
+  const stderrPromise = new Response(stderrWeb).text();
 
-  const reader = proc.stdout.getReader();
+  const reader = stdoutWeb.getReader();
   const decoder = new TextDecoder();
   let buf = '';
 
@@ -304,12 +321,12 @@ export async function runSkillTest(options: {
   stderr = await Promise.race([
     stderrPromise,
     (async () => {
-      await proc.exited;
+      await procExited;
       await new Promise((r) => setTimeout(r, 5_000));
       return '';
     })(),
   ]);
-  const exitCode = await proc.exited;
+  const exitCode = await procExited;
   clearTimeout(timeoutId);
 
   if (timedOut) {
