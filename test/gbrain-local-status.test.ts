@@ -210,6 +210,7 @@ describe("lib/gbrain-local-status — status classification", () => {
     );
 
     expect(source).not.toContain('command -v gbrain');
+    // tripwire-exempt: string assertion on lib source text, not a call
     expect(source).toContain('execFileSync("gbrain", ["--version"]');
   });
 

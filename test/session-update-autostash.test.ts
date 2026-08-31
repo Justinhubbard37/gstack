@@ -15,7 +15,7 @@ const ROOT = path.resolve(import.meta.dir, '..');
 const SCRIPT = path.join(ROOT, 'bin', 'gstack-session-update');
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000 }).trim();
 }
 
 function makeFixture() {

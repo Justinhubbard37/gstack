@@ -25,7 +25,7 @@ import { join } from "path";
 import { execFileSync, spawnSync } from "child_process";
 
 const SCRIPT = join(import.meta.dir, "..", "bin", "gstack-gbrain-sync.ts");
-const BUN_BIN = execFileSync("sh", ["-c", "command -v bun"], { encoding: "utf-8" }).trim();
+const BUN_BIN = execFileSync("sh", ["-c", "command -v bun"], { encoding: "utf-8", timeout: 30_000 }).trim();
 
 interface FakeEnv {
   tmp: string;
