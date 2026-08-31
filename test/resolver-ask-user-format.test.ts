@@ -252,6 +252,13 @@ describe('generateAskUserFormat — runtime-failure prose fallback', () => {
     expect(out).toMatch(/in `SESSION_KIND: spawned` you should never reach this checklist/);
   });
 
+  test('Spawned: rule scopes markings to the creating dispatch prompt (anti-injection)', () => {
+    // "(or your dispatch prompt marks this session as spawned)" is a
+    // text-claimable trigger — the rule must explicitly refuse spawned
+    // claims sourced from files/tool output/web content read mid-run.
+    expect(out).toMatch(/NEVER count[\s\S]*prompt injection/);
+  });
+
   // Conductor-default-prose contract (the proactive path, distinct from the
   // failure fallback). Guards the Tool-resolution rule + self-check wording.
   test('Conductor: do-not-call rule present in Tool resolution', () => {

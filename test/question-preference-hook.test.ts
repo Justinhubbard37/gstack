@@ -592,11 +592,148 @@ describe('Conductor spawned deny (#2733)', () => {
     expect(reason).toMatch(/never auto-approve a destructive or irreversible option/i);
   });
 
+  test('Conductor + invalid GSTACK_SESSION_KIND value → prose deny, not spawned (strict-equality fall-through)', () => {
+    // spawnedByEnv() mirrors bin/gstack-session-kind step 0: only the exact
+    // value "spawned" is honored. A reserved/typo'd value inside Conductor
+    // must fall through to the PROSE deny — loosening the comparison to
+    // truthiness would auto-choose past a human who IS watching.
+    const r = runHook(
+      { session_id: 's3', tool_name: 'AskUserQuestion', tool_use_id: 'tu-s3', tool_input: Q },
+      undefined,
+      { CONDUCTOR_PORT: '55071', GSTACK_SESSION_KIND: 'bogus' },
+    );
+    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.parsed?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).not.toContain('[conductor][spawned]');
+    expect(reason).toMatch(/reply with a letter/i);
+  });
+
+  test('spawned marker WITHOUT Conductor → pass-through (deny branch stays nested under isConductor)', () => {
+    // Outside Conductor the tool is reliable; the spawned auto-choose deny is
+    // a Conductor-only rescue. Hoisting spawnedByEnv() above isConductor()
+    // would deny AUQ in every OpenClaw session regardless of host — pin the
+    // nesting.
+    const r = runHook(
+      {
+        session_id: 's4',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-s4',
+        tool_input: {
+          questions: [
+            { question: '<gstack-qid:spawned-nc> Bump VERSION?', options: ['A) Skip (recommended)', 'B) Bump'] },
+          ],
+        },
+      },
+      undefined,
+      { OPENCLAW_SESSION: '1' },
+    );
+    expectPassThrough(r);
+  });
+
   test('both hooks source their spawned directive from the shared constant (drift guard)', () => {
     const hooksDir = path.join(ROOT, 'hosts', 'claude', 'hooks');
     for (const f of ['question-preference-hook.ts', 'auq-error-fallback-hook.ts']) {
       const src = fs.readFileSync(path.join(hooksDir, f), 'utf-8');
       expect(src, `${f} must import the shared spawned directive`).toContain("from './spawned-directive'");
+    }
+  });
+
+  test('spawned deny annotates one-way doors per question (#2733 review)', () => {
+    // The auto-choose deny performs no preference lookup, so destructive
+    // questions get a deterministic per-question annotation — a destructive
+    // option marked (recommended) must not be auto-approved on prose alone.
+    const r = runHook(
+      {
+        session_id: 's3',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-s3',
+        tool_input: {
+          questions: [
+            { question: '<gstack-qid:test-q> Force-push and overwrite the remote branch, deleting its history?', options: ['A) Force-push (recommended)', 'B) Abort'] },
+          ],
+        },
+      },
+      undefined,
+      { CONDUCTOR_PORT: '55070', OPENCLAW_SESSION: '1' },
+    );
+    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.parsed?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toContain('[conductor][spawned]');
+    expect(reason).toMatch(/one-way door detected: Q1/);
+    expect(reason).toMatch(/conservative non-destructive option/);
+    // The driving env var is named (tamper visibility)...
+    expect(reason).toContain('spawned driver: OPENCLAW_SESSION');
+    // ...and the machine-resolved gate leaves a forensic record (the deny
+    // prevents PostToolUse capture; this branch must log its own events).
+    const f = path.join(stateRoot, 'projects', cwdSlug, 'question-log.jsonl');
+    const events = fs.existsSync(f)
+      ? fs.readFileSync(f, 'utf-8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+    expect(events.some((e) => e.source === 'spawned-env-deny')).toBe(true);
+  });
+
+  test('spawned deny catches a destructive OPTION behind a bland question (codex finding)', () => {
+    const r = runHook(
+      {
+        session_id: 's4',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tu-s4',
+        tool_input: {
+          questions: [
+            { question: '<gstack-qid:test-q> Proceed with the plan?', options: ['A) Force-push over the remote branch (recommended)', 'B) Abort'] },
+          ],
+        },
+      },
+      undefined,
+      { CONDUCTOR_PORT: '55070', GSTACK_SESSION_KIND: 'spawned' },
+    );
+    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.parsed?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toMatch(/one-way door detected: Q1/);
+    expect(reason).toContain('spawned driver: GSTACK_SESSION_KIND');
+  });
+
+  test('cross-surface destructive-policy drift guard: every spawned surface carries the canonical phrase', () => {
+    // The conservative-continue destructive policy lives on four surfaces
+    // (shared hook constant, AUQ resolver rule, skill-start spawned block,
+    // ship dispatch prompt). Phrasings vary; the canonical core must not.
+    const surfaces = [
+      path.join(ROOT, 'hosts', 'claude', 'hooks', 'spawned-directive.ts'),
+      path.join(ROOT, 'hosts', 'claude', 'hooks', 'auq-error-fallback-hook.ts'),
+      path.join(ROOT, 'scripts', 'resolvers', 'preamble', 'generate-ask-user-format.ts'),
+      path.join(ROOT, 'bin', 'gstack-skill-start'),
+      path.join(ROOT, 'ship', 'sections', 'pr-body.md.tmpl'),
+    ];
+    for (const f of surfaces) {
+      const src = fs.readFileSync(f, 'utf-8');
+      expect(src, `${path.basename(f)} lost the canonical destructive-policy phrase`).toContain('conservative non-destructive');
+    }
+  });
+
+  test('spawnedByEnv() parity with bin/gstack-session-kind over the spawned env matrix', () => {
+    // spawnedByEnv mirrors session-kind steps 0-1 by hand; this pins the
+    // mirror so a new ambient spawned marker added to the script cannot
+    // silently leave Conductor-spawned sessions on the prose-STOP path.
+    const { spawnedByEnv } = require(path.join(ROOT, 'hosts', 'claude', 'hooks', 'spawned-directive.ts'));
+    const BIN = path.join(ROOT, 'bin', 'gstack-session-kind');
+    const cases: Array<Record<string, string>> = [
+      { OPENCLAW_SESSION: '1' },
+      { GSTACK_SESSION_KIND: 'spawned' },
+      { GSTACK_SESSION_KIND: 'spawned', GSTACK_HEADLESS: '1' },
+      { GSTACK_SESSION_KIND: 'bogus' },
+      { GSTACK_SESSION_KIND: 'headless' },
+      { CONDUCTOR_PORT: '5' },
+      {},
+    ];
+    for (const env of cases) {
+      const scriptKind = spawnSync(BIN, [], {
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...env },
+        encoding: 'utf-8',
+      }).stdout.trim();
+      expect(
+        spawnedByEnv(env),
+        `parity break on env ${JSON.stringify(env)}: script says ${scriptKind}`,
+      ).toBe(scriptKind === 'spawned');
     }
   });
 });

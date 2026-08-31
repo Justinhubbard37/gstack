@@ -81,7 +81,12 @@ describe('/ship Step 18 dispatches /document-release (carve visibility)', () => 
       expect(content).toContain('"decisions"');
       const docHeading = content.indexOf('\n## Documentation\n');
       expect(docHeading, 'PR-body template must carry the ## Documentation heading').toBeGreaterThan(0);
-      const docSection = content.slice(docHeading, content.indexOf('\n## Test plan\n'));
+      // End bound searched FROM docHeading and asserted found — otherwise a
+      // removed/reordered '## Test plan' heading degrades this guard to a
+      // vacuous empty-slice check instead of failing loudly (#2733 review).
+      const docEnd = content.indexOf('\n## Test plan\n', docHeading);
+      expect(docEnd, '## Test plan heading must follow ## Documentation').toBeGreaterThan(docHeading);
+      const docSection = content.slice(docHeading, docEnd);
       expect(docSection, 'decisions must never leak into the PR-body Documentation embed').not.toContain('decisions');
     }
   });

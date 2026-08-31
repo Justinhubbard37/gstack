@@ -77,9 +77,15 @@ function sliceSection(content: string, startMarker: string, what: string): strin
 
 /** Last line of the final message that parses as a JSON object (the model may
  *  close a code fence after the contract line — scan upward past that). */
+/** The parent's contract is "parse the LAST line" — but the parent is a
+ *  prose-instructed model, not a strict parser, and tolerates a trailing
+ *  code-fence close after the JSON. Mirror that: scan upward past at most a
+ *  fence line + blank noise, never deeper. */
+const TRAILING_FENCE_TOLERANCE_LINES = 3;
+
 function lastJsonLine(output: string): Record<string, unknown> | null {
   const lines = output.trim().split('\n').map((l) => l.trim()).filter(Boolean);
-  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - TRAILING_FENCE_TOLERANCE_LINES); i--) {
     const l = lines[i].replace(/^`+|`+$/g, '');
     if (!l.startsWith('{')) continue;
     try { return JSON.parse(l); } catch { return null; }
@@ -154,7 +160,16 @@ describeE2E('Spawned docsync JSON contract E2E (gate)', () => {
       // $HOME/.claude/skills/gstack/bin/gstack-skill-start here ($0-relative
       // siblings like gstack-session-kind resolve too; the rest are
       // `|| true`-guarded and degrade silently).
-      fs.cpSync(path.join(ROOT, 'bin'), path.join(plantedSkills, 'bin'), { recursive: true });
+      // filter: skip compiled binaries (a post-./setup bin/ carries the ~100MB
+      // gstack-global-discover ELF; the scripts the preamble resolves are <2MB
+      // total — copying the ELF would burn tmp disk + beforeAll time for nothing).
+      fs.cpSync(path.join(ROOT, 'bin'), path.join(plantedSkills, 'bin'), {
+        recursive: true,
+        filter: (src) => {
+          try { return !(fs.statSync(src).isFile() && fs.statSync(src).size > 5_000_000); }
+          catch { return true; }
+        },
+      });
 
       // Hermetic GSTACK_HOME — update_check: false keeps the preamble off the
       // network (same gate the unit tests use).
@@ -266,6 +281,12 @@ describeE2E('Spawned docsync JSON contract E2E (gate)', () => {
       const decisions = (contract as any).decisions;
       expect(Array.isArray(decisions)).toBe(true);
       expect(decisions.length, 'the fired VERSION gate must be recorded in decisions').toBeGreaterThanOrEqual(1);
+      // The recorded decision must be ABOUT the gate that fired, not an
+      // unrelated placeholder (codex finding: "any nonempty decision passes").
+      expect(
+        decisions.join(' '),
+        'decisions must reference the VERSION-bump gate that fired',
+      ).toMatch(/version|bump|skip/i);
       // ...and the gate resolved to its recommended option (C — Skip): the
       // subagent must NOT have bumped VERSION on its own.
       expect(version).toBe('0.1.0.0\n');

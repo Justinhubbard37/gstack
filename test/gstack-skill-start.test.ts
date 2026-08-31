@@ -218,11 +218,22 @@ describe('gstack-skill-start behavior', () => {
       );
       expect(ids).toEqual(['spawned-session']);
       // Script-side ack-at-emit markers stay UNWRITTEN, so the one-time
-      // prompts fire intact on the next human session.
+      // prompts fire intact on the next human session. (.activated and
+      // .first-loop-tip-shown are the two the SCRIPT writes; the model-run
+      // touch targets are covered via output absence below — asserting their
+      // file non-existence would be vacuous in a script-only run.)
       expect(fs.existsSync(path.join(freshGh, '.activated'))).toBe(false);
       expect(fs.existsSync(path.join(freshGh, '.first-loop-tip-shown'))).toBe(false);
-      expect(fs.existsSync(path.join(freshGh, '.completeness-intro-seen'))).toBe(false);
-      expect(fs.existsSync(path.join(freshGh, '.telemetry-prompted'))).toBe(false);
+      expect(out).not.toContain('.completeness-intro-seen');
+      expect(out).not.toContain('.telemetry-prompted');
+      // Spawned skips the first-task probe entirely (dead work: its only
+      // consumers are inside the onboarding guard) and the update-check
+      // (network-bound; would consume the one-shot just-upgraded marker).
+      expect(out).toMatch(/^FIRST_TASK: $/m);
+      // Env-driven override is surfaced loudly, naming the driver (tamper
+      // visibility — a settings env block flipping a human session must be
+      // legible in the transcript).
+      expect(out).toMatch(/^SPAWNED_OVERRIDE: env \(GSTACK_SESSION_KIND\)$/m);
     } finally {
       fs.rmSync(freshGh, { recursive: true, force: true });
     }
@@ -247,6 +258,10 @@ describe('gstack-skill-start behavior', () => {
       );
       expect(ids).toEqual(['spawned-session']);
       expect(fs.existsSync(path.join(freshGh, '.activated'))).toBe(false);
+      // OPENCLAW-driven spawned gets the same tamper-visibility line — this
+      // PR amplifies OPENCLAW_SESSION's power (deterministic hook deny,
+      // Conductor suppression), so it needs the same transcript marker.
+      expect(out).toMatch(/^SPAWNED_OVERRIDE: env \(OPENCLAW_SESSION\)$/m);
     } finally {
       fs.rmSync(freshGh, { recursive: true, force: true });
     }

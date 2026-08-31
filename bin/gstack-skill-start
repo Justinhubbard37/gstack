@@ -61,8 +61,19 @@ _sanitize() { sed -e 's/GSTACK_INSTRUCTION/GSTACK-INSTRUCTION-(stripped)/g' -e '
 
 echo "SKILL_START_PROTO: 1"
 
-_UPD=$("$_BIN/gstack-update-check" 2>/dev/null || true)
-[ -n "$_UPD" ] && printf '%s\n' "$_UPD" | _sanitize || true
+# Session kind resolves FIRST (env-only checks, cheap). Spawned sessions skip
+# the network-bound update-check: its only consumer (the upgrade-flow block)
+# is emission-gated on kind != spawned below, so the work would be discarded —
+# and running it would consume the one-shot just-upgraded marker meant for the
+# next human session (#2733 review).
+_SESSION_KIND=$("$_BIN/gstack-session-kind" 2>/dev/null || echo "interactive")
+case "$_SESSION_KIND" in spawned|headless|interactive) ;; *) _SESSION_KIND="interactive" ;; esac
+
+_UPD=""
+if [ "$_SESSION_KIND" != "spawned" ]; then
+  _UPD=$("$_BIN/gstack-update-check" 2>/dev/null || true)
+  [ -n "$_UPD" ] && printf '%s\n' "$_UPD" | _sanitize || true
+fi
 
 mkdir -p "$_GH/sessions" 2>/dev/null || true
 touch "$_GH/sessions/$PARENT_PID" 2>/dev/null || true
@@ -83,9 +94,20 @@ REPO_MODE=""
 eval "$("$_BIN/gstack-repo-mode" 2>/dev/null)" 2>/dev/null || true
 REPO_MODE=${REPO_MODE:-unknown}
 echo "REPO_MODE: $REPO_MODE"
-_SESSION_KIND=$("$_BIN/gstack-session-kind" 2>/dev/null || echo "interactive")
-case "$_SESSION_KIND" in spawned|headless|interactive) ;; *) _SESSION_KIND="interactive" ;; esac
 echo "SESSION_KIND: $_SESSION_KIND"
+# Tamper visibility (#2733 review): a repo-provided settings env block or a CI
+# wrapper could set GSTACK_SESSION_KIND or OPENCLAW_SESSION for a real human's
+# session, silently flipping every gate to auto-choose. Surface the env-driven
+# override loudly, naming the driver, so the transcript shows WHY this session
+# is spawned. Gated on the RESOLVED kind so a broken session-kind fallback
+# never prints a contradictory override line next to SESSION_KIND: interactive.
+if [ "$_SESSION_KIND" = "spawned" ]; then
+  if [ "${GSTACK_SESSION_KIND:-}" = "spawned" ]; then
+    echo "SPAWNED_OVERRIDE: env (GSTACK_SESSION_KIND)"
+  elif [ -n "${OPENCLAW_SESSION:-}" ]; then
+    echo "SPAWNED_OVERRIDE: env (OPENCLAW_SESSION)"
+  fi
+fi
 # Conductor host: AskUserQuestion is unreliable there (native disabled, MCP
 # variant flaky); skills render decisions as prose. Gated on !headless so an
 # eval/CI run INSIDE Conductor still BLOCKs rather than rendering prose to
@@ -99,9 +121,12 @@ _ACTIVATED=$([ -f "$_GH/.activated" ] && echo "yes" || echo "no")
 _FIRST_LOOP_SHOWN=$([ -f "$_GH/.first-loop-tip-shown" ] && echo "yes" || echo "no")
 echo "ACTIVATED: $_ACTIVATED"
 echo "FIRST_LOOP_SHOWN: $_FIRST_LOOP_SHOWN"
-# First-run project detection: only on the first-ever skill run (off the hot path after).
+# First-run project detection: only on the first-ever skill run (off the hot
+# path after). Spawned excluded like headless (#2733 review): spawned sessions
+# never write .activated, so without the exclusion the ~17-subprocess probe
+# would re-run on EVERY spawned start while its only consumers stay suppressed.
 _FIRST_TASK=""
-if [ "$_ACTIVATED" = "no" ] && [ "$_SESSION_KIND" != "headless" ]; then
+if [ "$_ACTIVATED" = "no" ] && [ "$_SESSION_KIND" != "headless" ] && [ "$_SESSION_KIND" != "spawned" ]; then
   _FIRST_TASK=$("$_BIN/gstack-first-task-detect" 2>/dev/null || true)
 fi
 printf 'FIRST_TASK: %s\n' "$_FIRST_TASK" | _sanitize

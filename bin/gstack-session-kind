@@ -29,14 +29,7 @@
 # signals that actually discriminate are the host/orchestrator/CI env markers below.
 set -euo pipefail
 
-# 0. Explicit spawned marker — set per-command by a dispatching skill (e.g.
-#    /ship Step 18 prefixes the document-release subagent's gstack-skill-start
-#    with GSTACK_SESSION_KIND=spawned; #2733: Claude Code subagents inherit
-#    the parent env byte-for-byte, so ambient markers misclassify them as the
-#    parent's kind). Only "spawned" is honored: headless already has
-#    GSTACK_HEADLESS, and letting an env var force "interactive" over CI
-#    markers would be a misclassification footgun. Other values are reserved
-#    and ignored (fall through) — same contract as empty GSTACK_HEADLESS.
+# 0. Explicit spawned marker — full rationale and contract in the header above.
 if [ "${GSTACK_SESSION_KIND:-}" = "spawned" ]; then
   echo "spawned"
   exit 0

@@ -152,6 +152,14 @@ processes inherit the harness env, so a per-command prefix never reaches
 PreToolUse/PostToolUse hooks — the hook texts carry a spawned escape sentence
 for that topology (`hosts/claude/hooks/spawned-directive.ts`).
 
+**Tamper visibility.** Any mechanism that injects session-wide env (a cloned
+repo's `.claude/settings.json` env block, direnv, a CI wrapper) could set
+`GSTACK_SESSION_KIND=spawned` for a real human's session and silently flip
+its confirmation gates to auto-choose. When the env override drives the
+classification, the preamble emits a loud `SPAWNED_OVERRIDE: env` status line
+so the transcript shows WHY the session is spawned — audit
+`.claude/settings.json` env blocks in untrusted repos (/cso covers this).
+
 ## Installation
 
 For OpenClaw users: tell your OpenClaw agent "install gstack for openclaw."

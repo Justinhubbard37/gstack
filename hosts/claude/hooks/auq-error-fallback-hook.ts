@@ -147,15 +147,26 @@ export function directiveFor(kind: 'spawned' | 'headless' | 'interactive'): stri
     'Per the AskUserQuestion failure-fallback rule: ';
   switch (kind) {
     case 'spawned':
+      // Self-contained carve-out (#2733 review): the "Spawned session block"
+      // exists in context only when a gstack preamble ran; an AUQ error
+      // outside a skill must still carry the destructive exception here.
       return (
         lead +
         'SESSION_KIND=spawned — auto-choose the recommended option per the Spawned session block. ' +
-        'Do not emit prose, do not BLOCK.'
+        'Do not emit prose, do not BLOCK. Exception: never auto-choose a destructive or ' +
+        'irreversible option — take the conservative non-destructive choice (skip/defer), ' +
+        'record it, and continue.'
       );
     case 'headless':
+      // #2733 review (multi-specialist): a spawned-marked subagent under a
+      // HEADLESS-classified parent env (CI/eval-hosted /ship) hits this branch
+      // — the shell-out sees the harness env, never the per-command marker.
+      // The self-gating escape sentence keeps the JSON contract alive there;
+      // plain headless sessions read its condition as false and still BLOCK.
       return (
         lead +
-        'SESSION_KIND=headless — report `BLOCKED — AskUserQuestion unavailable` and stop; no human can answer.'
+        'SESSION_KIND=headless — report `BLOCKED — AskUserQuestion unavailable` and stop; no human can answer. ' +
+        SPAWNED_ESCAPE_SENTENCE
       );
     case 'interactive':
     default:
