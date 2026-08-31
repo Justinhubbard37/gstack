@@ -499,6 +499,22 @@ export async function runPaidShard(
   if (!env.GSTACK_CLAUDE_CLI_VERSION) {
     env.GSTACK_CLAUDE_CLI_VERSION = getClaudeCliVersion();
   }
+  // Per-shard temp + Chromium-profile isolation — the free runner treats
+  // this as mandatory (test-free-shards.ts: two concurrent shards on one
+  // profile dir kill each other's browser; shared tmp cross-contaminates),
+  // and the paid lane had NONE of it. Doubly load-bearing here: when a
+  // shard hits its 30-min wall the group-SIGKILL means per-test afterAll
+  // cleanup never runs — the rmSync backstop below is the only thing
+  // stopping wedged runs from accumulating full git-repo workspaces in the
+  // shared tmpdir forever. Prerequisite for raising EVALS_JOBS (more
+  // concurrency on shared state amplifies exactly the opus-47 race class).
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-paid-shard-'));
+  const childTmp = path.join(stateDir, 'tmp');
+  fs.mkdirSync(childTmp);
+  env.TMPDIR = childTmp;
+  env.TEMP = childTmp;
+  env.TMP = childTmp;
+  env.CHROMIUM_PROFILE = path.join(stateDir, 'chromium-profile');
 
   const startedAt = Date.now();
   log(`${label} START ${files.join(' ')} (timeout ${Math.round(timeoutMs / 1000)}s)`);
@@ -553,6 +569,12 @@ export async function runPaidShard(
   } finally {
     // Close the spool even when the spawn itself failed.
     await new Promise<void>((resolve) => logStream.end(() => resolve()));
+    try {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort: a locked file must not turn a real verdict into an
+      // exception (same posture as the free runner's cleanup).
+    }
   }
 
   const summary = classifier.end();
