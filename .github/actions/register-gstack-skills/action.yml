@@ -37,6 +37,13 @@ runs:
         # The gstack root stays a symlink — the preamble's runtime bash resolves
         # ~/.claude/skills/gstack/bin/* and ~/.claude/skills/gstack/<skill>/sections/*
         # through it, and bash follows cross-mount symlinks fine.
+        # `ln -snf` replaces a stale SYMLINK but hard-errors on a REAL
+        # directory under set -eu — clear a real-dir leftover first so the
+        # composite is rerun-safe (codex diff review). CI HOMEs are fresh;
+        # this only fires on a dirty rerun.
+        if [ -d "$SKILLS_DIR/gstack" ] && [ ! -L "$SKILLS_DIR/gstack" ]; then
+          rm -rf "${SKILLS_DIR:?}/gstack"
+        fi
         ln -snf "$REPO" "$SKILLS_DIR/gstack"
         for s in $SKILLS; do
           rm -rf "${SKILLS_DIR:?}/$s"

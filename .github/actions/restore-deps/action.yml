@@ -13,6 +13,11 @@ runs:
     - shell: bash
       run: |
         if [ -d /opt/node_modules_cache ] && diff -q /opt/node_modules_cache/.bun.lock bun.lock >/dev/null 2>&1; then
+          # rm first: `cp -r SRC node_modules` with an existing node_modules
+          # NESTS the copy (node_modules/node_modules_cache) and leaves stale
+          # deps active. CI workspaces are fresh today, but a reusable
+          # composite must survive a rerun/dirty workspace (codex diff review).
+          rm -rf node_modules
           cp -r /opt/node_modules_cache node_modules
         else
           bun install
