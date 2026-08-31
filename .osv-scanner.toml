@@ -31,10 +31,10 @@ ignoreUntil = 2026-11-30T00:00:00Z
 [[IgnoredVulns]]
 id = "GHSA-5p2g-fcmc-qvqq"
 # image-size 1.2.1 via html-to-docx@1.8.0 (pins ^1.0.0). No fixed release
-# exists (FIXED VERSION = --). Exposure: image-size only parses images the
+# exists (FIXED VERSION = --; tracking: #2753). Exposure: image-size only parses images the
 # user themselves embeds into their own generated .docx — no untrusted input
 # path. Upgrade trigger: an image-size release with a fix, or html-to-docx
-# moving off it. Tracking issue filed at ship (v1.78.0.0 wave).
+# moving off it. Tracking: #2753.
 reason = "No fixed version exists; local-only input path (user's own docx images). Re-evaluate on expiry."
 ignoreUntil = 2026-11-30T00:00:00Z
 
@@ -51,6 +51,6 @@ id = "GHSA-p7fg-763f-g4gf"
 # pinned the whole harness after repeated CLI-drift breakage) and declares
 # ^0.81.0 (0.x caret = 0.81.x only), so the 0.91.1 fix cannot be reached
 # without violating the harness pin. 4.8 MEDIUM. Upgrade trigger: the next
-# deliberate claude-agent-sdk bump. Tracking issue filed at ship (v1.78.0.0).
+# deliberate claude-agent-sdk bump. Tracking: #2754.
 reason = "Fix requires breaking the deliberate eval-harness agent-sdk pin; MEDIUM severity accepted until the next harness bump."
 ignoreUntil = 2026-11-30T00:00:00Z
