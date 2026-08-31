@@ -183,7 +183,7 @@ export async function runCodexSkill(opts: {
   const name = skillName || path.basename(skillDir) || 'gstack';
 
   // Check if codex binary exists
-  const whichResult = Bun.spawnSync(['which', 'codex']);
+  const whichResult = Bun.spawnSync(['which', 'codex'], { timeout: 30_000 });
   if (whichResult.exitCode !== 0) {
     return {
       output: 'SKIP: codex binary not found',

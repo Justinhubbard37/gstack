@@ -153,9 +153,9 @@ describe("session-start indexing offer (suggest)", () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "ci-home-"));
     repo = fs.mkdtempSync(path.join(os.tmpdir(), "ci-repo-"));
     env = { ...process.env, GSTACK_HOME: home };
-    Bun.spawnSync(["git", "init", "-q", repo]);
+    Bun.spawnSync(["git", "init", "-q", repo], { timeout: 30_000 });
     for (const name of ["a.ts", "b.ts", "c.ts"]) fs.writeFileSync(path.join(repo, name), "x\n");
-    Bun.spawnSync(["git", "-C", repo, "add", "-A"]);
+    Bun.spawnSync(["git", "-C", repo, "add", "-A"], { timeout: 30_000 });
   });
   afterEach(() => {
     fs.rmSync(home, { recursive: true, force: true });
@@ -971,9 +971,9 @@ exit 1
 
   function makeRepoWithFiles(count: number): string {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "ci-cli-suggest-"));
-    Bun.spawnSync(["git", "init", "-q", repo]);
+    Bun.spawnSync(["git", "init", "-q", repo], { timeout: 30_000 });
     for (let i = 0; i < count; i++) fs.writeFileSync(path.join(repo, `f${i}.ts`), "x\n");
-    Bun.spawnSync(["git", "-C", repo, "add", "-A"]);
+    Bun.spawnSync(["git", "-C", repo, "add", "-A"], { timeout: 30_000 });
     return repo;
   }
 

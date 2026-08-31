@@ -111,7 +111,7 @@ export async function runGeminiSkill(opts: {
   const startTime = Date.now();
 
   // Check if gemini binary exists
-  const whichResult = Bun.spawnSync(['which', 'gemini']);
+  const whichResult = Bun.spawnSync(['which', 'gemini'], { timeout: 30_000 });
   if (whichResult.exitCode !== 0) {
     return {
       output: 'SKIP: gemini binary not found',

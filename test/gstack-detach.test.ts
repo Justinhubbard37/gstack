@@ -15,13 +15,13 @@ const ROOT = path.resolve(import.meta.dir, '..');
 const DETACH = path.join(ROOT, 'bin', 'gstack-detach');
 
 function ownPgid(): string {
-  return (spawnSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf-8' }).stdout || '').trim();
+  return (spawnSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf-8', timeout: 30_000 }).stdout || '').trim();
 }
 function waitFor(pred: () => boolean, ms: number): boolean {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (pred()) return true;
-    spawnSync('sleep', ['0.2']);
+    spawnSync('sleep', ['0.2'], { timeout: 30_000 });
   }
   return pred();
 }
@@ -90,7 +90,7 @@ describe('gstack-detach', () => {
   }, 20000);
 
   test('rejects missing command (exit 2)', () => {
-    const r = spawnSync(DETACH, ['--label', 'x'], { encoding: 'utf-8' });
+    const r = spawnSync(DETACH, ['--label', 'x'], { encoding: 'utf-8', timeout: 30_000 });
     expect(r.status).toBe(2);
   });
 });

@@ -538,6 +538,7 @@ describe("lib/gbrain-local-status — thin-client (#2051)", () => {
         GSTACK_HOME: env.gstackHome,
         GSTACK_DETECT_NO_CACHE: "1",
       },
+      timeout: 30_000,
     });
     expect(r.status).toBe(0);
   });
@@ -554,6 +555,7 @@ describe("lib/gbrain-local-status — thin-client (#2051)", () => {
         GSTACK_HOME: env.gstackHome,
         GSTACK_DETECT_NO_CACHE: "1",
       },
+      timeout: 30_000,
     });
     expect(r.status).toBe(1);
   });
@@ -790,6 +792,7 @@ describe("lib/gbrain-local-status — bearer-token thin-client (#2520)", () => {
         GSTACK_HOME: env.gstackHome,
         GSTACK_DETECT_NO_CACHE: "1",
       },
+      timeout: 30_000,
     });
     expect(r.status).toBe(0);
   });

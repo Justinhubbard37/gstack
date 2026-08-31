@@ -287,7 +287,7 @@ export function verboseSkill(gitRef = 'ab66193e^'): string {
 }
 
 function execGit(args: string[]): string {
-  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
   return r.stdout;
 }

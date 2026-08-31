@@ -29,7 +29,7 @@ const ROOT = path.resolve(import.meta.dir, '..');
 
 const GEMINI_AVAILABLE = (() => {
   try {
-    const result = Bun.spawnSync(['which', 'gemini']);
+    const result = Bun.spawnSync(['which', 'gemini'], { timeout: 30_000 });
     return result.exitCode === 0;
   } catch { return false; }
 })();

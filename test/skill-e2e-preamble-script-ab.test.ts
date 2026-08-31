@@ -45,6 +45,7 @@ function inlineSkill(): string {
     cwd: ROOT,
     encoding: 'utf-8',
     maxBuffer: 8 * 1024 * 1024,
+    timeout: 30_000,
   });
 }
 
