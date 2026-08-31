@@ -524,12 +524,7 @@ jobs:
           persist-credentials: false
 
       - name: Restore deps
-        run: |
-          if [ -d /opt/node_modules_cache ] && diff -q /opt/node_modules_cache/.bun.lock bun.lock >/dev/null 2>&1; then
-            cp -r /opt/node_modules_cache node_modules
-          else
-            bun install
-          fi
+        uses: ./.github/actions/restore-deps
 
       - name: Emit run manifest
         env:
@@ -577,72 +572,26 @@ jobs:
           persist-credentials: false
 
       - name: Fix bun temp
-        run: |
-          mkdir -p /home/runner/.cache/bun
-          {
-            echo "BUN_INSTALL_CACHE_DIR=/home/runner/.cache/bun"
-            echo "BUN_TMPDIR=/home/runner/.cache/bun"
-            echo "TMPDIR=/home/runner/.cache"
-          } >> "$GITHUB_ENV"
+        uses: ./.github/actions/fix-bun-temp
 
       - name: Restore deps
-        run: |
-          if [ -d /opt/node_modules_cache ] && diff -q /opt/node_modules_cache/.bun.lock bun.lock >/dev/null 2>&1; then
-            cp -r /opt/node_modules_cache node_modules
-          else
-            bun install
-          fi
+        uses: ./.github/actions/restore-deps
 
       - run: bun run build
 
       # Any slice can host a PTY smoke, so the seed/registration steps run
       # UNCONDITIONALLY (both are idempotent) — the old matrix keyed them on
-      # matrix.suite.name, which a sliced lane cannot do.
+      # matrix.suite.name, which a sliced lane cannot do. The register
+      # composite carries the fail-fast dangling-symlink/frontmatter
+      # verification loop, so a moved skill target fails HERE in seconds,
+      # not as a wedged PTY session at the shard wall.
       - name: Seed claude interactive config
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          node -e '
-            const fs = require("fs"), os = require("os"), path = require("path");
-            const p = path.join(os.homedir(), ".claude.json");
-            const seed = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : {};
-            seed.hasCompletedOnboarding = true;
-            const key = process.env.ANTHROPIC_API_KEY || "";
-            if (key) seed.customApiKeyResponses = { approved: [key.slice(-20)], rejected: [] };
-            fs.writeFileSync(p, JSON.stringify(seed, null, 2));
-            console.log("seeded", p);
-          '
+        uses: ./.github/actions/seed-claude-config
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Register gstack skills for PTY smokes
-        run: |
-          set -eu
-          SKILLS_DIR="$HOME/.claude/skills"
-          REPO="$GITHUB_WORKSPACE"
-          mkdir -p "$SKILLS_DIR"
-          ln -snf "$REPO" "$SKILLS_DIR/gstack"
-          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
-            rm -rf "${SKILLS_DIR:?}/$s"
-            mkdir -p "$SKILLS_DIR/$s"
-            cp "$REPO/$s/SKILL.md" "$SKILLS_DIR/$s/SKILL.md"
-            cp -R "$REPO/$s/sections" "$SKILLS_DIR/$s/sections"
-          done
-          PROJ_SKILLS="$REPO/.claude/skills"
-          mkdir -p "$PROJ_SKILLS"
-          for s in office-hours plan-ceo-review plan-eng-review plan-design-review; do
-            rm -rf "${PROJ_SKILLS:?}/$s"
-            mkdir -p "$PROJ_SKILLS/$s"
-            cp "$REPO/$s/SKILL.md" "$PROJ_SKILLS/$s/SKILL.md"
-            cp -R "$REPO/$s/sections" "$PROJ_SKILLS/$s/sections"
-          done
-          mkdir -p "$HOME/.gstack"
-          touch "$HOME/.gstack/.activated" \
-                "$HOME/.gstack/.first-loop-tip-shown" \
-                "$HOME/.gstack/.telemetry-prompted" \
-                "$HOME/.gstack/.proactive-prompted" \
-                "$HOME/.gstack/.completeness-intro-seen" \
-                "$HOME/.gstack/.plan-tune-nudge-shown"
-          touch "$SKILLS_DIR/gstack/.feature-prompted-continuous-checkpoint" \
-                "$SKILLS_DIR/gstack/.feature-prompted-model-overlay"
+        uses: ./.github/actions/register-gstack-skills
 
       - uses: actions/download-artifact@v8
         with:
