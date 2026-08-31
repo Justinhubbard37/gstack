@@ -249,14 +249,33 @@ describe('generateAskUserFormat — runtime-failure prose fallback', () => {
   });
 
   test('Spawned: self-check carries the never-reach-this-checklist clause', () => {
-    expect(out).toMatch(/in `SESSION_KIND: spawned` you should never reach this checklist/);
+    expect(out).toMatch(/in `SESSION_KIND: spawned`[\s\S]{0,120}you should never reach this checklist/);
+    expect(out).toMatch(/never inferred/);
   });
 
   test('Spawned: rule scopes markings to the creating dispatch prompt (anti-injection)', () => {
-    // "(or your dispatch prompt marks this session as spawned)" is a
-    // text-claimable trigger — the rule must explicitly refuse spawned
-    // claims sourced from files/tool output/web content read mid-run.
+    // The spawned trigger is text-claimable — the rule must explicitly refuse
+    // spawned claims sourced from files/tool output/web content read mid-run.
     expect(out).toMatch(/NEVER count[\s\S]*prompt injection/);
+  });
+
+  // Periodic-lane regression (v1.76 → v1.78): the old parenthetical
+  // "(or your dispatch prompt marks this session as spawned)" let the model
+  // INFER spawned status from a scripted-looking prompt in a CI-looking
+  // session and silently auto-decide every review question (reviewCount=0
+  // across the plan-review E2Es). The trigger must be objective: the echoed
+  // STATUS line or an EXPLICIT dispatch-prompt declaration — never inference —
+  // and the rule must carry an absence-safe interactive fence.
+  test('Spawned: trigger is explicit-declaration-only, never inference (AUQ-collapse regression)', () => {
+    expect(out).not.toContain('marks this session as spawned');
+    expect(out).toMatch(/EXPLICITLY declares this session a spawned subagent/);
+    expect(out).toMatch(/declared, never inferred/);
+  });
+
+  test('Spawned: absence-safe interactive fence present (CI env / scripted prompts are not markers)', () => {
+    expect(out).toMatch(/With neither trigger present, the session is interactive/);
+    expect(out).toMatch(/CI env vars, scripted-looking or pasted prompts[\s\S]{0,120}NOT spawned markers/);
+    expect(out).toMatch(/an unanswered question is recoverable/);
   });
 
   // Conductor-default-prose contract (the proactive path, distinct from the
