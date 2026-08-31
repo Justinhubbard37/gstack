@@ -379,6 +379,27 @@ describe('all-skipped pass census', () => {
     expect(isAllSkippedPass({ ...base, status: 'passed', executedTests: null, skippedTests: null } as ShardOutcome)).toBe(false);
   });
 
+  test('wiring: a real child’s skip recap flows through runPaidShard into skippedTests', async () => {
+    // End-to-end through the actual spawn/classify path (not hand-built
+    // outcomes): a fake shard child prints bun’s recap shape with every test
+    // skipped; the outcome must carry the parsed counts and formatSummary
+    // must label it. This is the seam the unit tests above skip.
+    const ALL_SKIP = 'console.log(" 0 pass"); console.log(" 3 skip"); console.log(" 0 fail"); console.log("Ran 3 tests across 1 files. [5ms]")';
+    const summary = await runPaidShards([['all-skip']], {
+      timeoutMs: 30_000,
+      jobs: 1,
+      commandFor: () => ({ command: process.execPath, args: ['-e', ALL_SKIP] }),
+      log: () => {},
+    });
+    const outcome = summary.outcomes[0];
+    expect(outcome.status).toBe('passed');
+    expect(outcome.executedTests).toBe(3);
+    expect(outcome.skippedTests).toBe(3);
+    expect(isAllSkippedPass(outcome)).toBe(true);
+    const lines = formatSummary(summary);
+    expect(lines.find((l) => l.includes('all-skip'))).toContain('all 3 tests SKIPPED');
+  }, 30_000);
+
   test('formatSummary labels an all-skipped pass and leaves real passes alone', () => {
     const lines = formatSummary(summarize([
       { ...base, status: 'passed', executedTests: 8, skippedTests: 8 } as ShardOutcome,
