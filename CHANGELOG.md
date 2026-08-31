@@ -7,7 +7,7 @@
 
 The test infrastructure got its overhaul, wave 1. The legacy 17-row eval matrix that ran serialized AHEAD of the sliced lane on every PR is deleted: one paid lane, its gate census derived from the runner itself, so a new gate test is in the census the moment its file lands. No hand-enumerated rows to drift, and the drift already tried, a new matrix row landed on main mid-branch and the merge resolved to the derived census that covers it by construction.
 
-The flake war moved from anecdotes to instruments. Every retried pass is now recorded where it cannot hide (bun's own output shows a retry as a clean pass, we probed it), the free lane retries a failing file once, loudly, and appends every flaky pass to a per-project ledger uploaded from CI on green runs. `bun run eval:flake-rank` ranks the series. And the wedge class that hit main, a hung child under a blocking spawnSync that no in-process timeout can interrupt, is extinct: 586 sync-spawn sites across 176 test files now carry timeouts, with a ratcheted tripwire that failed its first real offender the day a timeout-less spawn arrived from a merge.
+The flake war moved from anecdotes to instruments. Every retried pass is now recorded where it cannot hide (bun's own output shows a retry as a clean pass, we probed it), the free lane retries a failing file once, loudly, and appends every flaky pass to a per-project ledger uploaded from CI on green runs. `bun run eval:flake-rank` ranks the series. And the wedge class that hit main, a hung child under a blocking spawnSync that no in-process timeout can interrupt, is extinct: 499 timeout-less sync-spawn sites across 146 files (the branch tripwire's own count against main) swept to zero, with a ratcheted tripwire that failed its first real offender the day a timeout-less spawn arrived from a merge.
 
 ### The numbers that matter
 
@@ -17,8 +17,8 @@ Source: CI runs 33263204465 / 33262077256 (measured 2026-08-29), the repo census
 |---|---|---|---|
 | Paid lanes per PR | 2 (serialized) | 1 | eval wall 35.5 → ~13 min (target) |
 | Measured duplicate spend per PR | ~$20.94 | $0 | matrix deleted |
-| Gate census keys | 86 (6 phantoms) | 78, all provably alive | reverse invariant enforces |
-| Sync spawns that can wedge a shard | 586 unbounded | 0 (8 reasoned exemptions) | tripwire-ratcheted |
+| Gate census keys | 86 (6 phantoms) | 77, all provably alive | reverse invariant enforces |
+| Sync spawns that can wedge a shard | 499 unbounded | 0 (8 reasoned exemptions) | tripwire-ratcheted |
 | Local gate worst case | ~6.5 h (4×4 jobs) | ~3.3 h (8×2) | isolation landed first |
 | Retried-pass visibility | invisible | recorded + ranked | `eval:flake-rank` |
 
