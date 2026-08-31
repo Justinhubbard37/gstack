@@ -55,6 +55,14 @@ export interface SkillTestResult {
   maxInterTurnMs: number;
 }
 
+/** Local default startup grace: 90s covers observed API queue latency
+ *  (60-90s receipts) without letting a dead API burn a 600s budget. */
+export const STARTUP_GRACE_MS = 90_000;
+/** CI floor (TODOS-filed): shared runners queue harder; killing startup
+ *  before 300s in CI converts ordinary queueing into false failures.
+ *  Pinned by test/session-runner-startup-grace.test.ts. */
+export const STARTUP_GRACE_CI_FLOOR_MS = 300_000;
+
 const BROWSE_ERROR_PATTERNS = [
   /Unknown command: \w+/,
   /Unknown snapshot flag: .+/,
@@ -134,6 +142,15 @@ export async function runSkillTest(options: {
    *  per-test GSTACK_HOME overrides so the test doesn't have to spell out
    *  env setup in the prompt itself. */
   env?: Record<string, string>;
+  /** Startup-phase deadline: if NO NDJSON byte arrives within this window,
+   *  the run is killed EARLY with exitReason 'timeout_startup' instead of
+   *  burning the whole work budget waiting on an API that is not answering
+   *  (the recurring '0 turns / $0.00' class — four budget-bump receipts).
+   *  Defaults to min(STARTUP_GRACE_MS, timeout); the CI floor is higher
+   *  because CI queueing is real. Total wall stays <= timeout either way —
+   *  bun-level tier budgets are sized to the runner timeout with no margin,
+   *  so this phase split must never extend the envelope. */
+  startupGraceMs?: number;
 }): Promise<SkillTestResult> {
   const {
     prompt,
@@ -145,6 +162,10 @@ export async function runSkillTest(options: {
     runId,
     env: extraEnv,
   } = options;
+  const startupGraceMs = Math.min(
+    options.startupGraceMs ?? (process.env.CI ? STARTUP_GRACE_CI_FLOOR_MS : STARTUP_GRACE_MS),
+    timeout,
+  );
   const model = options.model ?? process.env.EVALS_MODEL ?? 'claude-sonnet-4-6';
 
   const startTime = Date.now();
@@ -206,13 +227,21 @@ export async function runSkillTest(options: {
     proc.on('error', () => resolve(1));
   });
 
-  // Race against timeout
+  // Two-phase timeout. Phase 1 (startup): no NDJSON byte yet — a shorter
+  // deadline kills a non-answering API run EARLY and names it, instead of
+  // the old single timer burning the full work budget to produce an opaque
+  // '0 turns / $0.00' failure. Phase 2 (work): armed by the read loop when
+  // the FIRST byte arrives, for the REMAINING budget — total wall is always
+  // <= timeout (tier envelopes are margin-free by convention).
   let stderr = '';
   let exitReason = 'unknown';
   let timedOut = false;
+  let timedOutInStartup = false;
+  let phaseTimer: ReturnType<typeof setTimeout>;
 
-  const timeoutId = setTimeout(() => {
+  const killRun = (startupPhase: boolean): void => {
     timedOut = true;
+    timedOutInStartup = startupPhase;
     // Group SIGKILL (mirrors runShardChild): claude AND every tool
     // subprocess it spawned die together — a bare proc.kill() left orphans
     // that inherited our stdout/stderr pipes and kept the API burning
@@ -222,7 +251,13 @@ export async function runSkillTest(options: {
     // Belt and braces with the group kill: even if an orphan survives (EPERM
     // fallback path), cancel() unblocks the read loop below.
     reader.cancel().catch(() => { /* stream already closed */ });
-  }, timeout);
+  };
+  phaseTimer = setTimeout(() => killRun(true), startupGraceMs);
+  /** Called once by the read loop on the first NDJSON byte. */
+  const armWorkPhase = (elapsedMs: number): void => {
+    clearTimeout(phaseTimer);
+    phaseTimer = setTimeout(() => killRun(false), Math.max(0, timeout - elapsedMs));
+  };
 
   // Stream NDJSON from stdout for real-time progress
   const collectedLines: string[] = [];
@@ -251,6 +286,9 @@ export async function runSkillTest(options: {
         // Track time to first NDJSON line (measures latency from spawn to first Claude response)
         if (firstResponseMs === 0) {
           firstResponseMs = Date.now() - startTime;
+          // First byte: startup phase over — arm the work phase for the
+          // REMAINING budget (total wall stays <= timeout).
+          armWorkPhase(firstResponseMs);
         }
 
         // Real-time progress to stderr + persistent logs
@@ -327,10 +365,14 @@ export async function runSkillTest(options: {
     })(),
   ]);
   const exitCode = await procExited;
-  clearTimeout(timeoutId);
+  clearTimeout(phaseTimer);
 
   if (timedOut) {
-    exitReason = 'timeout';
+    // 'timeout_startup' = the API never sent a byte inside the grace — an
+    // availability problem, not a test failure worth reading transcripts
+    // for. Distinct so triage (and WS10's inconclusive classification) can
+    // key off it without receipts archaeology.
+    exitReason = timedOutInStartup ? 'timeout_startup' : 'timeout';
   } else if (exitCode === 0) {
     exitReason = 'success';
   } else {

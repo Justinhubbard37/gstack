@@ -59,7 +59,10 @@ describe('session-runner timeout kills the whole process group', () => {
       });
       const wall = Date.now() - started;
 
-      expect(result.exitReason).toBe('timeout');
+      // The shim never prints NDJSON, so the two-phase timer kills it in the
+      // STARTUP phase (grace = min(default, timeout) = 3s here) — the
+      // distinct reason is the point: no byte ever arrived.
+      expect(result.exitReason).toBe('timeout_startup');
       // The old bug's signature was the drain blocking long past the budget
       // (600s -> 1400s). Generous 10x bound: timeout 3s + the 5s stderr
       // grace race must return promptly once the group is dead.
