@@ -68,6 +68,12 @@ failure), never-started/timed-out taxonomy, and parent-computed diff
 selection propagated to children via `EVALS_SELECTION_JSON` (fail-open: a
 child that can't parse it recomputes locally with one warning). Retry parity
 lives in `RETRY_OVERRIDES` (literals; old matrix rows' earned `retries: 2`).
+Flake telemetry rides the store: every recorded test carries its 1-based
+`attempt` (a pass-on-attempt-2 stays visible forever — bun's own stream hides
+it), runs list `flaky_retries`, the report warns on passed-only-on-retry
+tests, and `bun run eval:flake-rank` ranks the series (retried passes first,
+then failure rate; 60-day recency bound; the free lane's flake ledger is
+folded in).
 
 **CI planner/executor/report.** `--emit-plan <path> --slices K` computes
 selection + the slice plan ONCE (killing per-slice selector divergence);
@@ -86,12 +92,27 @@ fail-fast verification loop). evals-periodic.yml runs ALL
 periodic-tier files weekly (the coverage contract) minus the reasoned
 exclusions in `test/helpers/periodic-exclude-data.ts` (reason + tracking
 required per entry; removal re-activates the file), plus a weekly
-`EVALS_ALL` gate census, plus a tracking-issue UPSERT on red weeks.
+`EVALS_ALL` gate census, plus a tracking-issue UPSERT on red weeks. The CI
+image pins the claude CLI to an exact version (`.github/docker/Dockerfile.ci`,
+enforced by `test/ci-image-cli-pin.test.ts` — bumps ride PRs that run the PTY
+gate), and every eval-store run records `claude --version`, resolved once in
+the runner parent, so a TUI-drift flake hunt is a grep, not archaeology.
 
 **Timeout policy.** Paid tests use the tiers in
 `test/helpers/eval-budgets.ts` (JUDGE/CAPTURE/CAPTURE_LONG/PTY/PTY_LONG);
 `test/eval-budgets-policy.test.ts` pins that every tier fits the shard wall
 minus overhead and ratchets raw literals. Budget above the wall is fiction.
+Session timeouts are two-phase: a silent API dies at the startup grace (90s
+local / 300s CI floor, distinct exit reason `timeout_startup`) and the work
+budget arms on the first byte — the total wall never grows
+(`test/session-runner-startup-grace.test.ts` pins the floor). A timed-out
+session kills its whole detached process group (claude, codex, and gemini
+runners alike — `test/session-runner-groupkill.test.ts`), so a stray
+grandchild can't stretch a 600s budget past 1400s. And sync spawns can't
+wedge a shard: every `spawnSync`/`execSync`/`execFileSync`/`Bun.spawnSync`
+in the test trees must carry a `timeout`, enforced by
+`test/spawnsync-timeout-tripwire.test.ts` with a shrink-only exemption
+ratchet.
 
 ## Cloud sandboxes (Vercel / Conductor cloud workspaces)
 
