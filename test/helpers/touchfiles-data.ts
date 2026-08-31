@@ -541,7 +541,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'plan-ceo-review': 'periodic',
   'plan-ceo-review-selective': 'periodic',
   'plan-ceo-review-benefits': 'gate',
-  'plan-ceo-review-expansion-energy': 'gate',  // V1.1 mode-posture regression gate (Opus generator, Sonnet judge)
+  'plan-ceo-review-expansion-energy': 'periodic',  // Demoted from gate (2026-08 audit): Opus generator + subjective 2-axis >=4/5 LLM-judge threshold in the merge lane — the exact class siblings were demoted for (a +21-line preamble change once flipped the score). CLAUDE.md's own rule: Opus model test -> periodic.
   'plan-eng-review': 'periodic',
   'plan-eng-review-artifact': 'periodic',
   'plan-eng-coverage-audit': 'gate',
