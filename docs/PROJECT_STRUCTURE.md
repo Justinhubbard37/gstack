@@ -14,6 +14,7 @@ gstack/
 │   └── dist/        # Compiled binary
 ├── hosts/           # Typed host configs (one per AI agent)
 │   ├── claude.ts    # Primary host config
+│   ├── claude/hooks/  # Claude Code lifecycle hooks (AUQ capture + enforcement, spawned-session directive, timeline stop)
 │   ├── codex.ts, factory.ts, kiro.ts  # Existing hosts
 │   ├── opencode.ts, slate.ts, cursor.ts, openclaw.ts  # IDE hosts
 │   ├── hermes.ts, gbrain.ts  # Agent runtime hosts

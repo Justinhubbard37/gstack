@@ -119,12 +119,12 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // written a never-ask preference, AUQ should still auto-decide rather than
   // surfacing the question. Touches the question-tuning + preference
   // infrastructure plus the resolvers that own the AUTO_DECIDE preamble.
-  'auto-decide-preserved':        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-completion-status.ts', 'plan-ceo-review/**', 'bin/gstack-question-preference', 'bin/gstack-config', 'bin/gstack-slug', 'hosts/claude/hooks/question-preference-hook.ts', 'lib/is-conductor.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-auto-decide-preserved.test.ts'],
+  'auto-decide-preserved':        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'bin/gstack-session-kind', 'scripts/resolvers/question-tuning.ts', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-completion-status.ts', 'plan-ceo-review/**', 'bin/gstack-question-preference', 'bin/gstack-config', 'bin/gstack-slug', 'hosts/claude/hooks/question-preference-hook.ts', 'hosts/claude/hooks/spawned-directive.ts', 'lib/is-conductor.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-auto-decide-preserved.test.ts'],
 
   // Conductor → prose decision brief (Conductor signal makes prose the default;
   // the PreToolUse hook denies the flaky tool). Touches the resolver that owns
   // the Conductor rule, the preamble signal, the hook, and the detection helper.
-  'conductor-prose':              ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble.ts', 'plan-eng-review/**', 'hosts/claude/hooks/question-preference-hook.ts', 'lib/is-conductor.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-conductor-prose.test.ts'],
+  'conductor-prose':              ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'bin/gstack-session-kind', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble.ts', 'plan-eng-review/**', 'hosts/claude/hooks/question-preference-hook.ts', 'hosts/claude/hooks/spawned-directive.ts', 'lib/is-conductor.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-conductor-prose.test.ts'],
 
   // Real-PTY E2E batch (#6 new tests on the harness).
   // Each one tests behavior the SDK harness can't observe (rendered TTY,
@@ -281,6 +281,21 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'plan-eng-coverage-audit': ['plan-eng-review/**', 'test/fixtures/coverage-audit-fixture.ts', 'test/skill-e2e-coverage-audit.test.ts'],
   'ship-triage': ['ship/**', 'bin/gstack-repo-mode', 'test/skill-e2e-triage.test.ts'],
   'ship-docsync': ['ship/**', 'document-release/**', 'scripts/gen-skill-docs.ts', 'scripts/resolvers/sections.ts', 'test/skill-e2e-ship-docsync.test.ts'],
+  // #2733 behavioral proof: the JSON contract survives a firing gate inside a
+  // spawned-marked subagent. Deps name every behavior under test — the
+  // session-kind override, the skill-start gates, both hooks + the shared
+  // directive, and the AUQ prose rule — so changing any of them selects it.
+  'docsync-spawned': [
+    'document-release/**',
+    'ship/sections/pr-body.md',
+    'bin/gstack-session-kind',
+    'bin/gstack-skill-start',
+    'hosts/claude/hooks/question-preference-hook.ts',
+    'hosts/claude/hooks/auq-error-fallback-hook.ts',
+    'hosts/claude/hooks/spawned-directive.ts',
+    'scripts/resolvers/preamble/generate-ask-user-format.ts',
+    'test/skill-e2e-docsync-spawned.test.ts',
+  ],
 
   // Plan completion audit + verification
 
@@ -671,6 +686,11 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'ship-coverage-audit': 'gate',
   'ship-triage': 'gate',
   'ship-docsync': 'gate',
+  'docsync-spawned': 'gate',   // #2733 JSON-contract-through-a-firing-gate proof (deterministic safety)
+  // (merge note: main's side also re-added ship-plan-completion /
+  // ship-plan-verification here — phantom keys with no declaring test,
+  // deleted by the census-integrity commit; the reverse invariant in
+  // test/touchfiles.test.ts now fails the suite if they come back.)
 
   // Retro — gate for cheap branch detection, periodic for full Opus retro
   'retro': 'periodic',

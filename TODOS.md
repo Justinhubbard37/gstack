@@ -2669,18 +2669,35 @@ Shipped as v0.5.0 on main. Includes `/plan-design-review` (report-only design au
 
 ## Document-Release
 
+### Spawned-session auto-choices are invisible to /plan-tune
+
+**What:** Capture auto-chosen decisions from spawned sessions (OPENCLAW_SESSION or GSTACK_SESSION_KIND=spawned) into `gstack-question-log` so `/plan-tune` learning sees them.
+
+**Why:** In spawned sessions the model never calls AskUserQuestion (it auto-chooses the recommended option per the spawned-session block), so the PostToolUse capture hook never fires and no prose brief is ever logged — every gate decision made inside a /ship Step 18 document-release subagent is missing from the question-tuning corpus.
+
+**Context:** #2733 made spawned sessions reachable from Claude Code subagents (every Conductor-hosted /ship now produces one). The subagent reports auto-chosen decisions in the JSON contract's `decisions` array (user-visible in the ship console), but nothing writes them to `~/.gstack/` question analytics. Start from the spawned-session instruction block in `bin/gstack-skill-start` — add a "log each auto-chosen decision with bin/gstack-question-log" sentence and a `source` value distinguishing auto-chosen from human-answered so tuning never trains on machine picks as if a human made them.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** #2733 fix (GSTACK_SESSION_KIND=spawned marker) landing.
+
 ### Auto-invoke /document-release from /ship — SHIPPED
 
 Shipped in v0.8.4; redesigned twice since. Current design (v0.18.2.0+, carved in
 v1.54.0.0): `/ship` Step 18 (`ship/sections/pr-body.md`) dispatches
 `/document-release` as a general-purpose subagent AFTER Step 17 (push) and
 BEFORE Step 19 (PR creation); the subagent's JSON contract (`files_updated`,
-`commit_sha`, `pushed`, `documentation_section`) is baked into the initial PR
-body. Subagent failure is non-blocking. The skeleton names "the
-/document-release subagent" at three touchpoints (section-index trigger + STOP
-pointer, Step 17 handoff, hoisted doc-sync invariant). Pinned by
-`test/ship-document-release-dispatch.test.ts` + carve-guards anchors; behavior
-proven by the `ship-docsync` gate E2E (`test/skill-e2e-ship-docsync.test.ts`).
+`commit_sha`, `pushed`, `documentation_section`, `decisions` since v1.76.0.0)
+is baked into the initial PR body — except `decisions`, which prints to the
+ship console and never enters PR markdown. Since v1.76.0.0 (#2733) the dispatch
+marks the subagent `GSTACK_SESSION_KIND=spawned` so its interactive gates
+auto-choose the recommended option. Subagent failure is non-blocking. The
+skeleton names "the /document-release subagent" at three touchpoints
+(section-index trigger + STOP pointer, Step 17 handoff, hoisted doc-sync
+invariant). Pinned by `test/ship-document-release-dispatch.test.ts` +
+carve-guards anchors; behavior proven by the `ship-docsync` gate E2E
+(`test/skill-e2e-ship-docsync.test.ts`) and the spawned-dispatch gate E2E
+(`test/skill-e2e-docsync-spawned.test.ts`).
 
 ### Machine-checkable Step 18 dispatch receipt in /ship's Section self-check
 
