@@ -1,17 +1,13 @@
 /**
  * Opus 4.7 behavior evals.
  *
- * Two cases, both pinned to claude-opus-4-7:
+ * One case, pinned to claude-opus-4-7:
  *
- * 1. Fanout rate — the "Fan out explicitly" overlay nudge should make 4.7
- *    spawn parallel tool calls when the prompt has independent sub-problems.
- *    A/B: SKILL.md regenerated with `--model opus-4-7` (overlay ON) vs
- *    default `--model claude` (overlay OFF). Assert A ≥ B on parallel-call
- *    count in the first assistant turn.
- *
- * 2. Routing precision — the new "when in doubt, invoke the skill" policy
- *    should route ambiguous dev prompts to the right skill WITHOUT routing
- *    casual/non-dev prompts. A handful of positive and negative controls.
+ * Routing precision — the "when in doubt, invoke the skill" policy should
+ * route ambiguous dev prompts to the right skill WITHOUT routing
+ * casual/non-dev prompts. A handful of positive and negative controls.
+ * (The fanout A/B retired 2026-08 — single-run parallel-call comparison was
+ * a coin flip; the SDK overlay-harness is the maintained instrument.)
  *
  * Both cases require a running Anthropic API key. Gated behind EVALS=1.
  * Classify as `periodic` in touchfiles — behavior measurement, not gate.
@@ -177,91 +173,12 @@ describeE2E('Opus 4.7 overlay behavior evals', () => {
     // concurrent shards.
   });
 
-  test(
-    'fanout: overlay ON emits >= parallel calls vs overlay OFF on 3-file investigate task',
-    async () => {
-      const armA = mkEvalRoot('on', true);
-      const armB = mkEvalRoot('off', false);
+  // (fanout A/B retired, 2026-08 audit: it compared parallel-call counts of
+  // two SINGLE stochastic runs — parA >= parB is a coin flip with near-zero
+  // remaining information; the overlay-fanout question is answered and the
+  // SDK overlay-harness (test/skill-e2e-overlay-harness.test.ts) is the
+  // maintained instrument for the next experiment.)
 
-      // Populate three tiny independent files in each arm. The prompt asks
-      // the agent to read all three and report. Opus 4.7 (without nudge)
-      // tends to serialize; with the nudge it should parallelize.
-      for (const dir of [armA, armB]) {
-        fs.writeFileSync(path.join(dir, 'alpha.txt'), 'alpha content: 1\n');
-        fs.writeFileSync(path.join(dir, 'beta.txt'),  'beta content: 2\n');
-        fs.writeFileSync(path.join(dir, 'gamma.txt'), 'gamma content: 3\n');
-      }
-
-      const prompt =
-        "Read alpha.txt, beta.txt, and gamma.txt in this directory and report what's inside each. These three reads are independent.";
-
-      try {
-        const [resA, resB] = await Promise.all([
-          runSkillTest({
-            prompt,
-            workingDirectory: armA,
-            maxTurns: 5,
-            allowedTools: ['Read', 'Bash', 'Glob', 'Grep'],
-            timeout: JUDGE_MS,
-            testName: 'fanout-arm-overlay-on',
-            runId,
-            model: OPUS_47,
-          }),
-          runSkillTest({
-            prompt,
-            workingDirectory: armB,
-            maxTurns: 5,
-            allowedTools: ['Read', 'Bash', 'Glob', 'Grep'],
-            timeout: JUDGE_MS,
-            testName: 'fanout-arm-overlay-off',
-            runId,
-            model: OPUS_47,
-          }),
-        ]);
-
-        const parA = firstTurnParallelism(resA.transcript);
-        const parB = firstTurnParallelism(resB.transcript);
-
-        console.log(
-          `[opus-4-7 fanout] arm A (overlay ON): ${parA} parallel tool calls in first turn; ` +
-            `arm B (overlay OFF): ${parB}`,
-        );
-        console.log(`  cost A=$${resA.costEstimate.estimatedCost.toFixed(2)} B=$${resB.costEstimate.estimatedCost.toFixed(2)}`);
-
-        evalCollector?.addTest({
-          name: 'fanout-arm-overlay-on',
-          suite: 'Opus 4.7 overlay',
-          tier: 'e2e',
-          passed: parA >= parB,
-          duration_ms: resA.duration,
-          cost_usd: resA.costEstimate.estimatedCost,
-          transcript: resA.transcript,
-          output: `parallel=${parA}`,
-          turns_used: resA.costEstimate.turnsUsed,
-          exit_reason: resA.exitReason,
-        });
-        evalCollector?.addTest({
-          name: 'fanout-arm-overlay-off',
-          suite: 'Opus 4.7 overlay',
-          tier: 'e2e',
-          passed: true, // baseline arm, recorded for comparison
-          duration_ms: resB.duration,
-          cost_usd: resB.costEstimate.estimatedCost,
-          transcript: resB.transcript,
-          output: `parallel=${parB}`,
-          turns_used: resB.costEstimate.turnsUsed,
-          exit_reason: resB.exitReason,
-        });
-
-        // Main assertion: overlay arm is at least as parallel as baseline.
-        expect(parA, `overlay arm emitted ${parA} parallel calls, baseline ${parB}`).toBeGreaterThanOrEqual(parB);
-      } finally {
-        fs.rmSync(armA, { recursive: true, force: true });
-        fs.rmSync(armB, { recursive: true, force: true });
-      }
-    },
-    CAPTURE_MS,
-  );
 
   test(
     'routing precision: positives route, negatives do not',

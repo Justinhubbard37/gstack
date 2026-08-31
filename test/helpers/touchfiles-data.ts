@@ -129,9 +129,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Real-PTY E2E batch (#6 new tests on the harness).
   // Each one tests behavior the SDK harness can't observe (rendered TTY,
   // numbered-option lists, multi-phase ordering, idempotency state echo).
-  'preamble-script-ab':                        ['bin/gstack-skill-start', 'bin/gstack-skill-end', 'scripts/resolvers/preamble/generate-preamble-bash.ts', 'scripts/resolvers/preamble/generate-brain-sync-block.ts', 'scripts/resolvers/preamble.ts', 'plan-ceo-review/**', 'test/helpers/auq-sdk-capture.ts', 'test/skill-e2e-preamble-script-ab.test.ts'],
   'auq-format-gate':                           ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/session-runner.ts', 'test/helpers/llm-judge.ts', 'test/skill-e2e-ask-user-question-format-compliance.test.ts'],
-  'auq-repetition-cut-ab':                     ['scripts/resolvers/preamble/generate-ask-user-format.ts', 'plan-ceo-review/**', 'test/helpers/auq-sdk-capture.ts', 'test/helpers/llm-judge.ts', 'test/fixtures/auq-pre-cut-plan-ceo-review-SKILL.md', 'test/skill-e2e-auq-repetition-cut-ab.test.ts'],
   'plan-ceo-mode-routing':       ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-ceo-mode-routing.test.ts'],
   'plan-design-with-ui-scope':   ['plan-design-review/**', 'test/fixtures/plans/ui-heavy-feature.md', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-plan-design-with-ui.test.ts'],
   'ship-idempotency-pty':        ['ship/**', 'bin/gstack-next-version', 'bin/gstack-version-bump', 'scripts/resolvers/sections.ts', 'lib/worktree.ts', 'test/helpers/claude-pty-runner.ts', 'test/skill-e2e-ship-idempotency.test.ts'],
@@ -569,8 +567,6 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   // Real-PTY E2E batch — tier classification:
   //   gate: cheap, deterministic, run on every PR
   //   periodic: long-running or expensive (>$3/run), run weekly
-  'preamble-script-ab':                      'periodic',   // Phase 1-3 A/B: script vs inline preamble; demoted post-Phase-3 (OV7)
-  'auq-repetition-cut-ab':                   'periodic',   // AUQ repetition-cut NOT-WORSE gate (passed pre-landing). Periodic runs force EVALS_ALL, so the dep list cannot auto-trigger it — an AUQ format edit carries a MANUAL re-run obligation (bun test test/skill-e2e-auq-repetition-cut-ab.test.ts with EVALS=1 EVALS_TIER=periodic)
   'auq-format-gate':                         'gate',       // ~$0.50/run, SDK capture, single skill probe
   'plan-ceo-mode-routing':     'periodic',   // ~$3/run, deep navigation through 8-12 prior AskUserQuestions
   'plan-design-with-ui-scope': 'gate',       // ~$0.80/run
