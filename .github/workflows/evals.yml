@@ -413,5 +413,9 @@ jobs:
             gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" \
               -X PATCH -f body="$BODY"
           else
-            gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
+            # REST, not gh's pr-comment subcommand: this job runs with NO
+            # checkout (the token/exec split), and that subcommand resolves
+            # the repo FROM git — it dies with "not a git repository" here.
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              -X POST -f body="$BODY"
           fi

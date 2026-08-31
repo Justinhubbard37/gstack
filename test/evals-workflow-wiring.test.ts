@@ -111,6 +111,10 @@ describe('evals.yml sliced-lane wiring (post-matrix)', () => {
     expect(commentJob).not.toContain('bun install');
     expect(commentJob).not.toMatch(/run: .*bun run/);
     expect(commentJob).not.toContain('uses: ./');
+    // No checkout also means no git context: `gh pr comment` resolves the
+    // repo FROM git and dies with "not a git repository" here (PR #2746's
+    // first run). Every comment call must be explicit-repo REST (gh api).
+    expect(commentJob).not.toContain('gh pr comment');
     // And the code-executing report job must NOT hold write scopes.
     const reportJob = evalsYml.slice(evalsYml.indexOf('  slices-report:'), evalsYml.indexOf('  slices-comment:'));
     expect(reportJob).not.toMatch(/pull-requests: write/);
