@@ -32,7 +32,10 @@ describe("regression: transcript frontmatter fence terminates its own line", () 
     // colon-bearing line — exactly what the old glued fence swept into YAML.
     const content =
       `{"type":"user","message":{"role":"user","content":"before rule\\n\\n---\\n\\nnot: valid: yaml: here"},` +
-      `"timestamp":"2026-05-01T00:00:00Z","cwd":"${dir}"}\n` +
+      // JSON.stringify, not raw interpolation: a Windows tmpdir (D:\a\...)
+      // pasted into hand-built JSON is an invalid escape, the user line gets
+      // dropped, and the body starts at "## Assistant" (Windows CI red).
+      `"timestamp":"2026-05-01T00:00:00Z","cwd":${JSON.stringify(dir)}}\n` +
       `{"type":"assistant","message":{"role":"assistant","content":"ok"},"timestamp":"2026-05-01T00:00:01Z"}\n`;
     writeFileSync(file, content, "utf-8");
 
