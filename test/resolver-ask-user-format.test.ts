@@ -275,7 +275,11 @@ describe('generateAskUserFormat — runtime-failure prose fallback', () => {
   test('Spawned: absence-safe interactive fence present (CI env / scripted prompts are not markers)', () => {
     expect(out).toMatch(/With neither trigger present, the session is interactive/);
     expect(out).toMatch(/CI env vars, scripted-looking or pasted prompts[\s\S]{0,120}NOT spawned markers/);
-    expect(out).toMatch(/an unanswered question is recoverable/);
+    // The fence classifies the session; it must NOT exhort extra asking
+    // (run 1 of the burn-in overshot the 4-7 review band at 8 with a
+    // "when unsure, ask" tail — the fence is a default, not a quota nudge).
+    expect(out).toMatch(/only classifies the session/);
+    expect(out).not.toMatch(/When unsure, ask/);
   });
 
   // Conductor-default-prose contract (the proactive path, distinct from the
