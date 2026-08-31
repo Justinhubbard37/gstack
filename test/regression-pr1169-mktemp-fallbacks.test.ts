@@ -120,7 +120,7 @@ echo "SHOULD NOT REACH: $TMP_DIR"`;
     const r = spawnSync(
       "bun",
       [path.join(ROOT, "bin", "gstack-redact"), "--from-file", "", "--json"],
-      { encoding: "utf-8", input: "sk-ant-api03-not-really-a-key", timeout: 15_000 },
+      { encoding: "utf-8", input: "placeholder stdin content (never read on the error path)", timeout: 15_000 },
     );
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("non-empty path");

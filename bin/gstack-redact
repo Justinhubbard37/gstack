@@ -307,7 +307,9 @@ function main() {
           "\n",
       );
     }
-    process.exit(0);
+    // Same truncation class as the report path below: the redacted BODY can
+    // be arbitrarily large; let stdout drain instead of process.exit(0).
+    return;
   }
 
   const result = scan(input, opts);
@@ -326,7 +328,12 @@ function main() {
       process.stdout.write(`  HIGH=${HIGH} MEDIUM=${MEDIUM} LOW=${LOW} WARN=${WARN}\n`);
     }
   }
-  process.exit(code);
+  // process.exit() discards stdout still buffered in the pipe: a report past
+  // ~145 KB read by a slow consumer (node's gate-secret-scan.mjs collector)
+  // arrived truncated, JSON.parse failed, and the CI quality gate failed
+  // CLOSED on a clean scan. Set the exit code and let the runtime drain
+  // stdout instead — same contract, no truncation.
+  process.exitCode = code;
 }
 
 main();
