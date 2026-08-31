@@ -542,7 +542,7 @@ case "${1:-}" in
           # leaves the previous render fully intact.
           RENDER_TMP="$RENDER_DIR.tmp.$$"
           rm -rf "$RENDER_TMP"
-          if ( cd "$INSTALL_DIR" && bun run gen:skill-docs:user --host claude --out-dir "$RENDER_TMP" >/dev/null 2>&1 ); then
+          if ( cd "$INSTALL_DIR" && bun run gen:skill-docs:user --host claude --out-dir "$RENDER_TMP" --link-root "$RENDER_DIR" >/dev/null 2>&1 ); then
             _swap_in_render "$RENDER_DIR" "$RENDER_TMP"
             # Repoint installed skills at the render — gstack-relink prefers
             # the render dir when present.

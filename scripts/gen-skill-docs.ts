@@ -168,6 +168,23 @@ const OUT_DIR: string | null = (() => {
   return path.resolve(val);
 })();
 
+// #2692: callers that render into a TMP dir and atomically swap it into place
+// (bin/gstack-config gbrain-refresh, setup — the #2569 pattern) must pass the
+// FINAL directory here, or rewriteSectionBase bakes the tmp path
+// (…/render/claude.tmp.<pid>/…) into the rendered CONTENT and every section
+// Read dies after the swap. Defaults to OUT_DIR for direct-render callers
+// (bin/dev-setup, scripts/dev-skill.ts, mkdtemp tests), where out-dir IS the
+// serving path.
+const LINK_ROOT_ARG = process.argv.find(a => a.startsWith('--link-root'));
+const LINK_ROOT: string | null = (() => {
+  if (!LINK_ROOT_ARG) return OUT_DIR;
+  const val = LINK_ROOT_ARG.includes('=')
+    ? LINK_ROOT_ARG.split('=')[1]
+    : process.argv[process.argv.indexOf(LINK_ROOT_ARG) + 1];
+  if (!val) throw new Error('--link-root requires a directory path');
+  return path.resolve(val);
+})();
+
 /**
  * When rendering to an out-dir, repoint the literal section-base path at the
  * out-dir so section Reads resolve to the rendered copy, not the global install.
@@ -176,10 +193,12 @@ const OUT_DIR: string | null = (() => {
  * install, which still works). No-op when --out-dir is unset.
  */
 function rewriteSectionBase(content: string): string {
-  if (!OUT_DIR) return content;
+  if (!LINK_ROOT) return content;
+  // Replacement CALLBACK, not a template string: `$` sequences in a
+  // configured path are special in JS replacement strings ($&, $', $1…).
   return content.replace(
     /~\/\.claude\/skills\/gstack\/([^\s)`"'*]+\/sections\/)/g,
-    `${OUT_DIR}/$1`,
+    (_m, p1: string) => `${LINK_ROOT}/${p1}`,
   );
 }
 
