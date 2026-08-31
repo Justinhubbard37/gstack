@@ -1022,6 +1022,44 @@ export function buildRunEpilogue(
 
 export type FreeShardStatus = 'passed' | 'failed' | 'timed-out';
 
+// ─── Flake ledger (WS1 telemetry) ───────────────────────────────────────────
+// Single-writer JSONL: ONLY this parent runner appends (never shards, never
+// tests — no concurrent-append hazard by construction). CI points
+// GSTACK_FLAKE_LEDGER at $RUNNER_TEMP and uploads it as an artifact every
+// run, so repeat offenders become an enumerable series instead of console
+// scrollback. Fail-open with a loud stderr warning: a broken ledger must
+// never red the only required lane.
+
+export interface FlakeLedgerEntry {
+  ts: string;
+  runner: 'free';
+  kind: 'flaky-pass';
+  file: string;
+  /** Shard the original failure surfaced in, when attributable. */
+  shard?: number;
+}
+
+export function flakeLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.GSTACK_FLAKE_LEDGER || path.join(os.tmpdir(), 'gstack-flake-ledger.jsonl');
+}
+
+export function appendFlakeLedger(
+  entries: FlakeLedgerEntry[],
+  ledgerPath: string,
+  warn: (line: string) => void = (line) => console.error(line),
+): boolean {
+  if (entries.length === 0) return true;
+  try {
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    fs.appendFileSync(ledgerPath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    return true;
+  } catch (error) {
+    warn(`[test:free] WARNING: could not append flake ledger at ${ledgerPath} `
+      + `(${error instanceof Error ? error.message : String(error)}) — flaky-pass telemetry lost for this run, verdict unaffected`);
+    return false;
+  }
+}
+
 export interface FreeShardOutcome {
   shard: number;
   files: string[];
@@ -1511,6 +1549,19 @@ async function main(): Promise<number> {
       if (retryOutcome.status === 'passed') {
         console.log(`[test:free] FLAKY-PASS — ${flakyFiles.length} file(s) failed once and passed on serial retry: ${flakyFiles.join(', ')}`);
         console.log('[test:free] treat repeat offenders as real flakes worth fixing, not noise.');
+        // Durable record (WS1): console lines vanish with the scrollback; the
+        // ledger makes repeat offenders rankable across runs (eval:flake-rank).
+        const ts = new Date().toISOString();
+        appendFlakeLedger(
+          flakyFiles.map((file) => ({
+            ts,
+            runner: 'free' as const,
+            kind: 'flaky-pass' as const,
+            file,
+            shard: outcomes.find((o) => o.failingFiles.includes(file))?.shard,
+          })),
+          flakeLedgerPath(),
+        );
         worst = 0;
       } else {
         console.error('[test:free] flaky-retry FAILED — the failures reproduce serially; not flaky.');
