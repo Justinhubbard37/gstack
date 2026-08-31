@@ -102,13 +102,24 @@ for line in sys.stdin:
                 cmd = item.get('command','')
                 if cmd: print(f'[codex ran] {cmd}', flush=True)
         elif t == 'turn.completed':
+            turn_completed_count = 1 + (turn_completed_count if 'turn_completed_count' in dir() else 0)
             usage = obj.get('usage',{})
             tokens = usage.get('input_tokens',0) + usage.get('output_tokens',0)
             if tokens: print(f'\ntokens used: {tokens}', flush=True)
+        elif t == 'turn.failed':
+            turn_failed = True
+            err = obj.get('error',{}).get('message','') or 'no error message in event'
+            print(f'[codex turn FAILED] {err}', flush=True, file=sys.stderr)
     except: pass
+# Three-way completeness check (#2671; consult previously had NONE): a STATED
+# failure is a failure, not a network problem; only silence is a disconnect.
+if 'turn_failed' in dir():
+    print('[codex] turn.failed received — the turn errored (reason above), not a disconnect.', flush=True, file=sys.stderr)
+elif 'turn_completed_count' not in dir():
+    print('[codex warning] No turn.completed event received — possible mid-stream disconnect.', flush=True, file=sys.stderr)
 "
 # Fix 1: hang detection for Consult new-session (mirrors Challenge + resume)
-_CODEX_EXIT=${PIPESTATUS[0]}
+_CODEX_EXIT=${PIPESTATUS[0]:-${pipestatus[1]}}  # bash sets PIPESTATUS; zsh (lowercase, 1-indexed) falls through (#2669)
 if [ "$_CODEX_EXIT" = "124" ]; then
   _gstack_codex_log_event "codex_timeout" "600"
   _gstack_codex_log_hang "consult" "$(wc -c < "$TMPERR" 2>/dev/null || echo 0)"
@@ -144,7 +155,7 @@ _gstack_codex_timeout_wrapper 600 codex exec resume <session-id> "<prompt>" -c '
 <same python streaming parser as above, with flush=True on all print() calls>
 "
 # Fix 1: same hang detection pattern as new-session block
-_CODEX_EXIT=${PIPESTATUS[0]}
+_CODEX_EXIT=${PIPESTATUS[0]:-${pipestatus[1]}}  # bash sets PIPESTATUS; zsh (lowercase, 1-indexed) falls through (#2669)
 if [ "$_CODEX_EXIT" = "124" ]; then
   _gstack_codex_log_event "codex_timeout" "600"
   _gstack_codex_log_hang "consult-resume" "$(wc -c < "$TMPERR" 2>/dev/null || echo 0)"
@@ -156,6 +167,7 @@ elif [ "$_CODEX_EXIT" != "0" ]; then
   head -20 "$TMPERR" 2>/dev/null | sed 's/^/  /' || true
   _gstack_codex_log_event "codex_nonzero_exit" "consult-resume:$_CODEX_EXIT"
 fi
+```
 
 5. Capture session ID from the streamed output. The parser prints `SESSION_ID:<id>`
    from the `thread.started` event. Save it for follow-ups:

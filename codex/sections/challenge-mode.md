@@ -61,12 +61,19 @@ for line in sys.stdin:
             usage = obj.get('usage',{})
             tokens = usage.get('input_tokens',0) + usage.get('output_tokens',0)
             if tokens: print(f'\ntokens used: {tokens}', flush=True)
+        elif t == 'turn.failed':
+            turn_failed = True
+            err = obj.get('error',{}).get('message','') or 'no error message in event'
+            print(f'[codex turn FAILED] {err}', flush=True, file=sys.stderr)
     except: pass
-# Fix 2: completeness check — warn if no turn.completed received
-if turn_completed_count == 0:
+# Fix 2: three-way completeness check (#2671) — a STATED failure is a failure,
+# not a network problem; only silence with no terminal event is a disconnect.
+if 'turn_failed' in dir():
+    print('[codex] turn.failed received — the turn errored (reason above), not a disconnect.', flush=True, file=sys.stderr)
+elif turn_completed_count == 0:
     print('[codex warning] No turn.completed event received — possible mid-stream disconnect.', flush=True, file=sys.stderr)
 "
-_CODEX_EXIT=${PIPESTATUS[0]}
+_CODEX_EXIT=${PIPESTATUS[0]:-${pipestatus[1]}}  # bash sets PIPESTATUS; zsh (lowercase, 1-indexed) falls through (#2669)
 # Fix 1: hang detection — log + surface actionable message
 if [ "$_CODEX_EXIT" = "124" ]; then
   _gstack_codex_log_event "codex_timeout" "600"
