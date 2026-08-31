@@ -567,14 +567,15 @@ duration-packed free shards, the sharded paid runner as the CI engine
 coverage contract + gate census, eval-budget timeout tiers, and the
 coverage fill. Remaining, in rough priority order:
 
-- **P1 — Delete the legacy evals.yml matrix after parity.** The sliced lane
-  runs alongside the 18-row matrix (`needs: evals`, so provider concurrency
-  never doubles). After 1-2 PR cycles of parity (compare executed-test sets:
-  intersection strict + the 8 KNOWN_MATRIX_GAPS files as expected additions;
-  stochastic outcomes informational), delete the matrix as a PURE-DELETION
-  commit (one revert restores it), drop the `needs: evals` edge, rewrite
-  test/evals-workflow-matrix.test.ts into a runner-wiring pin, and retire
-  KNOWN_MATRIX_GAPS/KNOWN_TIER_UNSET wholesale. Effort S.
+- **DONE (v1.76 test-infra wave) — Delete the legacy evals.yml matrix after
+  parity.** Deleted as a pure-deletion commit (one revert restores it) after
+  a static parity receipt: sliced gate census (49 files) ⊇ matrix files (18),
+  31 files of extra coverage. `needs: evals` edge dropped, PR comment moved
+  into slices-report, KNOWN_MATRIX_GAPS/KNOWN_TIER_UNSET retired,
+  test/evals-workflow-matrix.test.ts rewritten as
+  test/evals-workflow-wiring.test.ts. The register-skills fail-fast
+  verification loop was ported to the surviving lanes FIRST via the shared
+  .github/actions/register-gstack-skills composite.
 - **P1 — Maintainer decision: make `slices-report` a required check** once
   post-migration flake data exists (the Codex outside-voice's "green means
   green is not delivered while paid stays advisory" point — correct, and

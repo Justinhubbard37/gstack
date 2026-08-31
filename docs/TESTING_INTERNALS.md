@@ -76,10 +76,13 @@ slice-result artifacts; `--report <dir>` reconciles them FAIL-CLOSED (a slice
 whose artifact never landed, or a planned shard nobody reported, is a
 failure). Under `EVALS_ALL` the hollow-shard guard marks exit-0 shards with
 ZERO executed tests `passed-empty` (a failure) — census-health, not just
-test runs. evals.yml runs the sliced gate lane per PR (parity phase:
-alongside the legacy matrix, `needs:`-sequenced so provider concurrency
-never doubles; the matrix and its `KNOWN_MATRIX_GAPS`/`KNOWN_TIER_UNSET`
-ratchets are deleted after demonstrated parity). evals-periodic.yml runs ALL
+test runs. evals.yml runs the sliced gate lane per PR — the ONLY paid lane
+since the legacy 17-row matrix (22.6 min/$21 per PR serialized ahead of the
+slices) was deleted after demonstrated parity; its
+`KNOWN_MATRIX_GAPS`/`KNOWN_TIER_UNSET` ratchets retired with it and
+`test/evals-workflow-wiring.test.ts` pins the surviving wiring (slice-count
+agreement, tier consistency, the shared register-skills composite with its
+fail-fast verification loop). evals-periodic.yml runs ALL
 periodic-tier files weekly (the coverage contract) minus the reasoned
 exclusions in `test/helpers/periodic-exclude-data.ts` (reason + tracking
 required per entry; removal re-activates the file), plus a weekly
