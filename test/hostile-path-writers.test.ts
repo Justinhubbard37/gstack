@@ -35,6 +35,7 @@ function runBin(bin: string, args: string[], env: Record<string, string> = {}) {
   // cannot exec a shebang script directly (spawn would fail before the code
   // under test ever ran).
   const r = spawnSync('bash', [path.join(HOSTILE, 'bin', bin), ...args], {
+    timeout: 30_000,
     encoding: 'utf-8',
     env: { ...process.env, GSTACK_HOME: STATE, GSTACK_STATE_ROOT: '', ...env },
     shell: false,

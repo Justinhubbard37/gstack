@@ -19,6 +19,7 @@ let stateRoot: string;
 
 function cfg(args: string[]): { code: number; out: string; err: string } {
   const r = spawnSync(CONFIG, args, {
+    timeout: 30_000,
     encoding: "utf8",
     env: { ...process.env, GSTACK_STATE_ROOT: stateRoot },
   });

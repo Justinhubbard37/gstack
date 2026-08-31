@@ -342,6 +342,7 @@ describe('gstack-skill-start behavior', () => {
 
       fs.writeFileSync(path.join(freshGh, '.feature-prompted-model-overlay'), '');
       const acknowledged = execFileSync(localStart, ['--skill', 'testskill'], {
+        timeout: 30_000,
         encoding: 'utf-8',
         cwd: projectRoot,
         env,

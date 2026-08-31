@@ -49,7 +49,7 @@ function extractViaSkill(source: string, field: 'pid' | 'port', stateFile: strin
   // have to be reproduced here.
   const pipeline = line!.slice(line!.indexOf('grep -o'));
   const script = `cat ${JSON.stringify(stateFile)} | ${pipeline.replace(/\)$/, '')}`;
-  return execFileSync('bash', ['-c', script], { encoding: 'utf-8' }).trim();
+  return execFileSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 30_000 }).trim();
 }
 
 describe('/open-gstack-browser state-file extraction', () => {
