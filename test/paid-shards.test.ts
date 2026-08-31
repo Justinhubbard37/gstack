@@ -22,6 +22,7 @@ import {
   computePaidDiffSelection,
   diffSkipDecisionForFile,
   formatSummary,
+  isAllSkippedPass,
   isPaidTestFile,
   knownTestNamesInSource,
   partitionShardsByDiffSelection,
@@ -352,5 +353,41 @@ describe('parent-side diff shard skipping', () => {
       { shard: 2, files: ['b'], status: 'skipped-by-diff', exitCode: null, elapsedMs: 0, groupPid: null },
     ]);
     expect(summaryExitCode(withNeverStarted)).toBe(1);
+  });
+});
+
+// Green-by-skip census: "Ran N tests" counts skips, so a codex/gemini file
+// whose every test self-skipped (binary absent on the runner) exits 0 and
+// used to read as coverage in the weekly report. The census label keeps the
+// pass (service availability is host state, not a repo regression) but must
+// say the shard verified nothing.
+describe('all-skipped pass census', () => {
+  const base = { shard: 1, files: ['test/codex-e2e.test.ts'], exitCode: 0, elapsedMs: 1200, groupPid: 1 };
+
+  test('isAllSkippedPass: pass with every test skipped → true', () => {
+    expect(isAllSkippedPass({ ...base, status: 'passed', executedTests: 8, skippedTests: 8 } as ShardOutcome)).toBe(true);
+  });
+
+  test('isAllSkippedPass: real work, a failure, or no data → false', () => {
+    // one test actually ran
+    expect(isAllSkippedPass({ ...base, status: 'passed', executedTests: 8, skippedTests: 7 } as ShardOutcome)).toBe(false);
+    // zero tests: that's the hollow-shard guard's territory, not this label's
+    expect(isAllSkippedPass({ ...base, status: 'passed', executedTests: 0, skippedTests: 0 } as ShardOutcome)).toBe(false);
+    // non-pass statuses never get the label
+    expect(isAllSkippedPass({ ...base, status: 'failed', executedTests: 8, skippedTests: 8 } as ShardOutcome)).toBe(false);
+    // stream gave no counts (crash/timeout) — unknown, not all-skipped
+    expect(isAllSkippedPass({ ...base, status: 'passed', executedTests: null, skippedTests: null } as ShardOutcome)).toBe(false);
+  });
+
+  test('formatSummary labels an all-skipped pass and leaves real passes alone', () => {
+    const lines = formatSummary(summarize([
+      { ...base, status: 'passed', executedTests: 8, skippedTests: 8 } as ShardOutcome,
+      { shard: 2, files: ['test/skill-e2e-review.test.ts'], status: 'passed', exitCode: 0, elapsedMs: 900, groupPid: 2, executedTests: 3, skippedTests: 0 } as ShardOutcome,
+    ]));
+    const codexLine = lines.find((l) => l.includes('codex-e2e'));
+    const reviewLine = lines.find((l) => l.includes('skill-e2e-review'));
+    expect(codexLine).toContain('all 8 tests SKIPPED');
+    expect(codexLine).toContain('verified nothing');
+    expect(reviewLine).not.toContain('SKIPPED');
   });
 });

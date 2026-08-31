@@ -393,6 +393,24 @@ export interface ShardOutcome {
   groupPid: number | null;
   /** Tests bun reported executing ("Ran N tests ..."), null when unknown. */
   executedTests: number | null;
+  /** Tests bun reported skipping (" N skip" count line), null when unknown.
+   *  "Ran N tests" COUNTS skips, so executedTests alone cannot distinguish a
+   *  shard that verified work from one whose every test self-skipped —
+   *  codex/gemini files green-by-skip on every CI runner (no binary) and the
+   *  weekly census read them as covered. */
+  skippedTests: number | null;
+}
+
+/**
+ * True when a shard "passed" without verifying anything: every test bun ran
+ * was a skip. Legitimate for external-service files on hosts without the
+ * binary, but it must surface as a census warning, never read as coverage.
+ */
+export function isAllSkippedPass(outcome: Pick<ShardOutcome, 'status' | 'executedTests' | 'skippedTests'>): boolean {
+  return outcome.status === 'passed'
+    && outcome.executedTests !== null
+    && outcome.executedTests > 0
+    && outcome.skippedTests === outcome.executedTests;
 }
 
 export interface ShardCommand {
@@ -562,7 +580,8 @@ export async function runPaidShard(
   const executedTests = summary.terminalTestCounts.length > 0
     ? summary.terminalTestCounts.reduce((a, b) => a + b, 0)
     : null;
-  return { shard: shardNumber, files, status, exitCode, elapsedMs, groupPid, executedTests };
+  const skippedTests = summary.terminalTestCounts.length > 0 ? summary.skippedTests : null;
+  return { shard: shardNumber, files, status, exitCode, elapsedMs, groupPid, executedTests, skippedTests };
 }
 
 export interface RunSummary {
@@ -636,6 +655,7 @@ export async function runPaidShards(
     elapsedMs: 0,
     groupPid: null,
     executedTests: null,
+    skippedTests: null,
   }));
 
   let next = 0;
@@ -659,6 +679,7 @@ export async function runPaidShards(
           elapsedMs: 0,
           groupPid: null,
           executedTests: null,
+          skippedTests: null,
         };
         console.error(`[test:paid] shard ${index + 1} could not run: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -678,9 +699,14 @@ export function formatSummary(summary: RunSummary): string[] {
     + `${summary.skippedByDiff} skipped by diff`,
   ];
   for (const outcome of summary.outcomes) {
+    // A pass whose every test skipped is labeled distinctly: it exited 0 but
+    // verified NOTHING (codex/gemini files on hosts without the binary).
+    // Status stays 'passed' — availability of an external service is not a
+    // repo regression — but the census must never read it as coverage.
+    const allSkipped = isAllSkippedPass(outcome) ? ` ⚠ all ${outcome.executedTests} tests SKIPPED — verified nothing` : '';
     lines.push(
       `  ${outcome.status.padEnd(15)} ${String(Math.round(outcome.elapsedMs / 1000)).padStart(5)}s  `
-      + outcome.files.join(' '),
+      + outcome.files.join(' ') + allSkipped,
     );
   }
   return lines;
@@ -786,7 +812,7 @@ export interface SliceResult {
   tier: PaidTier;
   sliceIndex: number;
   sliceCount: number;
-  outcomes: Array<Pick<ShardOutcome, 'files' | 'status' | 'exitCode' | 'elapsedMs' | 'executedTests'>>;
+  outcomes: Array<Pick<ShardOutcome, 'files' | 'status' | 'exitCode' | 'elapsedMs' | 'executedTests' | 'skippedTests'>>;
 }
 
 /**
@@ -970,6 +996,18 @@ async function main(): Promise<number> {
       for (const problem of verdict.problems) console.error(`  ✗ ${problem}`);
       return 1;
     }
+    // Census honesty: a 'passed' shard whose every test skipped verified
+    // nothing (external-service binary absent on the runner). Not a failure —
+    // service availability is host state, not a repo regression — but the
+    // report must say so, or the weekly lane reads codex/gemini as covered
+    // on runners that never install them.
+    const allSkipped = results.flatMap((r) => r.outcomes.filter(isAllSkippedPass));
+    if (allSkipped.length > 0) {
+      console.log(`[test:paid] report: ⚠ ${allSkipped.length} shard(s) passed with EVERY test skipped — they verified nothing:`);
+      for (const outcome of allSkipped) {
+        console.log(`  ⚠ ${outcome.files.join(' ')} (${outcome.executedTests} skipped — external service missing or tier mismatch)`);
+      }
+    }
     console.log('[test:paid] report: every planned shard accounted and passed');
     return 0;
   }
@@ -1023,8 +1061,8 @@ async function main(): Promise<number> {
       tier: manifest.tier,
       sliceIndex: options.sliceIndex,
       sliceCount: manifest.sliceCount,
-      outcomes: guarded.map(({ files, status, exitCode, elapsedMs, executedTests }) =>
-        ({ files, status, exitCode, elapsedMs, executedTests })),
+      outcomes: guarded.map(({ files, status, exitCode, elapsedMs, executedTests, skippedTests }) =>
+        ({ files, status, exitCode, elapsedMs, executedTests, skippedTests })),
     };
     fs.mkdirSync(evalDirBase, { recursive: true });
     const sliceResultPath = path.join(evalDirBase, `slice-${options.sliceIndex}.json`);
@@ -1102,6 +1140,7 @@ async function main(): Promise<number> {
     elapsedMs: 0,
     groupPid: null,
     executedTests: null,
+    skippedTests: null,
   }));
   const guardedOutcomes = applyHollowShardGuard(runSummary.outcomes, {
     evalsAll: process.env.EVALS_ALL === '1',
