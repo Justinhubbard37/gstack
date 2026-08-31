@@ -46,7 +46,13 @@ describe('session-runner two-phase timeout', () => {
     ].join('\n') + '\n', { mode: 0o755 });
 
     const realPath = process.env.PATH;
+    const realCI = process.env.CI;
     process.env.PATH = `${shimDir}:${realPath}`;
+    // This probe pins LOCAL grace semantics (caller honored verbatim). In CI
+    // the runner clamps explicit graces up to the 300s floor by design, so
+    // the small shim grace would never take effect — clear CI for the call
+    // and pin the floor itself in its own probe below.
+    delete process.env.CI;
     try {
       const started = Date.now();
       const result = await runSkillTest({
@@ -65,6 +71,7 @@ describe('session-runner two-phase timeout', () => {
       expect(wall).toBeLessThan(20_000);
     } finally {
       process.env.PATH = realPath;
+      if (realCI !== undefined) process.env.CI = realCI;
       Bun.spawnSync(['pkill', '-f', `sleep 6071\\.${process.pid}`], { timeout: 5_000 });
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -77,7 +84,12 @@ describe('session-runner two-phase timeout', () => {
     fs.writeFileSync(path.join(shimDir, 'claude'), `#!/bin/bash\nexec sleep 6072.${process.pid}\n`, { mode: 0o755 });
 
     const realPath = process.env.PATH;
+    const realCI = process.env.CI;
     process.env.PATH = `${shimDir}:${realPath}`;
+    // LOCAL semantics again: in CI the floor clamps this 2s grace to 300s
+    // (capped by timeout → 30s), which is exactly the false red this test
+    // shipped with. The floor's own behavior is pinned in the next probe.
+    delete process.env.CI;
     try {
       const started = Date.now();
       const result = await runSkillTest({
@@ -95,7 +107,49 @@ describe('session-runner two-phase timeout', () => {
       expect(result.costEstimate.turnsUsed).toBe(0);
     } finally {
       process.env.PATH = realPath;
+      if (realCI !== undefined) process.env.CI = realCI;
       Bun.spawnSync(['pkill', '-f', `sleep 6072\\.${process.pid}`], { timeout: 5_000 });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test('in CI the floor clamps an explicit low grace (adversarial pin — the clamp is real)', async () => {
+    // The floor exists because CI queueing converts a low grace into false
+    // reds; an explicit startupGraceMs must NOT bypass it (review finding:
+    // "the name promised a clamp the code lacked"). With CI set, a 2s grace
+    // request against a 6s timeout floors to min(300s, timeout) = 6s — the
+    // silent shim survives PAST the requested 2s and dies at the cap, still
+    // in the startup phase.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grace-'));
+    const shimDir = path.join(dir, 'bin');
+    fs.mkdirSync(shimDir);
+    fs.writeFileSync(path.join(shimDir, 'claude'), `#!/bin/bash\nexec sleep 6073.${process.pid}\n`, { mode: 0o755 });
+
+    const realPath = process.env.PATH;
+    const realCI = process.env.CI;
+    process.env.PATH = `${shimDir}:${realPath}`;
+    process.env.CI = '1';
+    try {
+      const started = Date.now();
+      const result = await runSkillTest({
+        prompt: 'ignored',
+        workingDirectory: dir,
+        maxTurns: 1,
+        timeout: 6_000,
+        startupGraceMs: 2_000, // must be clamped up, not honored
+        testName: 'grace-probe-ci-floor',
+      });
+      const wall = Date.now() - started;
+      expect(result.exitReason).toBe('timeout_startup');
+      // Proof the clamp fired: the kill lands at the 6s timeout cap, not the
+      // requested 2s (drain grace can only extend, never shorten).
+      expect(wall).toBeGreaterThanOrEqual(5_500);
+      expect(wall).toBeLessThan(20_000);
+    } finally {
+      process.env.PATH = realPath;
+      if (realCI !== undefined) process.env.CI = realCI;
+      else delete process.env.CI;
+      Bun.spawnSync(['pkill', '-f', `sleep 6073\\.${process.pid}`], { timeout: 5_000 });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
