@@ -159,7 +159,13 @@ describe('shard execution', () => {
     expect(lines.filter((l) => l.includes(' START ')).length).toBe(3);
     expect(lines.some((l) => /TIMED-OUT in \d+s/.test(l))).toBe(true);
     expect(lines.some((l) => /PASSED in \d+s/.test(l))).toBe(true);
-  }, 30_000);
+    // 90s, not the default 30s: this test spawns/kills three real children
+    // (one a busy-loop burning a full core) while 5 sibling shard processes
+    // compete for 8 vCPUs — observed blowing exactly the 30s ceiling at
+    // 30009ms under full-suite load while passing in isolation in 1.4s.
+    // Every assertion above is event-based; the only latency claim is the
+    // <30s kill-deadline sanity bound, which stays.
+  }, 90_000);
 
   test('exit 0 WITHOUT the terminal summary is FAILED — enforced for injected commands too', async () => {
     // The invisible-non-execution backstop: previously the paid runner
