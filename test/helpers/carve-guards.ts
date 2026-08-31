@@ -512,7 +512,7 @@ export const CARVE_GUARDS: Record<string, CarveGuard> = {
     },
     behavioral: 'external',
     externalTest: 'test/skill-e2e-autoplan-chain.test.ts', // phase-complete markers live ONLY in sections — its assertions ARE section-read proof
-    maxSkeletonBytes: 64_500, // + v1.78 AUQ spawned-trigger objectivity (explicit declaration + interactive fence); measured 64_106
+    maxSkeletonBytes: 65_100, // + v1.78 AUQ objectivity + #2745 broken-install preflight arm + outside-voice honest labeling; measured 64_668
     minUnionBytes: 85_000, // measured union 86,926
     mustContain: ['6 Decision Principles', 'TASTE DECISION', 'USER CHALLENGE', 'consensus', 'Restore Point'],
   },
