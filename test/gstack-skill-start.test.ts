@@ -321,6 +321,7 @@ describe('gstack-skill-start behavior', () => {
       expect(checkpoint).toContain(
         `touch "${path.join(freshGh, '.feature-prompted-continuous-checkpoint')}"`,
       );
+      expect(checkpoint).not.toContain('GSTACK_INSTRUCTION_BEGIN: feature-overlay');
       expect(checkpoint).not.toContain(
         path.join(projectSkillRoot, '.feature-prompted-continuous-checkpoint'),
       );
@@ -334,7 +335,19 @@ describe('gstack-skill-start behavior', () => {
       expect(overlay).toContain(
         `touch "${path.join(freshGh, '.feature-prompted-model-overlay')}"`,
       );
+      expect(overlay).not.toContain('GSTACK_INSTRUCTION_BEGIN: feature-checkpoint');
       expect(overlay).not.toContain(path.join(projectSkillRoot, '.feature-prompted-model-overlay'));
+
+      fs.writeFileSync(path.join(freshGh, '.feature-prompted-model-overlay'), '');
+      const acknowledged = execFileSync(localStart, ['--skill', 'testskill'], {
+        encoding: 'utf-8',
+        cwd: projectRoot,
+        env,
+      });
+      expect(acknowledged).not.toContain('GSTACK_INSTRUCTION_BEGIN: feature-checkpoint');
+      expect(acknowledged).not.toContain('GSTACK_INSTRUCTION_BEGIN: feature-overlay');
+      expect(acknowledged).not.toContain('.feature-prompted-continuous-checkpoint');
+      expect(acknowledged).not.toContain('.feature-prompted-model-overlay');
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true });
       fs.rmSync(freshGh, { recursive: true, force: true });
