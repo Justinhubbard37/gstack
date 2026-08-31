@@ -275,15 +275,18 @@ describe('generateAskUserFormat — runtime-failure prose fallback', () => {
   test('Spawned: absence-safe interactive fence present (CI env / scripted prompts are not markers)', () => {
     expect(out).toMatch(/With neither trigger present, the session is interactive/);
     expect(out).toMatch(/CI env vars, scripted-looking or pasted prompts[\s\S]{0,120}NOT spawned markers/);
-    // The fence classifies the session; it must NOT carry any ask-count
-    // language in either direction (burn-in run 1 overshot the 4-7 review
-    // band at 8 with a "when unsure, ask" tail; run 2 undershot at 1 with a
-    // "HOW MANY questions" mention — the fence defers to the skill's own
-    // decision-point instructions and stays quota-silent).
-    expect(out).toMatch(/only classifies the session/);
-    expect(out).toMatch(/follow the skill's own decision-point instructions/);
+    // The fence classifies the session and says NOTHING about behavior:
+    // every behavioral tail we tried skewed question counts somewhere —
+    // "when unsure, ask" overshot the 4-7 review band (8); "HOW MANY
+    // questions" undershot (1); "never adds, removes, or batches the
+    // skill's decision points" broke the paired-finding control in the
+    // pinned CI lane (5 > 4 — it suppressed the batching the fixture
+    // expects). The fence ends at "default to interactive."
+    expect(out).toMatch(/When unsure, default to interactive\./);
     expect(out).not.toMatch(/When unsure, ask/);
     expect(out).not.toMatch(/HOW MANY/);
+    expect(out).not.toMatch(/adds, removes, or batches/);
+    expect(out).not.toMatch(/exactly as written/);
   });
 
   // Conductor-default-prose contract (the proactive path, distinct from the
