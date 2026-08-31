@@ -21,7 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getProjectEvalDir, isPartialEval, type EvalResult } from '../test/helpers/eval-store';
+import { getProjectEvalDir, isPartialEval, isFinalizedEvalResultFile, type EvalResult } from '../test/helpers/eval-store';
 import { flakeLedgerPath, type FlakeLedgerEntry } from './test-free-shards';
 
 interface TestSeries {
@@ -73,21 +73,36 @@ export function aggregate(evalFiles: string[]): Map<string, TestSeries> {
   return series;
 }
 
-export function collectEvalFiles(dir: string): string[] {
+export function collectEvalFiles(dir: string, sinceDays = 60): string[] {
   if (!fs.existsSync(dir)) return [];
+  const cutoff = Date.now() - sinceDays * 86_400_000;
   const out: string[] = [];
   for (const name of fs.readdirSync(dir, { recursive: true }) as string[]) {
-    if (!name.endsWith('.json') || path.basename(name).startsWith('_partial')) continue;
-    out.push(path.join(dir, name));
+    if (!isFinalizedEvalResultFile(name)) continue;
+    const full = path.join(dir, name);
+    try {
+      // Recency bound (review finding): E2E results embed full transcripts
+      // (MBs each) and the scan is otherwise unbounded over all-time history.
+      if (fs.statSync(full).mtimeMs < cutoff) continue;
+    } catch { continue; }
+    out.push(full);
   }
   return out;
 }
 
 function readFreeLedger(): FlakeLedgerEntry[] {
+  // Per-LINE parse: one malformed JSONL line (torn write, manual edit) must
+  // drop that line, never vanish the whole series (codex adversarial finding).
+  let raw: string;
   try {
-    return fs.readFileSync(flakeLedgerPath(), 'utf-8')
-      .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    raw = fs.readFileSync(flakeLedgerPath(), 'utf-8');
   } catch { return []; }
+  const out: FlakeLedgerEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* torn line — skip */ }
+  }
+  return out;
 }
 
 if (import.meta.main) {
@@ -95,8 +110,10 @@ if (import.meta.main) {
   const dirFlag = argv.indexOf('--dir');
   const dir = dirFlag !== -1 ? argv[dirFlag + 1] : getProjectEvalDir();
   const asJson = argv.includes('--json');
+  const sinceFlag = argv.indexOf('--since-days');
+  const sinceDays = sinceFlag !== -1 ? Number(argv[sinceFlag + 1]) || 60 : 60;
 
-  const files = collectEvalFiles(dir);
+  const files = collectEvalFiles(dir, sinceDays);
   const series = [...aggregate(files).values()]
     .sort((a, b) => b.retriedPasses - a.retriedPasses || (b.fails / b.runs) - (a.fails / a.runs));
   const ledger = readFreeLedger();

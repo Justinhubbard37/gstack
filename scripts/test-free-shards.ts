@@ -1037,10 +1037,28 @@ export interface FlakeLedgerEntry {
   file: string;
   /** Shard the original failure surfaced in, when attributable. */
   shard?: number;
+  /** Code-state attribution (review finding): without branch/sha the series
+   *  can't tie an entry to the state that produced it, and the WS16
+   *  promotion evidence needs exactly that. */
+  branch?: string;
+  git_sha?: string;
 }
 
 export function flakeLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
-  return env.GSTACK_FLAKE_LEDGER || path.join(os.tmpdir(), 'gstack-flake-ledger.jsonl');
+  if (env.GSTACK_FLAKE_LEDGER) return env.GSTACK_FLAKE_LEDGER;
+  // Local default: per-PROJECT, not the machine-global tmpdir — sibling
+  // Conductor worktrees of DIFFERENT repos must not interleave into one
+  // series (review finding). CI always sets GSTACK_FLAKE_LEDGER explicitly.
+  try {
+    const slug = spawnSync('bash', ['-c', '~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null'], { stdio: 'pipe', timeout: 3000 })
+      .stdout?.toString().match(/^SLUG=(.+)$/m)?.[1];
+    if (slug) {
+      const dir = path.join(os.homedir(), '.gstack', 'projects', slug);
+      fs.mkdirSync(dir, { recursive: true });
+      return path.join(dir, 'flake-ledger.jsonl');
+    }
+  } catch { /* fall through */ }
+  return path.join(os.tmpdir(), 'gstack-flake-ledger.jsonl');
 }
 
 export function appendFlakeLedger(
@@ -1552,6 +1570,11 @@ async function main(): Promise<number> {
         // Durable record (WS1): console lines vanish with the scrollback; the
         // ledger makes repeat offenders rankable across runs (eval:flake-rank).
         const ts = new Date().toISOString();
+        // Two separate calls: `rev-parse --abbrev-ref HEAD HEAD` abbreviates
+        // BOTH revs, printing the branch twice — git_sha recorded the branch
+        // name (codex adversarial finding).
+        const ledgerBranch = (spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ROOT, encoding: 'utf8', timeout: 5000 }).stdout ?? '').trim();
+        const ledgerSha = (spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', timeout: 5000 }).stdout ?? '').trim();
         appendFlakeLedger(
           flakyFiles.map((file) => ({
             ts,
@@ -1559,6 +1582,8 @@ async function main(): Promise<number> {
             kind: 'flaky-pass' as const,
             file,
             shard: outcomes.find((o) => o.failingFiles.includes(file))?.shard,
+            ...(ledgerBranch ? { branch: ledgerBranch } : {}),
+            ...(ledgerSha ? { git_sha: ledgerSha.slice(0, 12) } : {}),
           })),
           flakeLedgerPath(),
         );

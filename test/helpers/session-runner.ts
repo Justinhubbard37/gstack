@@ -162,8 +162,13 @@ export async function runSkillTest(options: {
     runId,
     env: extraEnv,
   } = options;
+  // The CI floor is a FLOOR, not a default: an explicit startupGraceMs below
+  // 300s in CI would re-open the queueing-becomes-false-red hole the floor
+  // exists for (review finding — the name promised a clamp the code lacked).
+  // Local runs honor the caller verbatim; timeout still caps everything.
+  const requestedGrace = options.startupGraceMs ?? (process.env.CI ? STARTUP_GRACE_CI_FLOOR_MS : STARTUP_GRACE_MS);
   const startupGraceMs = Math.min(
-    options.startupGraceMs ?? (process.env.CI ? STARTUP_GRACE_CI_FLOOR_MS : STARTUP_GRACE_MS),
+    process.env.CI ? Math.max(requestedGrace, STARTUP_GRACE_CI_FLOOR_MS) : requestedGrace,
     timeout,
   );
   const model = options.model ?? process.env.EVALS_MODEL ?? 'claude-sonnet-4-6';
@@ -222,9 +227,17 @@ export async function runSkillTest(options: {
   proc.stdin!.end();
   const stdoutWeb = Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>;
   const stderrWeb = Readable.toWeb(proc.stderr!) as ReadableStream<Uint8Array>;
+  // 'exit' vs 'close' matters here: 'close' waits for stdout/stderr to
+  // drain, which an orphaned grandchild can hold open long after claude
+  // itself died with a REAL exit code — labeling must key off 'exit' or an
+  // auth failure gets triaged as 'timeout_startup' availability noise
+  // (claude adversarial finding). procExited stays 'close'-based (streams
+  // complete) for the drain race below.
+  let childExited = false;
   const procExited: Promise<number> = new Promise((resolve) => {
-    proc.on('close', (code) => resolve(code ?? 1));
-    proc.on('error', () => resolve(1));
+    proc.on('exit', () => { childExited = true; });
+    proc.on('close', (code) => { childExited = true; resolve(code ?? 1); });
+    proc.on('error', () => { childExited = true; resolve(1); });
   });
 
   // Two-phase timeout. Phase 1 (startup): no NDJSON byte yet — a shorter
@@ -240,8 +253,16 @@ export async function runSkillTest(options: {
   let phaseTimer: ReturnType<typeof setTimeout>;
 
   const killRun = (startupPhase: boolean): void => {
-    timedOut = true;
-    timedOutInStartup = startupPhase;
+    // Labeling and unblocking are SEPARATE concerns: a timer firing after
+    // the child already exited must not relabel a real exit (auth error,
+    // crash) as a timeout — but it must STILL group-kill and cancel the
+    // reader, or an orphan holding the pipes re-creates the exact
+    // blocked-drain hang this runner fixed (an early `return` here was the
+    // bug the adversarial pass caught in the first version of this guard).
+    if (!childExited) {
+      timedOut = true;
+      timedOutInStartup = startupPhase;
+    }
     // Group SIGKILL (mirrors runShardChild): claude AND every tool
     // subprocess it spawned die together — a bare proc.kill() left orphans
     // that inherited our stdout/stderr pipes and kept the API burning
@@ -264,6 +285,7 @@ export async function runSkillTest(options: {
   let liveTurnCount = 0;
   let liveToolCount = 0;
   let firstResponseMs = 0;
+  let workPhaseArmed = false;
   let lastToolTime = 0;
   let maxInterTurnMs = 0;
   const stderrPromise = new Response(stderrWeb).text();
@@ -284,7 +306,11 @@ export async function runSkillTest(options: {
         collectedLines.push(line);
 
         // Track time to first NDJSON line (measures latency from spawn to first Claude response)
-        if (firstResponseMs === 0) {
+        if (!workPhaseArmed) {
+          // Flag, not `firstResponseMs === 0`: a first line landing in the
+          // same millisecond as spawn would read as "not yet seen" and leave
+          // the startup timer live for the whole run (claude adversarial).
+          workPhaseArmed = true;
           firstResponseMs = Date.now() - startTime;
           // First byte: startup phase over — arm the work phase for the
           // REMAINING budget (total wall stays <= timeout).

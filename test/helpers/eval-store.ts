@@ -193,6 +193,21 @@ export function isPartialEval(data: unknown, filename: string): boolean {
 }
 
 /**
+ * Is this path a FINALIZED eval-store result file? Single owner of the
+ * filename taxonomy (manifest.json / slice-N.json are runner artifacts,
+ * _partial* are in-progress accumulators) — the paid runner's report mode
+ * and eval-flake-rank both consume this instead of re-encoding the rule
+ * (review finding: the rule lived in three places).
+ */
+export function isFinalizedEvalResultFile(relPath: string): boolean {
+  const base = path.basename(relPath);
+  if (!base.endsWith('.json')) return false;
+  if (base === 'manifest.json' || /^slice-\d+\.json$/.test(base)) return false;
+  if (base.startsWith('_partial')) return false;
+  return true;
+}
+
+/**
  * List eval JSON files in `evalDir` plus one level of `<evalDir>/shards/<slug>/`
  * subdirectories (where the sharded paid runner points each shard's collector).
  * Returns absolute paths. Missing dirs yield [].
@@ -900,6 +915,7 @@ export class EvalCollector {
     const totalDuration = this.tests.reduce((s, t) => s + t.duration_ms, 0);
     const passed = this.tests.filter(t => t.passed).length;
 
+    const flaky = this.flakyRetries();
     const result: EvalResult = {
       schema_version: SCHEMA_VERSION,
       version,
@@ -917,7 +933,7 @@ export class EvalCollector {
       wall_clock_ms: Date.now() - this.createdAt,
       tests: this.tests,
       ...(this.shard ? { shard: this.shard } : {}),
-      ...(this.flakyRetries().length > 0 ? { flaky_retries: this.flakyRetries() } : {}),
+      ...(flaky.length > 0 ? { flaky_retries: flaky } : {}),
     };
 
     // Write eval file

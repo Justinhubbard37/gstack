@@ -64,7 +64,7 @@ import {
 } from './test-strict-output';
 import { PAID_TEST_GLOBS, isPaidTestFile } from '../test/helpers/paid-test-set';
 import { PERIODIC_CI_EXCLUDE } from '../test/helpers/periodic-exclude-data';
-import { getProjectEvalDir, getClaudeCliVersion } from '../test/helpers/eval-store';
+import { getProjectEvalDir, getClaudeCliVersion, isFinalizedEvalResultFile } from '../test/helpers/eval-store';
 import { preflightAnthropicApi } from '../test/helpers/anthropic-preflight';
 import {
   detectBaseBranch,
@@ -575,7 +575,11 @@ export async function runPaidShard(
     // Close the spool even when the spawn itself failed.
     await new Promise<void>((resolve) => logStream.end(() => resolve()));
     try {
-      fs.rmSync(stateDir, { recursive: true, force: true });
+      // async rm: a SIGKILLed shard can leave a full git workspace + Chromium
+      // profile here; a synchronous recursive delete on the parent's event
+      // loop would stall every sibling shard's stream classification and
+      // wall timers for seconds (review finding).
+      await fs.promises.rm(stateDir, { recursive: true, force: true });
     } catch {
       // Best-effort: a locked file must not turn a real verdict into an
       // exception (same posture as the free runner's cleanup).
@@ -1035,7 +1039,7 @@ async function main(): Promise<number> {
     // Source: the finalized eval-store JSONs inside the slice artifacts.
     const flaky: Array<{ name: string; attempts: number; file: string }> = [];
     for (const name of fs.readdirSync(options.reportDir, { recursive: true }) as string[]) {
-      if (!/\.json$/.test(name) || /manifest\.json$|slice-\d+\.json$|^_partial|\/_partial/.test(name)) continue;
+      if (!isFinalizedEvalResultFile(name)) continue;
       try {
         const parsed = JSON.parse(fs.readFileSync(path.join(options.reportDir, name), 'utf-8')) as { flaky_retries?: Array<{ name: string; attempts: number }> };
         for (const f of parsed.flaky_retries ?? []) flaky.push({ ...f, file: name });
