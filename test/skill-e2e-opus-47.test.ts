@@ -61,15 +61,18 @@ const INSTALLED_SKILLS = [
 function mkEvalRoot(suffix: string, includeOverlay: boolean): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `opus47-${suffix}-`));
 
-  // Regenerate at opus-4-7 so the per-skill SKILL.md files reflect that
-  // model's overlay. If includeOverlay is false we'll re-regen at default
-  // later just for the root SKILL.md copy. For individual skills, opus-4-7
-  // content doesn't matter for the routing test (we only need discovery).
+  // Render at opus-4-7 INTO A MKDTEMP via --out-dir — never the live tree.
+  // The previous cwd=ROOT regeneration rewrote every in-repo SKILL.md
+  // mid-run while concurrent paid shards copyFileSync those same files in
+  // their beforeAll (EVALS_JOBS>=4 locally, 2 per CI slice): a sibling could
+  // capture a half-regenerated or opus-rendered SKILL.md, and a timeout
+  // before afterAll left the whole tree rendered at the wrong model for
+  // every later shard. --out-dir mirrors the repo layout (<out>/<skill>/
+  // SKILL.md), which is all this fixture reads.
+  const renderDir = fs.mkdtempSync(path.join(os.tmpdir(), `opus47-render-${suffix}-`));
   const result = spawnSync(
     'bun',
-    ['run', 'scripts/gen-skill-docs.ts', '--model', includeOverlay ? 'opus-4-7' : 'claude'],
-    // LIVE-REPO CWD: gen-skill-docs reads .tmpl sources and regenerates the
-    // in-repo SKILL.md files (restored to default in afterAll below).
+    ['run', 'scripts/gen-skill-docs.ts', '--model', includeOverlay ? 'opus-4-7' : 'claude', '--out-dir', renderDir],
     { cwd: ROOT, stdio: 'pipe', encoding: 'utf-8', timeout: 60_000 },
   );
   if (result.status !== 0) {
@@ -82,12 +85,13 @@ function mkEvalRoot(suffix: string, includeOverlay: boolean): string {
   // (CLAUDE.md: "E2E test fixtures: extract, don't copy").
   const skillsDir = path.join(tmp, '.claude', 'skills');
   for (const skill of INSTALLED_SKILLS) {
-    const src = path.join(ROOT, skill, 'SKILL.md');
+    const src = path.join(renderDir, skill, 'SKILL.md');
     if (!fs.existsSync(src)) continue;
     const destDir = path.join(skillsDir, skill);
     fs.mkdirSync(destDir, { recursive: true });
     fs.writeFileSync(path.join(destDir, 'SKILL.md'), extractSkillHead(src));
   }
+  fs.rmSync(renderDir, { recursive: true, force: true });
 
   // Extract the opus-4-7 model-overlay content from the checked-in file
   // so we can inline it into CLAUDE.md when includeOverlay is true.
@@ -167,17 +171,10 @@ const ROUTING_CASES: RoutingCase[] = [
 describeE2E('Opus 4.7 overlay behavior evals', () => {
   afterAll(() => {
     evalCollector?.finalize();
-    // Restore working tree: mkEvalRoot runs `gen-skill-docs` with various
-    // --model flags, leaving the in-repo SKILL.md files generated at
-    // whichever model ran last. Reset to the default (claude) so the tree
-    // matches what would be checked in.
-    spawnSync('bun', ['run', 'scripts/gen-skill-docs.ts'], {
-      // LIVE-REPO CWD: restores the in-repo SKILL.md files to the default
-      // model render after mkEvalRoot's --model regens.
-      cwd: ROOT,
-      stdio: 'pipe',
-      timeout: 60_000,
-    });
+    // No tree restore needed: mkEvalRoot renders into a mkdtemp via
+    // --out-dir, so the live repo's SKILL.md files are never touched — a
+    // timeout mid-run can no longer strand the tree at the wrong model for
+    // concurrent shards.
   });
 
   test(
