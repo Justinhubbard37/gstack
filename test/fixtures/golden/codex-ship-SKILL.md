@@ -2452,7 +2452,7 @@ the PR (a live-format credential inside the fence still blocks).
 REDACT_VIS=$($GSTACK_ROOT/bin/gstack-config get redact_repo_visibility 2>/dev/null)
 [ -z "$REDACT_VIS" ] && REDACT_VIS=$(gh repo view --json visibility -q .visibility 2>/dev/null | tr 'A-Z' 'a-z')
 REDACT_VIS="${REDACT_VIS:-unknown}"
-PR_BODY_FILE=$(mktemp)
+PR_BODY_FILE=$(mktemp) || { echo "ERROR: mktemp failed — cannot scan the PR body; refusing to create the PR unscanned." >&2; exit 1; }
 cat > "$PR_BODY_FILE" <<'PR_BODY_EOF'
 <PR body from above>
 PR_BODY_EOF
@@ -2482,10 +2482,10 @@ rm -f "$PR_BODY_FILE"
 ```bash
 # MR title MUST start with v$NEW_VERSION — enforced on every run, no exceptions.
 # (See Step 19 idempotency block + bin/gstack-pr-title-rewrite.sh for the rule.)
-glab mr create -b <base> -t "v$NEW_VERSION <type>: <summary>" -d "$(cat <<'EOF'
-<MR body from above>
-EOF
-)"
+# Send the SCANNED file's bytes — scan-at-sink means never re-render the body
+# from a fresh heredoc (that reopens the scan-vs-send gap).
+glab mr create -b <base> -t "v$NEW_VERSION <type>: <summary>" -d "$(cat "$PR_BODY_FILE")"
+rm -f "$PR_BODY_FILE"
 ```
 
 **If neither CLI is available:**

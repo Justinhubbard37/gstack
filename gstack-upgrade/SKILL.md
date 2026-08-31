@@ -170,12 +170,18 @@ If `$STASH_OUTPUT` contains "Saved working directory", warn the user: "Note: loc
 **For vendored installs** (vendored, vendored-global):
 ```bash
 PARENT=$(dirname "$INSTALL_DIR")
-TMP_DIR=$(mktemp -d)
-git clone --depth 1 https://github.com/garrytan/gstack.git "$TMP_DIR/gstack"
+TMP_DIR=$(mktemp -d) || { echo "ERROR: mktemp failed — aborting upgrade (install untouched)." >&2; exit 1; }
+git clone --depth 1 https://github.com/garrytan/gstack.git "$TMP_DIR/gstack" || { echo "ERROR: clone failed — aborting upgrade (install untouched)." >&2; rm -rf "$TMP_DIR"; exit 1; }
 mv "$INSTALL_DIR" "$INSTALL_DIR.bak"
-mv "$TMP_DIR/gstack" "$INSTALL_DIR"
-cd "$INSTALL_DIR" && ./setup
-rm -rf "$INSTALL_DIR.bak" "$TMP_DIR"
+if mv "$TMP_DIR/gstack" "$INSTALL_DIR"; then
+  cd "$INSTALL_DIR" && ./setup
+  rm -rf "$INSTALL_DIR.bak" "$TMP_DIR"
+else
+  mv "$INSTALL_DIR.bak" "$INSTALL_DIR"
+  echo "ERROR: swap failed — previous install restored; upgrade aborted." >&2
+  rm -rf "$TMP_DIR"
+  exit 1
+fi
 ```
 
 ### Step 4.5: Handle local vendored copy

@@ -123,6 +123,15 @@ function flag(name: string): boolean {
 
 function readInput(): string {
   const file = arg("--from-file");
+  // An explicitly-passed EMPTY path must error, not silently fall through to
+  // stdin: skill blocks pass "$FILE" from a $(mktemp) that may have failed,
+  // and the stdin fallback then scans nothing while looking green (#2679).
+  if (file === "") {
+    process.stderr.write(
+      "gstack-redact: --from-file requires a non-empty path (did mktemp fail?)\n",
+    );
+    process.exit(1);
+  }
   if (file) {
     const st = fs.statSync(file);
     if (st.size > MAX_STDIN_BYTES) {
