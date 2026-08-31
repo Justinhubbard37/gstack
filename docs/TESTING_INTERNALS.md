@@ -72,8 +72,14 @@ Flake telemetry rides the store: every recorded test carries its 1-based
 `attempt` (a pass-on-attempt-2 stays visible forever — bun's own stream hides
 it), runs list `flaky_retries`, the report warns on passed-only-on-retry
 tests, and `bun run eval:flake-rank` ranks the series (retried passes first,
-then failure rate; 60-day recency bound; the free lane's flake ledger is
-folded in).
+then failure rate; 60-day recency bound on eval files; the free lane's flake
+ledger is folded in from `flakeLedgerPath()` — override with
+`GSTACK_FLAKE_LEDGER`, the same env var the CI free lane sets before
+uploading the ledger as the `flake-ledger` artifact). Census integrity is
+enforced from the free suite: every `E2E_TOUCHFILES` / `LLM_JUDGE_TOUCHFILES`
+key must name a living paid test (`test/touchfiles.test.ts`'s reverse
+invariant), and `git show <sha>:path` fixtures are banned — vendor the bytes
+instead (`test/git-ref-fixture-tripwire.test.ts`).
 
 **CI planner/executor/report.** `--emit-plan <path> --slices K` computes
 selection + the slice plan ONCE (killing per-slice selector divergence);
@@ -96,7 +102,9 @@ required per entry; removal re-activates the file), plus a weekly
 image pins the claude CLI to an exact version (`.github/docker/Dockerfile.ci`,
 enforced by `test/ci-image-cli-pin.test.ts` — bumps ride PRs that run the PTY
 gate), and every eval-store run records `claude --version`, resolved once in
-the runner parent, so a TUI-drift flake hunt is a grep, not archaeology.
+the runner parent and handed to shard children as `GSTACK_CLAUDE_CLI_VERSION`
+(never spawned on a test thread), so a TUI-drift flake hunt is a grep, not
+archaeology.
 
 **Timeout policy.** Paid tests use the tiers in
 `test/helpers/eval-budgets.ts` (JUDGE/CAPTURE/CAPTURE_LONG/PTY/PTY_LONG);
@@ -134,4 +142,7 @@ Two runner knobs exist for these environments (both no-ops unless set):
 serial mega-shard and 6-way sharding both saturate the per-process syscall
 supervisor), and `GSTACK_FREE_RETRY_FLAKY=1` re-runs attributed failures once
 serially, downgrading a clean retry to a loud FLAKY-PASS (capped at 5 files so
-a broken tree can't masquerade as flaky).
+a broken tree can't masquerade as flaky). The required CI free lane sets the
+retry knob too, appending every flaky pass to the JSONL ledger it uploads
+(`GSTACK_FLAKE_LEDGER`) — a flaky pass never reds the lane, but it never
+disappears either.

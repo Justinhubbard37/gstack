@@ -168,7 +168,9 @@ silent truncation can never report green. Pass `--verbose` to forward the full
 child stream; `--wall-timeout <secs>` overrides the per-shard kill deadline.
 `GSTACK_FREE_JOBS=<n>` overrides the shard count (digits only, loud on garbage),
 and `GSTACK_FREE_RETRY_FLAKY=1` opts into one serial retry pass for
-syscall-supervised sandboxes (off by default — dev boxes should see flakes).
+syscall-supervised sandboxes (off by default locally — dev boxes should see
+flakes; the required CI free lane turns it on and uploads every flaky pass
+in a JSONL ledger artifact that `bun run eval:flake-rank` folds in).
 Working in a cloud sandbox? Run `scripts/sandbox-doctor.sh` once per boot to
 make the suite run green (details in
 [docs/TESTING_INTERNALS.md](docs/TESTING_INTERNALS.md)).

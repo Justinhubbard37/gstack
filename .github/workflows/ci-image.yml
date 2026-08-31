@@ -3,7 +3,7 @@ on:
   # Weekly self-heal (Monday 4am UTC) — deliberately 2h BEFORE
   # evals-periodic's 6am cron so the weekly eval run finds the image instead
   # of racing a half-pushed tag. With the claude CLI pinned in Dockerfile.ci
-  # (v1.76+), this cron no longer pulls CLI updates: when the content-hash
+  # (v1.77+), this cron no longer pulls CLI updates: when the content-hash
   # tag already exists it's a ~30s no-op, and it only rebuilds if the tag
   # was somehow lost. CLI bumps happen by editing the Dockerfile pin in a PR
   # that runs the PTY gate against the new TUI.
