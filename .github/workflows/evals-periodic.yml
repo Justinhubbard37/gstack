@@ -292,7 +292,11 @@ jobs:
         run: |
           set +e
           EVALS_TIER=periodic bun run scripts/test-paid-shards.ts --tier periodic --report /tmp/paid-report | tee /tmp/report.txt
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          # PIPESTATUS[0], NOT $?: GitHub's default run-step shell is
+          # `bash -e {0}` with NO pipefail, so $? after the pipe is tee's
+          # exit (always 0) — the fail-closed gate was silently fail-open
+          # (caught by the ship review army; the wiring test now pins this).
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       # A red weekly lane nobody must action is waste — upsert ONE tracking
       # issue (never a new issue per week) with the reconciliation output, so

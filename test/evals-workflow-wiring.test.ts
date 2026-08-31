@@ -75,12 +75,46 @@ describe('evals.yml sliced-lane wiring (post-matrix)', () => {
     expect(matrices[0]).toEqual(Array.from({ length: n }, (_, i) => i + 1));
   });
 
-  test('the PR comment survived the matrix-report deletion (moved to slices-report)', () => {
+  test('reconcile exit is captured via PIPESTATUS, never $? after a pipe', () => {
+    // GitHub's default run-step shell is `bash -e {0}` with NO pipefail, so
+    // `$?` after `... | tee` is tee's exit — always 0. That made the
+    // fail-closed reconcile gate silently fail-open (ship review army,
+    // 2026-08-31). Both lanes must read PIPESTATUS[0].
+    for (const [name, source] of [['evals.yml', evalsYml], ['evals-periodic.yml', periodicYml]] as const) {
+      const reconcileBlocks = [...source.matchAll(/--report[^\n]*\| tee[^\n]*\n([\s\S]{0,400}?)GITHUB_OUTPUT/g)];
+      expect(reconcileBlocks.length, `${name}: expected a tee'd reconcile step`).toBeGreaterThanOrEqual(1);
+      for (const block of reconcileBlocks) {
+        expect(block[1], `${name} reconcile captures tee's exit, not the runner's`).toContain('PIPESTATUS[0]');
+        expect(block[1]).not.toMatch(/exit=\$\?/);
+      }
+    }
+  });
+
+  test('the PR comment survived the matrix-report deletion (moved to slices-comment)', () => {
     // Keyed on the upsert marker so the migration keeps updating the SAME
     // comment; and the job holding it needs the issues permission (#1802).
     expect(evalsYml).toContain('## E2E Evals');
     expect(evalsYml).toMatch(/pull-requests: write/);
     expect(evalsYml).toMatch(/issues: write/);
+  });
+
+  test('the write-token job runs ZERO repo code (token/exec separation)', () => {
+    // slices-report executes PR-authored code (bun install + the reconcile
+    // runner), so it must hold contents:read ONLY; the write token lives in
+    // slices-comment, which may only download artifacts and run jq/gh —
+    // $GITHUB_ENV persistence is job-scoped, so this split IS the trust
+    // boundary (codex adversarial, 2026-08-31; the matrix-era report job had
+    // this property and the consolidation briefly regressed it).
+    const commentJob = evalsYml.slice(evalsYml.indexOf('  slices-comment:'));
+    expect(commentJob.length).toBeGreaterThan(100);
+    expect(commentJob).not.toContain('actions/checkout');
+    expect(commentJob).not.toContain('bun install');
+    expect(commentJob).not.toMatch(/run: .*bun run/);
+    expect(commentJob).not.toContain('uses: ./');
+    // And the code-executing report job must NOT hold write scopes.
+    const reportJob = evalsYml.slice(evalsYml.indexOf('  slices-report:'), evalsYml.indexOf('  slices-comment:'));
+    expect(reportJob).not.toMatch(/pull-requests: write/);
+    expect(reportJob).not.toMatch(/issues: write/);
   });
 });
 

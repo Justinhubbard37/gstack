@@ -242,13 +242,18 @@ jobs:
     # missing slice artifact reading as green is the class this lane kills.
     if: always() && needs.plan-slices.result == 'success'
     timeout-minutes: 5
+    # contents:read ONLY — this job executes PR-authored code (bun install
+    # lifecycle scripts + the reconcile runner from the PR checkout), so it
+    # must never hold a write-scoped token. The PR comment lives in the
+    # separate slices-comment job below, which runs NO repo code: a
+    # $GITHUB_ENV/BASH_ENV persistence trick is job-scoped, so the split is
+    # the trust boundary (codex adversarial finding, 2026-08-31 — the old
+    # matrix-era report job had this separation and the consolidation had
+    # regressed it).
     permissions:
       contents: read
-      pull-requests: write
-      # The comment upsert calls the REST `/issues/{n}/comments` endpoints
-      # (gh api ... issues/comments). With GITHUB_TOKEN those are gated by the
-      # `issues` permission, not `pull-requests` (#1802 CI fix).
-      issues: write
+    outputs:
+      reconcile-exit: ${{ steps.reconcile.outputs.exit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -276,31 +281,82 @@ jobs:
         run: |
           set +e
           EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --report /tmp/paid-report | tee /tmp/report.txt
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          # PIPESTATUS[0], NOT $?: GitHub's default run-step shell is
+          # `bash -e {0}` with NO pipefail, so $? after the pipe is tee's
+          # exit (always 0) — the fail-closed gate was silently fail-open
+          # (caught by the ship review army; the wiring test now pins this).
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      # PR comment sourced from the slice artifacts' eval-store JSONs
-      # (shards/<slug>/*.json inside each paid-slice-N artifact). Replaces the
-      # deleted matrix-artifact report job; keeps the "## E2E Evals" marker so
-      # the upsert keeps updating the same comment across the migration. Runs
-      # even when reconciliation failed — a red lane on the PR is the point.
+      - name: Upload reconciliation output for the comment job
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: report-verdict
+          path: /tmp/report.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail the workflow when reconciliation failed
+        if: steps.reconcile.outputs.exit != '0'
+        run: exit 1
+
+  # PR comment in its OWN job with the write token and ZERO repo code: no
+  # checkout, no bun install — only downloaded artifacts, jq, and gh. See the
+  # trust-boundary note on slices-report.
+  slices-comment:
+    runs-on: ubicloud-standard-2
+    needs: slices-report
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.slices-report.result != 'skipped'
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      # The comment upsert calls the REST `/issues/{n}/comments` endpoints
+      # (gh api ... issues/comments). With GITHUB_TOKEN those are gated by the
+      # `issues` permission, not `pull-requests` (#1802 CI fix).
+      issues: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: paid-slice-[0-9]*
+          path: /tmp/paid-report
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: report-verdict
+          path: /tmp/verdict
+        continue-on-error: true
+
+      # Sourced from the slice artifacts' eval-store JSONs. Keeps the
+      # "## E2E Evals" marker so the upsert keeps updating the same comment.
+      # Runs even when reconciliation failed — a red lane on the PR is the point.
       - name: Post PR comment
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RECONCILE_EXIT: ${{ steps.reconcile.outputs.exit }}
+          RECONCILE_EXIT: ${{ needs.slices-report.outputs.reconcile-exit }}
         run: |
           # shellcheck disable=SC2086,SC2059
           RESULTS=$(find /tmp/paid-report -name '*.json' ! -name 'manifest.json' ! -name 'slice-*.json' ! -name '_partial*' 2>/dev/null | sort)
-          TOTAL=0; PASSED=0; FAILED=0; COST="0"
+          TOTAL=0; PASSED=0; FAILED=0; FLAKY=0; COST="0"
           SUITE_LINES=""
           for f in $RESULTS; do
             if ! jq -e '.total_tests' "$f" >/dev/null 2>&1; then
               echo "Skipping malformed JSON: $f"
               continue
             fi
-            T=$(jq -r '.total_tests // 0' "$f")
-            P=$(jq -r '.passed // 0' "$f")
-            F=$(jq -r '.failed // 0' "$f")
+            # FINAL-attempt accounting: eval-store keeps EVERY retry attempt
+            # as its own record (that's the flake telemetry), so counting raw
+            # records marks a pass-on-retry as a failure and inflates totals.
+            # Group by test name, judge the LAST record — flaky passes render
+            # as the ⚠ line, never as ❌ (WS1 policy: recorded, not blocking).
+            # Guarded: a file with total_tests but a null/non-array `tests`
+            # passes the -e probe, the group_by then fails, and an empty $T
+            # would abort the whole step under bash -e ([ "" -eq 0 ] is an
+            # error) — killing the comment on exactly the corrupted-artifact
+            # runs where the red evidence matters (claude adversarial).
+            STATS=$(jq -r '[.tests | group_by(.name)[] | last] as $final | "\($final | length) \([$final[] | select(.passed)] | length) \([$final[] | select(.passed | not)] | length) \(.flaky_retries // [] | length)"' "$f" 2>/dev/null) || { echo "Skipping malformed tests[] in: $f"; continue; }
+            read -r T P F FL <<< "$STATS"
+            [ -z "$T" ] && { echo "Skipping malformed tests[] in: $f"; continue; }
             C=$(jq -r '.total_cost_usd // 0' "$f")
             TIER=$(jq -r '.tier // "unknown"' "$f")
             SHARD=$(jq -r '.shard // "-"' "$f")
@@ -308,9 +364,11 @@ jobs:
             TOTAL=$((TOTAL + T))
             PASSED=$((PASSED + P))
             FAILED=$((FAILED + F))
+            FLAKY=$((FLAKY + FL))
             COST=$(echo "$COST + $C" | bc)
             STATUS_ICON="✅"
             [ "$F" -gt 0 ] && STATUS_ICON="❌"
+            [ "$F" -eq 0 ] && [ "$FL" -gt 0 ] && STATUS_ICON="✅⚠"
             SUITE_LINES="${SUITE_LINES}| ${TIER}/${SHARD} | ${P}/${T} | ${STATUS_ICON} | \$${C} |\n"
           done
 
@@ -319,7 +377,7 @@ jobs:
 
           BODY="## E2E Evals: ${STATUS}
 
-          **${PASSED}/${TOTAL}** tests passed | **\$${COST}** total cost | reconcile exit: ${RECONCILE_EXIT:-missing}
+          **${PASSED}/${TOTAL}** tests passed | **\$${COST}** total cost | reconcile exit: ${RECONCILE_EXIT:-missing}$([ "$FLAKY" -gt 0 ] && printf ' | ⚠ %s flaky pass(es) — recorded, not blocking' "$FLAKY")
 
           | Shard | Result | Status | Cost |
           |-------|--------|--------|------|
@@ -328,7 +386,7 @@ jobs:
           <details><summary>Fail-closed reconciliation</summary>
 
           \`\`\`
-          $(tail -c 4000 /tmp/report.txt 2>/dev/null || echo '(no reconciliation output)')
+          $(tail -c 4000 /tmp/verdict/report.txt 2>/dev/null || echo '(no reconciliation output)')
           \`\`\`
           </details>
 
@@ -339,9 +397,7 @@ jobs:
             FAILURES=""
             for f in $RESULTS; do
               if ! jq -e '.failed' "$f" >/dev/null 2>&1; then continue; fi
-              F=$(jq -r '.failed // 0' "$f")
-              [ "$F" -eq 0 ] && continue
-              FAILS=$(jq -r '.tests[] | select(.passed == false) | "- ❌ \(.name): \(.exit_reason // "unknown")"' "$f" 2>/dev/null || echo "- ⚠️ $(basename "$f"): parse error")
+              FAILS=$(jq -r '[.tests | group_by(.name)[] | last | select(.passed == false)][] | "- ❌ \(.name): \(.exit_reason // "unknown")"' "$f" 2>/dev/null || echo "- ⚠️ parse error")
               FAILURES="${FAILURES}${FAILS}\n"
             done
             BODY="${BODY}
@@ -359,7 +415,3 @@ jobs:
           else
             gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
           fi
-
-      - name: Fail the workflow when reconciliation failed
-        if: steps.reconcile.outputs.exit != '0'
-        run: exit 1

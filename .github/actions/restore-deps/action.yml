@@ -20,5 +20,8 @@ runs:
           rm -rf node_modules
           cp -r /opt/node_modules_cache node_modules
         else
-          bun install
+          # Frozen: this composite is canonical for lanes that run PR code
+          # with provider keys in env — a drifted lockfile must fail loudly,
+          # never silently re-resolve versions (claude adversarial).
+          bun install --frozen-lockfile
         fi

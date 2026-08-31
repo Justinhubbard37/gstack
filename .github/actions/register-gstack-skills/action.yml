@@ -46,6 +46,9 @@ runs:
         fi
         ln -snf "$REPO" "$SKILLS_DIR/gstack"
         for s in $SKILLS; do
+          # Input validation before rm -rf: a future caller passing '..' or a
+          # path segment would delete $HOME/.claude (claude adversarial).
+          case "$s" in */*|.|..|'') echo "ERROR: invalid skill name: '$s'" >&2; exit 1;; esac
           rm -rf "${SKILLS_DIR:?}/$s"
           mkdir -p "$SKILLS_DIR/$s"
           cp "$REPO/$s/SKILL.md" "$SKILLS_DIR/$s/SKILL.md"
