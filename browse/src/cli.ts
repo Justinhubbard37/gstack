@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn as nodeSpawn } from 'child_process';
 import { safeUnlink, safeUnlinkQuiet, safeKill, isProcessAlive } from './error-handling';
+import { readPidStartTime, readPidCmdline } from './xvfb';
 import { writeSecureFile, mkdirSecure } from './file-permissions';
 import { resolveConfig, ensureStateDir, readVersionHash, isPairAgentEnabled, resolveChromiumProfile } from './config';
 import { parseProxyConfig, computeConfigHash, ProxyConfigError } from './proxy-config';
@@ -131,6 +132,9 @@ interface ServerState {
   xvfbPid?: number;
   xvfbStartTime?: number;
   xvfbDisplay?: string;
+  /** Launched-Chromium identity for post-stop reaping (#2709). */
+  chromiumPid?: number;
+  chromiumStartTime?: string;
 }
 
 // ─── State File ────────────────────────────────────────────────
@@ -290,6 +294,32 @@ async function killOrphanChromium(profileDir: string = chromiumProfileDir()): Pr
     }
   } catch (err: any) {
     if (err?.code !== 'ENOENT' && err?.code !== 'EINVAL') throw err;
+  }
+}
+
+/**
+ * Reap the launched Chromium recorded in the state file (#2709). The headless
+ * launch has no userDataDir, so it never writes the SingletonLock that
+ * killOrphanChromium walks — `browse stop` reported success while the
+ * orphaned GPU process kept spinning (~800% CPU on macOS 26). Identity is
+ * verified TWO ways before any signal — start time matches the recorded
+ * value AND the executable looks like Chromium — so a recycled PID (even one
+ * now running a different, legitimate Chromium) is never killed.
+ */
+export async function reapRecordedChromium(state: {
+  chromiumPid?: number;
+  chromiumStartTime?: string;
+}): Promise<void> {
+  const pid = state.chromiumPid;
+  if (!pid || !isProcessAlive(pid)) return;
+  if (!state.chromiumStartTime || readPidStartTime(pid) !== state.chromiumStartTime) return;
+  const cmd = readPidCmdline(pid).toLowerCase();
+  if (!/chrom|headless_shell/.test(cmd)) return;
+  safeKill(pid, 'SIGTERM');
+  await new Promise(r => setTimeout(r, 1000));
+  if (isProcessAlive(pid)) {
+    safeKill(pid, 'SIGKILL');
+    await new Promise(r => setTimeout(r, 500));
   }
 }
 
@@ -1823,7 +1853,10 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       await killServer(stopState.pid);
       // Reap the orphaned Chromium child + clear its profile locks so the
       // NEXT launch is clean (same cleanup as the disconnect force path).
+      // The headless child has no SingletonLock — reap it via the recorded
+      // identity too (#2709).
       await killOrphanChromium();
+      await reapRecordedChromium(stopState);
       cleanChromiumProfileLocks();
       safeUnlinkQuiet(config.stateFile);
       console.log('Daemon stopped (forced — tabs/cookies/logins discarded).');
@@ -1912,6 +1945,14 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
   }
 
   await sendCommand(state, command, commandArgs);
+
+  // #2709: after a graceful stop, the daemon has closed Chromium via
+  // Playwright — but on macOS 26 the GPU process can survive that close and
+  // spin at ~800% CPU forever. The state snapshot read above still carries
+  // the launched child's identity; reap a verified survivor.
+  if (command === 'stop') {
+    await reapRecordedChromium(state);
+  }
 
   // #1781: `focus` means "show me the window". The server-side focus activates
   // the page via CDP, but on macOS the app can still sit on another Space — pull
