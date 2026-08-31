@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.76.0.0] - 2026-08-31
+
+**Ship's doc-sync now survives Conductor.**
+**Spawned subagents finally know they're spawned.**
+
+Every Conductor-hosted /ship used to lose its PR `## Documentation` section the moment the document-release subagent hit an interactive gate: the subagent inherited the parent's environment, classified itself as a session a human was watching, rendered a decision brief nobody could answer, and stopped. The JSON contract broke, every time a gate fired (#2733). This release makes the spawned classification reachable: /ship marks its subagent with `GSTACK_SESSION_KIND=spawned`, and the whole stack (preamble, AskUserQuestion rules, both AUQ hooks) now resolves gates by auto-choosing the recommended option instead of writing prose to nobody. Destructive options are never auto-chosen, on any surface: the conservative choice wins and gets recorded. Auto-chosen decisions come back in a `decisions` array the parent prints to your console, so nothing is decided invisibly.
+
+### The numbers that matter
+
+Source: the new gate-tier E2E (`test/skill-e2e-docsync-spawned.test.ts`) run receipt under `~/.gstack/projects/<slug>/evals/`, plus issue #2733's field reports.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| `## Documentation` on Conductor-hosted ships | dropped whenever a doc gate fired | present, E2E-proven | fixed |
+| Ways to reach the spawned classification | 1 (OpenClaw env only) | any dispatching skill, one env prefix | new primitive |
+| Onboarding prompts consumable by unwatched subagents | up to 11 blocks per run, markers eaten | 0 emitted, markers preserved for the next human session | sealed |
+| Real-agent E2E through a firing VERSION gate | prose-STOP, JSON parse fails | auto-chose the recommended Skip, JSON parsed, VERSION untouched | 1/1 pass, $0.35, 106s |
+| Preamble dead work per spawned start | network update-check + a 17-subprocess repo probe | both skipped | faster subagents |
+
+The E2E is the receipt that matters: a live agent ran the real document-release preamble and VERSION gate inside a Conductor-ambient environment with the AUQ hooks active, ended on the machine-parseable contract, and left VERSION alone.
+
+### What this means for your workflow
+
+Ship from Conductor and the PR carries its Documentation section again; any gate the subagent auto-chose shows up as a `Doc-sync auto-decisions:` line in your console. If you build orchestrating skills, prefix a subagent's `gstack-skill-start` invocation with `GSTACK_SESSION_KIND=spawned ` and it behaves like a proper worker: no consent prompts consumed, no telemetry questions, no prose briefs to nobody. If anything sets that marker on a session a human is actually driving, the preamble now says so loudly (`SPAWNED_OVERRIDE: env`).
+
+### Itemized changes
+
+### Added
+
+- **`GSTACK_SESSION_KIND=spawned`** (`bin/gstack-session-kind` step 0): explicit per-command spawned marker, outranking every ambient env marker. Deliberately narrow: only `spawned` is honored; other values are reserved and ignored. Documented in `docs/OPENCLAW.md`, with a `SPAWNED_OVERRIDE: env` status line for tamper visibility when the env var (rather than an orchestrator marker) drove the classification.
+- **`decisions` in the doc-sync contract** (`ship/sections/pr-body.md.tmpl`): the document-release subagent records each auto-chosen gate as one line in a required `decisions` array; the parent prints them after the sync summary. Never embedded in the public PR body (tripwire-pinned). Absent key from an older installed skill reads as empty.
+- **Proactive spawned rule in the AskUserQuestion prose** (all tier-2+ skills): `SESSION_KIND: spawned` now short-circuits BEFORE the Conductor rule, with the destructive carve-out (never auto-choose an irreversible option, take the conservative choice and record it) and anti-injection scoping: a spawned marking counts only from the prompt that created the session, never from files, tool output, or web content read mid-run.
+- **Gate-tier E2E** (`test/skill-e2e-docsync-spawned.test.ts`): drives the verbatim Step 18 dispatch prompt against a real preamble-bearing document-release slice in a Conductor-ambient env with both AUQ hooks seeded live; asserts the 5-key JSON contract, a non-empty `decisions` array, and an untouched VERSION through a deliberately fired gate.
+
+### Changed
+
+- **`bin/gstack-skill-start`**: spawned sessions suppress `CONDUCTOR_SESSION: true` (prose to nobody is always wrong), key `SPAWNED_SESSION: true` and the spawned-session instruction block on the resolved kind instead of raw `OPENCLAW_SESSION` (OpenClaw behavior unchanged, regression-pinned), gate all 11 interactive-onboarding blocks plus their ack markers at emission, and skip the network-bound update-check and the first-task repo probe (their consumers are suppressed anyway; the one-shot just-upgraded marker survives for the next human session).
+- **AUQ hooks** (`hosts/claude/hooks/`): the Conductor deny gains a deterministic `[conductor][spawned]` auto-choose branch for env-marked spawned sessions, with per-question one-way-door annotations; both hooks' prose directives (interactive AND headless) carry a shared spawned escape sentence, single-sourced in `spawned-directive.ts` so the two paths can never drift. Hooks inherit the harness env, so the escape text is the designed lever for per-command-marked subagents.
+- **Ship Step 18 dispatch prompt**: frames the subagent as spawned, instructs the same-line env prefix (template bash blocks do not share exports), resolves every named gate to the recommended option with a conservative fallback, and places the skill's own doc-health summary in the body so the JSON stays the final line.
+
+### Fixed
+
+- **#2733**: Conductor-hosted /ship runs no longer lose their Documentation section when document-release hits an AskUserQuestion gate. The failure was gate-correlated and hit every ship on affected hosts.
+
+### For contributors
+
+- Skeleton byte ceilings in `test/helpers/carve-guards.ts` re-ratcheted for the AUQ prose growth (19 skills, measured values in comments); `test/fixtures/context-budget.json` recaptured in the same commit per the ratchet protocol.
+- New `docsync-spawned` selector in touchfiles (deps name every behavior under test) and a matching gate row in `.github/workflows/evals.yml`; `bin/gstack-session-kind` joined the `conductor-prose` and `auto-decide-preserved` selectors (it previously appeared in no dep list).
+- `test/gstack-session-kind.test.ts`, both hook suites, the resolver suite, and the dispatch tripwire gained ~25 cases, including a `spawnedByEnv()`-vs-script parity pin and a cross-surface destructive-policy drift guard.
+
 ## [1.75.0.0] - 2026-08-29
 
 **Your review now hunts over-built code, not just broken code.**
