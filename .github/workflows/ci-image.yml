@@ -1,8 +1,12 @@
 name: Build CI Image
 on:
-  # Rebuild weekly (Monday 4am UTC) to pick up CLI updates — deliberately 2h
-  # BEFORE evals-periodic's 6am cron so the weekly eval run finds a fresh
-  # image instead of racing a half-pushed tag or duplicating the build.
+  # Weekly self-heal (Monday 4am UTC) — deliberately 2h BEFORE
+  # evals-periodic's 6am cron so the weekly eval run finds the image instead
+  # of racing a half-pushed tag. With the claude CLI pinned in Dockerfile.ci
+  # (v1.76+), this cron no longer pulls CLI updates: when the content-hash
+  # tag already exists it's a ~30s no-op, and it only rebuilds if the tag
+  # was somehow lost. CLI bumps happen by editing the Dockerfile pin in a PR
+  # that runs the PTY gate against the new TUI.
   schedule:
     - cron: '0 4 * * 1'
   # Rebuild on Dockerfile or lockfile changes. package.json is deliberately
