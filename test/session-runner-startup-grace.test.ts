@@ -42,7 +42,7 @@ describe('session-runner two-phase timeout', () => {
       '#!/bin/bash',
       'sleep 2',
       'echo \'{"type":"system","subtype":"init"}\'',
-      'exec sleep 6071',
+      `exec sleep 6071.${process.pid}`,
     ].join('\n') + '\n', { mode: 0o755 });
 
     const realPath = process.env.PATH;
@@ -65,7 +65,7 @@ describe('session-runner two-phase timeout', () => {
       expect(wall).toBeLessThan(20_000);
     } finally {
       process.env.PATH = realPath;
-      Bun.spawnSync(['pkill', '-f', 'sleep 6071'], { timeout: 5_000 });
+      Bun.spawnSync(['pkill', '-f', `sleep 6071\\.${process.pid}`], { timeout: 5_000 });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
@@ -74,7 +74,7 @@ describe('session-runner two-phase timeout', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grace-'));
     const shimDir = path.join(dir, 'bin');
     fs.mkdirSync(shimDir);
-    fs.writeFileSync(path.join(shimDir, 'claude'), '#!/bin/bash\nexec sleep 6072\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(shimDir, 'claude'), `#!/bin/bash\nexec sleep 6072.${process.pid}\n`, { mode: 0o755 });
 
     const realPath = process.env.PATH;
     process.env.PATH = `${shimDir}:${realPath}`;
@@ -95,7 +95,7 @@ describe('session-runner two-phase timeout', () => {
       expect(result.costEstimate.turnsUsed).toBe(0);
     } finally {
       process.env.PATH = realPath;
-      Bun.spawnSync(['pkill', '-f', 'sleep 6072'], { timeout: 5_000 });
+      Bun.spawnSync(['pkill', '-f', `sleep 6072\\.${process.pid}`], { timeout: 5_000 });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);

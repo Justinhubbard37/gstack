@@ -52,8 +52,13 @@ describe('flake ledger', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('env override wins over the tmpdir default', () => {
+  test('env override wins; local default is project-scoped, never machine-global', () => {
     expect(flakeLedgerPath({ GSTACK_FLAKE_LEDGER: '/x/y.jsonl' } as NodeJS.ProcessEnv)).toBe('/x/y.jsonl');
-    expect(flakeLedgerPath({} as NodeJS.ProcessEnv)).toContain('gstack-flake-ledger.jsonl');
+    // Without the env override, the default lives under the PROJECT dir
+    // (sibling worktrees of different repos must not interleave one series);
+    // tmpdir is only the last-resort fallback when slug detection fails.
+    const local = flakeLedgerPath({} as NodeJS.ProcessEnv);
+    expect(local).toMatch(/flake-ledger\.jsonl$/);
+    expect(local.includes(path.join('.gstack', 'projects')) || local.startsWith(os.tmpdir())).toBe(true);
   });
 });

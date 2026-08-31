@@ -730,6 +730,7 @@ describe('Conductor spawned deny (#2733)', () => {
       const scriptKind = spawnSync(BIN, [], {
         env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...env },
         encoding: 'utf-8',
+        timeout: 30_000,
       }).stdout.trim();
       expect(
         spawnedByEnv(env),

@@ -229,8 +229,6 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'retro':             ['bin/gstack-retro-metrics', 'retro/**', 'test/skill-e2e-retro.test.ts'],
   'retro-base-branch': ['bin/gstack-retro-metrics', 'retro/**', 'test/skill-e2e-retro.test.ts'],
 
-  // Global discover
-
   // CSO
   'cso-full-audit':   ['cso/**', 'test/skill-e2e-cso.test.ts'],
   'cso-diff-mode':    ['cso/**', 'test/skill-e2e-cso.test.ts'],
@@ -297,8 +295,6 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'test/skill-e2e-docsync-spawned.test.ts',
   ],
 
-  // Plan completion audit + verification
-
   // Design
   'design-consultation-core':       ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/helpers/llm-judge.ts', 'test/skill-e2e-design.test.ts'],
   'design-consultation-existing':   ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
@@ -306,8 +302,6 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'design-consultation-preview':    ['design-consultation/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
   'plan-design-review-no-ui-scope': ['plan-design-review/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
   'design-review-fix':              ['design-review/**', 'browse/src/**', 'scripts/gen-skill-docs.ts', 'test/skill-e2e-design.test.ts'],
-
-  // Design Shotgun
 
   // /diagram (diagram-render bundle consumers). Triplet = deterministic
   // functional (gate); authoring quality = LLM-judged benchmark (periodic).
@@ -696,8 +690,6 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'retro': 'periodic',
   'retro-base-branch': 'gate',
 
-  // Global discover
-
   // CSO — gate for security guardrails, periodic for quality
   'cso-full-audit': 'periodic',  // D2a demotion 2026-08: 250s/$0.57 full audit; cso targeted tests stay gate
   'cso-diff-mode': 'gate',
@@ -826,8 +818,6 @@ export const LLM_JUDGE_TOUCHFILES: Record<string, string[]> = {
   // Design skills
   'design-review/SKILL.md fix loop':      ['design-review/SKILL.md', 'design-review/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
   'design-consultation/SKILL.md research': ['design-consultation/SKILL.md', 'design-consultation/SKILL.md.tmpl', 'test/skill-llm-eval.test.ts'],
-
-  // Office Hours
 
   // Deploy skills
   'land-and-deploy/SKILL.md workflow':    ['land-and-deploy/SKILL.md', 'land-and-deploy/SKILL.md.tmpl', 'land-and-deploy/sections/**', 'test/skill-llm-eval.test.ts'],

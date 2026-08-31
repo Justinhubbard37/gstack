@@ -36,12 +36,16 @@ describe('session-runner timeout kills the whole process group', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'groupkill-'));
     const shimDir = path.join(dir, 'bin');
     fs.mkdirSync(shimDir);
-    // Unique-ish sleep durations double as pgrep markers: they appear only
-    // in the shim's children's argv, never in this test process's cmdline.
+    // Markers are unique PER RUN (fractional seconds carry this process's
+    // pid): sibling Conductor worktrees run free suites concurrently with no
+    // machine lock, and fixed markers let one run pgrep/pkill the OTHER
+    // run's shims (review finding — a cross-run flake inside the anti-flake
+    // tests). GNU sleep accepts decimals, argv stays greppable.
+    const mark = (n: number) => `${n}.${process.pid}`;
     const shim = [
       '#!/bin/bash',
-      'sleep 6041 &',        // the orphan-candidate grandchild
-      'exec sleep 6042',     // the shim itself, wedged forever, no NDJSON
+      `sleep ${mark(6041)} &`,   // the orphan-candidate grandchild
+      `exec sleep ${mark(6042)}`, // the shim itself, wedged forever, no NDJSON
     ].join('\n');
     fs.writeFileSync(path.join(shimDir, 'claude'), `${shim}\n`, { mode: 0o755 });
 
@@ -71,13 +75,13 @@ describe('session-runner timeout kills the whole process group', () => {
       // The kill is SIGKILL on the GROUP: give the OS a beat to reap, then
       // require both the wedged shim and its grandchild gone.
       await new Promise((r) => setTimeout(r, 1_000));
-      expect(aliveWithArg('sleep 6042'), 'the fake claude itself survived the timeout kill').toBe(false);
-      expect(aliveWithArg('sleep 6041'), 'the grandchild ORPHANED — group kill regressed to a direct-child kill').toBe(false);
+      expect(aliveWithArg(`sleep ${mark(6042)}`), 'the fake claude itself survived the timeout kill').toBe(false);
+      expect(aliveWithArg(`sleep ${mark(6041)}`), 'the grandchild ORPHANED — group kill regressed to a direct-child kill').toBe(false);
     } finally {
       process.env.PATH = realPath;
       // Belt and braces: never leak the markers into later tests even on
       // assertion failure.
-      spawnSync('pkill', ['-f', 'sleep 604[12]'], { stdio: 'ignore', timeout: 5_000 });
+      spawnSync('pkill', ['-f', `sleep 604[12]\\.${process.pid}`], { stdio: 'ignore', timeout: 5_000 });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
