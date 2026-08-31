@@ -6,7 +6,7 @@
  * mocked by manipulating strings directly).
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -226,6 +226,7 @@ describe("resolvePdftotext (override resolution, v1.24-aligned)", () => {
 
 describe("describeBinary (version + flavor probe)", () => {
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "pdftotext-shim-"));
+  afterAll(() => fs.rmSync(shimDir, { recursive: true, force: true }));
 
   function shim(name: string, body: string): string {
     if (process.platform === "win32") return "";
