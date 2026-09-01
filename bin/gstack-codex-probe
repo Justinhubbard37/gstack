@@ -122,11 +122,14 @@ _gstack_codex_model_probe() {
   # below exists for network luck, and swallowing this here is what let a
   # missing vendor binary report CODEX_MODE: ready while every Codex pass was
   # silently skipped (#2742). 126 = found but not executable, 127 = not found.
-  # String signatures only count on a FAILED spawn: a successful response whose
-  # text merely mentions "permission denied" must not classify as broken.
-  if [ "$_code" -eq 126 ] || [ "$_code" -eq 127 ] || { [ "$_code" -ne 0 ] && printf '%s' "$_out" | grep -qiE 'ENOENT|ENOEXEC|EACCES|no such file or directory|cannot execute binary file|not executable|permission denied'; }; then
+  # String signatures only count on a FAILED, NON-TIMEOUT spawn: a successful
+  # response that mentions "permission denied" must not classify as broken,
+  # and neither may a timed-out (124) probe whose partial output quotes such
+  # strings — 124 keeps its fail-open contract below.
+  _BROKEN_SIG='ENOENT|ENOEXEC|EACCES|no such file or directory|cannot execute binary file|not executable|permission denied'
+  if [ "$_code" -eq 126 ] || [ "$_code" -eq 127 ] || { [ "$_code" -ne 0 ] && [ "$_code" -ne 124 ] && printf '%s' "$_out" | grep -qiE "$_BROKEN_SIG"; }; then
     echo "MODEL_UNUSABLE_INSTALL"
-    printf '%s\n' "$_out" | grep -iE 'ENOENT|ENOEXEC|EACCES|no such file or directory|cannot execute|permission denied' | head -3
+    printf '%s\n' "$_out" | grep -iE "$_BROKEN_SIG" | head -3
     echo "HINT: the Codex CLI is on PATH but cannot run — its binary or vendor payload is missing."
     echo "HINT: reinstall with: npm install -g @openai/codex"
     _gstack_codex_log_event "codex_broken_install" 2>/dev/null || true
