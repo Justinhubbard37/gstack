@@ -36,6 +36,7 @@ TMPERR=${TMPERR:-$(mktemp "$TMP_ROOT/codex-err-XXXXXX")}
 _gstack_codex_timeout_wrapper 600 codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' {{CODEX_WEB_SEARCH_FLAG}} --json < /dev/null 2>"$TMPERR" | PYTHONUNBUFFERED=1 "$PYTHON_CMD" -u -c "
 import sys, json
 turn_completed_count = 0
+turn_failed = False
 for line in sys.stdin:
     line = line.strip()
     if not line: continue
@@ -66,7 +67,7 @@ for line in sys.stdin:
     except: pass
 # Fix 2: three-way completeness check (#2671) — a STATED failure is a failure,
 # not a network problem; only silence with no terminal event is a disconnect.
-if 'turn_failed' in dir():
+if turn_failed:
     print('[codex] turn.failed received — the turn errored (reason above), not a disconnect.', flush=True, file=sys.stderr)
 elif turn_completed_count == 0:
     print('[codex warning] No turn.completed event received — possible mid-stream disconnect.', flush=True, file=sys.stderr)

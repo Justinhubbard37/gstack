@@ -80,6 +80,8 @@ fi
 # Fix 1: wrap with timeout (gtimeout/timeout fallback chain via probe helper)
 _gstack_codex_timeout_wrapper 600 codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="medium"' -c 'web_search="cached"' --json < /dev/null 2>"$TMPERR" | PYTHONUNBUFFERED=1 "$PYTHON_CMD" -u -c "
 import sys, json
+turn_completed_count = 0
+turn_failed = False
 for line in sys.stdin:
     line = line.strip()
     if not line: continue
@@ -102,7 +104,7 @@ for line in sys.stdin:
                 cmd = item.get('command','')
                 if cmd: print(f'[codex ran] {cmd}', flush=True)
         elif t == 'turn.completed':
-            turn_completed_count = 1 + (turn_completed_count if 'turn_completed_count' in dir() else 0)
+            turn_completed_count += 1
             usage = obj.get('usage',{})
             tokens = usage.get('input_tokens',0) + usage.get('output_tokens',0)
             if tokens: print(f'\ntokens used: {tokens}', flush=True)
@@ -113,9 +115,9 @@ for line in sys.stdin:
     except: pass
 # Three-way completeness check (#2671; consult previously had NONE): a STATED
 # failure is a failure, not a network problem; only silence is a disconnect.
-if 'turn_failed' in dir():
+if turn_failed:
     print('[codex] turn.failed received — the turn errored (reason above), not a disconnect.', flush=True, file=sys.stderr)
-elif 'turn_completed_count' not in dir():
+elif turn_completed_count == 0:
     print('[codex warning] No turn.completed event received — possible mid-stream disconnect.', flush=True, file=sys.stderr)
 "
 # Fix 1: hang detection for Consult new-session (mirrors Challenge + resume)
