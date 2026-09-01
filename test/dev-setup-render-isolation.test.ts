@@ -59,7 +59,7 @@ describe('gen-skill-docs: section rewrite is gated on --out-dir', () => {
     // #2692: the gate is LINK_ROOT (defaults to OUT_DIR — still null when
     // --out-dir is unset, so the in-place render stays a byte-exact no-op).
     expect(body).toContain('if (!LINK_ROOT) return content');
-    expect(gen).toContain('if (!LINK_ROOT_ARG) return OUT_DIR;');
+    expect(gen).toContain("parsePathFlag('--link-root') ?? OUT_DIR");
     expect(body).toContain('sections'); // surgical: regex targets only /sections/ paths
   });
 });
