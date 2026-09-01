@@ -9,6 +9,8 @@
  * ("accounted for N-1 of N staged ... Refusing to advance state").
  */
 import { describe, it, expect } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { disambiguateSlugs } from "../bin/gstack-memory-ingest";
 
 const mk = (slug: string, source_path: string) => ({
@@ -61,5 +63,40 @@ describe("regression: disambiguateSlugs resolves colliding staged slugs", () => 
     const before = pages.map((p) => p.slug);
     disambiguateSlugs(pages);
     expect(pages.map((p) => p.slug)).toEqual(before);
+  });
+
+  it("call-site wiring: the prepare/stage flow actually invokes disambiguateSlugs (source pin)", () => {
+    // The unit tests above prove the function works; nothing else proves the
+    // flow CALLS it — a refactor could drop the invocation and every test
+    // would stay green while #2724 regresses. Anchor narrowly: extract the
+    // preparePages function body (and, as an accepted alternate home, the
+    // main-flow stretch between the preparePages call and writeStaged) and
+    // require a disambiguateSlugs( invocation inside — cosmetic changes
+    // (argument rename, comment edits) don't trip this; moving the call out
+    // of the prepare→stage flow entirely does.
+    const src = readFileSync(
+      join(import.meta.dir, "..", "bin", "gstack-memory-ingest.ts"),
+      "utf-8",
+    );
+
+    // preparePages body: from its declaration to the next top-level function.
+    const defStart = src.indexOf("function preparePages(");
+    expect(defStart).toBeGreaterThan(-1);
+    const afterDef = src.slice(defStart + "function preparePages(".length);
+    const endRel = afterDef.search(/\n(?:export )?(?:async )?function /);
+    const prepareBody = endRel === -1 ? afterDef : afterDef.slice(0, endRel);
+
+    // Alternate home: the stage flow between the preparePages call site and
+    // the writeStaged call that consumes its output.
+    const callSite = src.indexOf("= preparePages(");
+    const stageSite = callSite === -1 ? -1 : src.indexOf("writeStaged(", callSite);
+    const stageFlow =
+      callSite !== -1 && stageSite !== -1 ? src.slice(callSite, stageSite) : "";
+
+    const invokes = (text: string) =>
+      // An invocation, not the `function disambiguateSlugs(` definition.
+      /(?<!function )\bdisambiguateSlugs\(/.test(text);
+
+    expect(invokes(prepareBody) || invokes(stageFlow)).toBe(true);
   });
 });

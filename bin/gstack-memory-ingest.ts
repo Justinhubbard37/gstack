@@ -1304,28 +1304,6 @@ async function probeMode(args: CliArgs): Promise<ProbeReport> {
 }
 
 /**
- * Prepare phase: walk sources, apply incremental + optional-secret-scan filters,
- * parse transcripts/artifacts into PageRecord, render bodies with
- * frontmatter. Returns the PreparedPage[] to stage + counts of files
- * filtered at each gate.
- *
- * Secret scanning policy (post 2026-05-10 perf review):
- *
- *   The actual cross-machine exfiltration boundary is `gstack-brain-sync`,
- *   which runs a regex-based secret scanner on the staged diff before
- *   `git commit` (see bin/gstack-brain-sync:78-110: AWS keys, GitHub
- *   tokens, OpenAI keys, PEM blocks, JWTs, bearer-token-in-JSON). That's
- *   the right place — it gates content leaving the machine.
- *
- *   memory-ingest, by contrast, moves data from one local file to a
- *   local PGLite database. Scanning every source file at ingest time
- *   doesn't change exposure (the secret already lives in plaintext
- *   where the user keeps their transcripts and artifacts) but costs
- *   ~470s on cold runs. We removed the per-file gitleaks gate as
- *   redundant defense-in-depth and made it opt-in via `--scan-secrets`
- *   for users who want belt-and-suspenders.
- */
-/**
  * Disambiguate colliding page slugs before staging (#2724).
  *
  * Two distinct source files can map to one transcript slug
@@ -1362,6 +1340,28 @@ export function disambiguateSlugs(pages: PreparedPage[]): void {
   }
 }
 
+/**
+ * Prepare phase: walk sources, apply incremental + optional-secret-scan filters,
+ * parse transcripts/artifacts into PageRecord, render bodies with
+ * frontmatter. Returns the PreparedPage[] to stage + counts of files
+ * filtered at each gate.
+ *
+ * Secret scanning policy (post 2026-05-10 perf review):
+ *
+ *   The actual cross-machine exfiltration boundary is `gstack-brain-sync`,
+ *   which runs a regex-based secret scanner on the staged diff before
+ *   `git commit` (see bin/gstack-brain-sync:78-110: AWS keys, GitHub
+ *   tokens, OpenAI keys, PEM blocks, JWTs, bearer-token-in-JSON). That's
+ *   the right place — it gates content leaving the machine.
+ *
+ *   memory-ingest, by contrast, moves data from one local file to a
+ *   local PGLite database. Scanning every source file at ingest time
+ *   doesn't change exposure (the secret already lives in plaintext
+ *   where the user keeps their transcripts and artifacts) but costs
+ *   ~470s on cold runs. We removed the per-file gitleaks gate as
+ *   redundant defense-in-depth and made it opt-in via `--scan-secrets`
+ *   for users who want belt-and-suspenders.
+ */
 function preparePages(
   args: CliArgs,
   ctx: WalkContext,
