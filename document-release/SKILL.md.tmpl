@@ -45,9 +45,10 @@ the AskUserQuestion Format spawned rule: auto-choose the RECOMMENDED option, rec
 in your completion report, and continue — never call AskUserQuestion, never render a prose
 decision brief, never end your response waiting for an answer. The NEVER-do invariants below do
 not relax: when a gate's recommended option would rewrite CHANGELOG content or change VERSION,
-take that gate's Skip / leave-as-is option instead and record why (Step 8 carries the explicit
-spawned note). If the dispatch prompt narrows scope further (e.g. /ship's docs-sync-only guard),
-the prompt's restrictions win.
+take that gate's Skip / leave-as-is option instead and record why. This paragraph is the single
+source of spawned behavior — the spawned notes downstream (Step 8's VERSION gate, the
+cross-model doc-review pass) are pointers back to it, not separate rules. If the dispatch
+prompt narrows scope further (e.g. /ship's docs-sync-only guard), the prompt's restrictions win.
 
 **Only stop for:**
 - Risky/questionable doc changes (narrative, philosophy, security, removals, large rewrites)

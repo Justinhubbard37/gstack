@@ -176,10 +176,10 @@ git diff <base>...HEAD -- VERSION
       - B) Keep current version — add new changes to the existing CHANGELOG entry
       - C) Skip — leave version as-is, handle later
 
-   **Spawned sessions:** the recommendation flips — choose C (leave version as-is) and record
-   the uncovered scope in your completion report (the `decisions` array when dispatched from
-   /ship). A spawned run must never change VERSION: the dispatching workflow owns version
-   numbering, and the parent's PR title derives from it.
+   **Spawned sessions** (per the spawned-dispatch contract at the top of this skill): the
+   recommendation flips — choose C (leave version as-is) and record the uncovered scope in
+   your completion report (the `decisions` array when dispatched from /ship).
+   A spawned run must never change VERSION: the dispatching workflow owns version numbering.
 
    The key insight: a VERSION bump set for "feature A" should not silently absorb "feature B"
    if feature B is substantial enough to deserve its own version entry.
@@ -431,11 +431,10 @@ checks the docs against what actually shipped. This is a standard part of /docum
 not an opt-in. The user turns it off only by asking explicitly
 (`gstack-config set codex_reviews disabled`).
 
-**Spawned-session skip:** if this session is spawned (`SESSION_KIND: spawned` echoed by the
-preamble, or your dispatch prompt marks it — e.g. dispatched from /ship Step 18), skip this
-entire section: the dispatching workflow owns its own review passes, and the apply gate below
-needs a human. Note the skip in your completion report and continue with Step 9's doc health
-summary.
+**Spawned-session skip** (per the spawned-dispatch contract at the top of this skill): in a
+spawned session, skip this entire section — the dispatching workflow owns its own review
+passes, and the apply gate below needs a human. Note the skip in your completion report and
+continue with Step 9's doc health summary.
 
 **Preflight — decide whether and how the doc review runs:**
 
