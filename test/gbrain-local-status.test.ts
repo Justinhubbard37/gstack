@@ -40,6 +40,7 @@ import {
   localEngineStatus,
   cacheFilePath,
   probeTimeoutMs,
+  probeGbrainBin,
   CACHE_TTL_MS,
   DEFAULT_PROBE_TIMEOUT_MS,
   type LocalEngineStatus,
@@ -399,6 +400,44 @@ describe("probeTimeoutMs — env override parsing", () => {
   it("never returns 0 for fractional sub-millisecond values (0 = NO timeout in execFileSync)", () => {
     expect(probeTimeoutMs({ GSTACK_GBRAIN_PROBE_TIMEOUT_MS: "0.5" })).toBe(1);
     expect(probeTimeoutMs({ GSTACK_GBRAIN_PROBE_TIMEOUT_MS: "0.0001" })).toBe(1);
+  });
+});
+
+describe("versionProbeTimeoutMs — invalid env overrides fall back to the default budget (behavioral via probeGbrainBin)", () => {
+  // versionProbeTimeoutMs is module-private, so pin its fallback BEHAVIOR:
+  // a fast healthy fake gbrain must probe identically whether the override
+  // env var is unset, non-numeric, or non-positive. If an invalid value ever
+  // reached execFileSync as its `timeout` (NaN / -1), the guarded call would
+  // throw into the catch and report { bin: null } — a fake "no-cli".
+  //
+  // probeGbrainBin memoizes per PATH key, so each case gets its OWN makeEnv
+  // (fresh mkdtemp bindir → unique PATH → fresh cache entry), and env is
+  // passed explicitly — no process.env mutation, no cross-case cache hits.
+  function probeWith(override?: string) {
+    const env = makeEnv({ withGbrain: true, gbrainBehavior: "ok", withConfig: true });
+    try {
+      const probeEnv: NodeJS.ProcessEnv = { PATH: `${env.bindir}:/usr/bin:/bin` };
+      if (override !== undefined) probeEnv.GSTACK_GBRAIN_VERSION_PROBE_TIMEOUT_MS = override;
+      return probeGbrainBin(probeEnv);
+    } finally {
+      env.cleanup();
+    }
+  }
+
+  it("unset override — the default-budget baseline resolves the bin", () => {
+    expect(probeWith()).toEqual({ bin: "gbrain", timedOut: false });
+  });
+
+  it("non-numeric override ('abc') behaves as the default-budget case (no throw, sane shape)", () => {
+    expect(probeWith("abc")).toEqual({ bin: "gbrain", timedOut: false });
+  });
+
+  it("negative override ('-1') behaves as the default-budget case (no throw, sane shape)", () => {
+    expect(probeWith("-1")).toEqual({ bin: "gbrain", timedOut: false });
+  });
+
+  it("zero override ('0') behaves as the default-budget case (0 would mean NO timeout)", () => {
+    expect(probeWith("0")).toEqual({ bin: "gbrain", timedOut: false });
   });
 });
 
