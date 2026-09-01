@@ -2475,25 +2475,32 @@ fi
 # the decision survives upgrades; env stays session-scoped. Do NOT initialize
 # NO_TEAM_MODE from config — that would silently change --no-team semantics.
 if [ -n "$TIMELINE_STOP_HOOK_MODE" ]; then
-  TL_DECISION="$TIMELINE_STOP_HOOK_MODE"
+  TL_DECISION="$TIMELINE_STOP_HOOK_MODE"; TL_SOURCE="flag"
 elif [ -n "${GSTACK_TIMELINE_STOP_HOOK:-}" ]; then
-  TL_DECISION="${GSTACK_TIMELINE_STOP_HOOK}"
+  TL_DECISION="${GSTACK_TIMELINE_STOP_HOOK}"; TL_SOURCE="env GSTACK_TIMELINE_STOP_HOOK"
 else
   TL_DECISION="$("$GSTACK_CONFIG" get timeline_stop_hook 2>/dev/null || true)"
+  TL_SOURCE="config timeline_stop_hook"
 fi
 TL_DECISION=$(printf '%s' "$TL_DECISION" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+TL_UNRECOGNIZED=0
 case "$TL_DECISION" in
   n|no|false|skip|off|0) TL_DECISION="no" ;;
-  *)                     TL_DECISION="yes" ;;
+  y|yes|true|on|1|"")    TL_DECISION="yes" ;;
+  *)
+    # A typo'd value (--timeline-stop-hook=noo) must not silently become a
+    # PERSISTED "yes" — warn, apply the default for this run only.
+    log "  WARNING: unrecognized timeline-stop-hook value '$TL_DECISION' (from $TL_SOURCE) — using default 'yes' for this run, not persisting"
+    TL_DECISION="yes"; TL_UNRECOGNIZED=1 ;;
 esac
-if [ -n "$TIMELINE_STOP_HOOK_MODE" ]; then
+if [ -n "$TIMELINE_STOP_HOOK_MODE" ] && [ "$TL_UNRECOGNIZED" -eq 0 ]; then
   "$GSTACK_CONFIG" set timeline_stop_hook "$TL_DECISION" >/dev/null 2>&1 || true
 fi
 if [ "$TL_DECISION" = "no" ] && [ -x "$SETTINGS_HOOK" ]; then
   # Reconciliation arm: an explicit "no" with a live registration removes it —
   # the opt-out works even when the hook was registered by an older setup.
   "$SETTINGS_HOOK" remove-source --source gstack-timeline-stop >/dev/null 2>&1 || true
-  log "  timeline Stop hook disabled (timeline_stop_hook=no) — any existing registration removed"
+  log "  timeline Stop hook disabled (via $TL_SOURCE) — removed its registration if one existed"
 fi
 if [ "$NO_TEAM_MODE" -ne 1 ] && [ "$TL_DECISION" != "no" ] && [ -x "$SETTINGS_HOOK" ] && [ -n "$TIMELINE_STOP_HOOK" ]; then
   if _TL_ENSURE_OUT=$("$SETTINGS_HOOK" ensure-event \
