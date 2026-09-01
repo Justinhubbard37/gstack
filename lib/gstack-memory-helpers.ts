@@ -131,6 +131,14 @@ let _gitleaksAvailability: boolean | null = null;
 // suppress the permanent "not in PATH; scanning disabled" warning later.
 let _gitleaksSlowWarned = false;
 let _gitleaksAbsentWarned = false;
+// Per-run cooldown: retrying a slow probe on EVERY file re-pays up to
+// probe+retry (12s default) per file — an 887-file ingest on a loaded box
+// spent hours asking the same slow question. After this many consecutive
+// slow answers the run stops probing; the availability cache is still never
+// written (slow != absent — the next PROCESS probes fresh).
+const GITLEAKS_SLOW_PROBE_LIMIT = 3;
+let _gitleaksConsecutiveSlow = 0;
+let _gitleaksCooldownWarned = false;
 
 // Probe budgets. The first is short because the common answers (a real
 // gitleaks, or ENOENT) are both immediate; the second is generous because by
@@ -176,17 +184,32 @@ function probeGitleaks(timeoutMs: number): GitleaksProbe {
  */
 function gitleaksAvailable(): boolean {
   if (_gitleaksAvailability !== null) return _gitleaksAvailability;
+  if (_gitleaksConsecutiveSlow >= GITLEAKS_SLOW_PROBE_LIMIT) {
+    if (!_gitleaksCooldownWarned) {
+      _gitleaksCooldownWarned = true;
+      process.stderr.write(
+        "[gstack-memory-helpers] gitleaks did not answer in " +
+        `${GITLEAKS_SLOW_PROBE_LIMIT} consecutive probes; skipping the probe ` +
+        "for the rest of this run — remaining files go unscanned. Re-run when " +
+        "the machine is less loaded to scan them.\n"
+      );
+    }
+    return false;
+  }
 
   let probe = probeGitleaks(_probeMs);
   if (probe === "slow") probe = probeGitleaks(_retryMs);
 
   if (probe === "ok") {
     _gitleaksAvailability = true;
+    _gitleaksConsecutiveSlow = 0;
     return true;
   }
 
   if (probe === "slow") {
-    // No cache write: leave the question open for the next call.
+    // No cache write: leave the question open for the next call — but count
+    // it, so a persistently loaded box stops paying probe+retry per file.
+    _gitleaksConsecutiveSlow++;
     if (!_gitleaksSlowWarned) {
       _gitleaksSlowWarned = true;
       process.stderr.write(
@@ -578,6 +601,8 @@ export function _resetGitleaksAvailabilityCache(): void {
   _gitleaksAvailability = null;
   _gitleaksSlowWarned = false;
   _gitleaksAbsentWarned = false;
+  _gitleaksConsecutiveSlow = 0;
+  _gitleaksCooldownWarned = false;
   _probeMs = GITLEAKS_PROBE_MS;
   _retryMs = GITLEAKS_RETRY_MS;
 }

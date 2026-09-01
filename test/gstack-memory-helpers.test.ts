@@ -276,6 +276,34 @@ exit 2
     }
   });
 
+  it("stops probing after 3 consecutive slow answers (per-run cooldown), never caching unavailability", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gstack-test-"));
+    const binDir = join(dir, "bin");
+    const log = join(dir, "calls.log");
+    const file = join(dir, "clean.txt");
+    writeFileSync(file, "no secrets here\n");
+    // Empty marker: EVERY call hangs, so both budgets expire on each probe.
+    fakeGitleaks(binDir, log, "");
+    try {
+      _setGitleaksProbeTimeouts(800, 800);
+      // Three slow rounds: each pays probe+retry (2 spawns), each unscanned.
+      for (let i = 0; i < 3; i++) {
+        const r = withFakeOnPath(binDir, () => secretScanFile(file));
+        expect(r.scanner).toBe("missing");
+      }
+      const probesAtLimit = versionProbes(log);
+      expect(probesAtLimit).toBe(6);
+      // Fourth file: cooldown short-circuits — no spawn, still unscanned,
+      // and the question stays open for the NEXT process (cache never set).
+      const fourth = withFakeOnPath(binDir, () => secretScanFile(file));
+      expect(fourth.scanner).toBe("missing");
+      expect(versionProbes(log)).toBe(probesAtLimit);
+      expect(_gitleaksCacheState()).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("caches an absent binary, so it is probed once per process", () => {
     const dir = mkdtempSync(join(tmpdir(), "gstack-test-"));
     const binDir = join(dir, "empty-bin");
