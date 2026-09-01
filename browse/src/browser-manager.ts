@@ -24,6 +24,8 @@ import { TabSession, type RefEntry } from './tab-session';
 import { resolveChromiumProfile, cleanSingletonLocks } from './config';
 import { launchWithXProtectHeal } from './xprotect-heal';
 import { readPidStartTime } from './xvfb';
+import { withCdpSession } from './cdp-bridge';
+import type { MemorySnapshot, MemoryStructureStats, MemoryTabSnapshot, MemoryProcess } from './memory-snapshot';
 
 /**
  * Headless GPU flags (#2709): on macOS 26 / Apple Silicon the headless-shell
@@ -47,8 +49,6 @@ export function headlessGpuArgs(platform: string, env: NodeJS.ProcessEnv): strin
     '--disable-gpu-watchdog',
   ];
 }
-import { withCdpSession } from './cdp-bridge';
-import type { MemorySnapshot, MemoryStructureStats, MemoryTabSnapshot, MemoryProcess } from './memory-snapshot';
 
 /**
  * Detect whether GSTACK_CHROMIUM_PATH points at a custom Chromium build that
