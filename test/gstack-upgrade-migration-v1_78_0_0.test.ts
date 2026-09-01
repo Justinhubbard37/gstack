@@ -44,7 +44,12 @@ afterAll(() => {
 function run(): { code: number; stdout: string; stderr: string } {
   const r = spawnSync('bash', [MIGRATION], {
     env: {
-      PATH: '/usr/bin:/bin',
+      // The parent PATH, not a hardcoded POSIX one: on Windows, spawn
+      // resolves `bash` against the CHILD env's PATH, and /usr/bin:/bin
+      // contains no bash.exe there (the exact hazard documented on
+      // codex-under-codex-detection's KNOWN_WINDOWS_INCOMPATIBLE entry).
+      // Hermeticity comes from HOME/GSTACK_* below, not from PATH.
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
       HOME: tmpHome,
       GSTACK_INSTALL_DIR: installDir,
       GSTACK_HOME: gstackHome,
