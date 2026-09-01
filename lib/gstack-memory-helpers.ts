@@ -19,7 +19,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
 import { appendJsonl } from "./jsonl-store";
-import { gbrainConfigDir } from "./gbrain-exec";
+import { gbrainConfigDir, isExecTimeout } from "./gbrain-exec";
 import { dirname, join } from "path";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
@@ -126,7 +126,11 @@ export function canonicalizeRemote(url: string | null | undefined): string {
 // ── Public: secretScanFile (gitleaks wrapper) ─────────────────────────────
 
 let _gitleaksAvailability: boolean | null = null;
-let _gitleaksWarned = false;
+// Two flags, not one: "slow" and "absent" are different messages with
+// different remediations, and a slow warning early in a run must not
+// suppress the permanent "not in PATH; scanning disabled" warning later.
+let _gitleaksSlowWarned = false;
+let _gitleaksAbsentWarned = false;
 
 // Probe budgets. The first is short because the common answers (a real
 // gitleaks, or ENOENT) are both immediate; the second is generous because by
@@ -152,13 +156,9 @@ function probeGitleaks(timeoutMs: number): GitleaksProbe {
     });
     return "ok";
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
+    const e = err as NodeJS.ErrnoException;
     if (e?.code === "ENOENT") return "absent";
-    // execFileSync kills the child when the budget runs out: `killed` with a
-    // SIGTERM on POSIX, ETIMEDOUT on runtimes that surface errno instead.
-    if (e?.killed === true || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT") {
-      return "slow";
-    }
+    if (isExecTimeout(err)) return "slow";
     // Present but unusable (non-zero exit, EACCES). Practically the same as
     // absent, and equally permanent for this process.
     return "absent";
@@ -187,8 +187,8 @@ function gitleaksAvailable(): boolean {
 
   if (probe === "slow") {
     // No cache write: leave the question open for the next call.
-    if (!_gitleaksWarned) {
-      _gitleaksWarned = true;
+    if (!_gitleaksSlowWarned) {
+      _gitleaksSlowWarned = true;
       process.stderr.write(
         "[gstack-memory-helpers] gitleaks did not answer in " +
         `${Math.round((_probeMs + _retryMs) / 1000)}s (machine under load); ` +
@@ -200,8 +200,8 @@ function gitleaksAvailable(): boolean {
 
   _gitleaksAvailability = false;
   // Only warn once per process — Lane E will vendor the binary.
-  if (!_gitleaksWarned) {
-    _gitleaksWarned = true;
+  if (!_gitleaksAbsentWarned) {
+    _gitleaksAbsentWarned = true;
     process.stderr.write(
       "[gstack-memory-helpers] gitleaks not in PATH; secret scanning disabled. " +
       "Run /setup-gbrain to install (or `brew install gitleaks`).\n"
@@ -576,7 +576,8 @@ function logErrorContext(entry: ErrorContextEntry): void {
 // Test-only export for resetting the gitleaks availability cache between tests.
 export function _resetGitleaksAvailabilityCache(): void {
   _gitleaksAvailability = null;
-  _gitleaksWarned = false;
+  _gitleaksSlowWarned = false;
+  _gitleaksAbsentWarned = false;
   _probeMs = GITLEAKS_PROBE_MS;
   _retryMs = GITLEAKS_RETRY_MS;
 }
