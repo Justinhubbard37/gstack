@@ -170,6 +170,11 @@ If `$STASH_OUTPUT` contains "Saved working directory", warn the user: "Note: loc
 **For vendored installs** (vendored, vendored-global):
 ```bash
 PARENT=$(dirname "$INSTALL_DIR")
+# A stale .bak from a previously crashed upgrade would make the mv below NEST
+# the live install inside it and the failure-restore arm would "restore" the
+# stale backup. It may also be the only good copy from that crashed run —
+# abort and let the human inspect, never delete it silently.
+[ -e "$INSTALL_DIR.bak" ] && { echo "ERROR: stale backup exists at $INSTALL_DIR.bak (from a previous failed upgrade?) — inspect it, salvage/remove it, then re-run." >&2; exit 1; }
 TMP_DIR=$(mktemp -d) || { echo "ERROR: mktemp failed — aborting upgrade (install untouched)." >&2; exit 1; }
 git clone --depth 1 https://github.com/garrytan/gstack.git "$TMP_DIR/gstack" || { echo "ERROR: clone failed — aborting upgrade (install untouched)." >&2; rm -rf "$TMP_DIR"; exit 1; }
 mv "$INSTALL_DIR" "$INSTALL_DIR.bak"
