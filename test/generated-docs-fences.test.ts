@@ -42,14 +42,18 @@ function generatedDocs(): string[] {
 /** Returns the 1-based line of the first unclosed fence, or null when paired. */
 export function findUnclosedFence(body: string): number | null {
   let openLine: number | null = null;
+  let openLen = 0;
   const lines = body.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i];
-    if (!ln.startsWith("```")) continue;
+    const run = lines[i].match(/^(`{3,})(.*)$/);
+    if (!run) continue;
     if (openLine === null) {
-      openLine = i + 1; // any ``` line opens (info string allowed)
-    } else if (/^```\s*$/.test(ln)) {
-      openLine = null; // only a bare ``` closes (CommonMark)
+      openLine = i + 1; // any ```+ line opens (info string allowed)
+      openLen = run[1].length;
+    } else if (run[1].length >= openLen && /^\s*$/.test(run[2])) {
+      // CommonMark close: backticks-only, run at least as long as the opener.
+      // A shorter run (``` inside a ```` fence) is literal content.
+      openLine = null;
     }
     // ```lang while inside = literal content (nested fence example) — ignore.
   }
@@ -82,6 +86,15 @@ describe("generated-doc fence pairing (#2671)", () => {
     // detectable invariant is end-of-file state, so test a truly unclosed tail:
     expect(findUnclosedFence(broken)).toBeNull();
     expect(findUnclosedFence(broken + "```text\ntail\n")).toBe(9);
+  });
+
+  test("fence-length tracking: a longer opener is not closed by a shorter run", () => {
+    // 4-backtick fence wrapping a 3-backtick example (the standard way to
+    // show a fence inside a fence) — the inner bare ``` must NOT close it.
+    const quad = "````markdown\n```bash\necho hi\n```\n````\n";
+    expect(findUnclosedFence(quad)).toBeNull();
+    // Same body missing the 4-backtick closer: unclosed at line 1.
+    expect(findUnclosedFence("````markdown\n```bash\necho hi\n```\n")).toBe(1);
   });
 });
 
@@ -124,5 +137,111 @@ describe("codex exit-code capture is bash+zsh portable (#2669)", () => {
     expect(r.stdout).toContain("EXIT:7");
     const c = spawnSync("zsh", ["-c", CLEAN], { encoding: "utf-8", timeout: 10_000 });
     expect(c.stdout).toContain("EXIT:0");
+  });
+});
+
+describe("codex JSONL python parser semantics (runtime)", () => {
+  /**
+   * Extract the python program passed to `"$PYTHON_CMD" -u -c "..."` from a
+   * RENDERED codex section. The program sits inside a double-quoted bash
+   * string: it starts on the line after the `-u -c "` opener and ends at the
+   * next line that is exactly `"`.
+   *
+   * No un-escaping is needed: the raw bytes carry exactly one backslash
+   * sequence (`\n` inside an f-string), and bash double quotes pass a
+   * backslash through UNCHANGED unless it precedes $, `, ", \ or newline —
+   * so the raw markdown text is byte-for-byte the program bash hands to
+   * python. The safety pins below fail if that equivalence is ever broken.
+   */
+  function extractParsers(rel: string): string[] {
+    const body = fs.readFileSync(path.join(ROOT, rel), "utf-8");
+    const OPENER = '-u -c "\n';
+    const out: string[] = [];
+    let at = body.indexOf(OPENER);
+    while (at !== -1) {
+      const start = at + OPENER.length;
+      const close = body.indexOf('\n"\n', start); // closing lone-" line
+      if (close === -1) break;
+      const src = body.slice(start, close);
+      // consult's resume block is a `<same python streaming parser as above>`
+      // placeholder, not a program — keep only real parsers.
+      if (src.startsWith("import sys, json")) out.push(src);
+      at = body.indexOf(OPENER, close);
+    }
+    return out;
+  }
+
+  const challenge = extractParsers("codex/sections/challenge-mode.md");
+  const consult = extractParsers("codex/sections/consult-mode.md");
+
+  test("each rendered section yields exactly one real parser program", () => {
+    expect(challenge.length).toBe(1);
+    expect(consult.length).toBe(1);
+    for (const src of [...challenge, ...consult]) {
+      expect(src).toContain("turn_completed_count = 0");
+      expect(src).toContain("turn_failed = False");
+      // bash double-quote safety pins: an unescaped $ or backtick would be
+      // EXPANDED by bash before python ever saw it, and a \$ \` \" or \\
+      // would be escape-PROCESSED — either breaks the raw-text == delivered-
+      // text equivalence this suite (and the live skill) relies on.
+      expect(src).not.toMatch(/[$`]/);
+      expect(src).not.toMatch(/\\[\\"$`]/);
+    }
+  });
+
+  const hasPython =
+    spawnSync("python3", ["--version"], { encoding: "utf-8", timeout: 10_000 }).status === 0;
+
+  function runParser(src: string, events: unknown[]): { stdout: string; stderr: string } {
+    const input = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+    const r = spawnSync("python3", ["-u", "-c", src], {
+      input,
+      encoding: "utf-8",
+      timeout: 15_000,
+    });
+    expect(r.status).toBe(0);
+    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  }
+
+  const SECTIONS = [
+    ["challenge-mode", challenge],
+    ["consult-mode", consult],
+  ] as const;
+
+  for (const [name, parsers] of SECTIONS) {
+    test.skipIf(!hasPython)(`${name}: turn.completed prints token usage, no disconnect warning`, () => {
+      const { stdout, stderr } = runParser(parsers[0], [
+        { type: "item.completed", item: { type: "agent_message", text: "hello from codex" } },
+        { type: "turn.completed", usage: { input_tokens: 1200, output_tokens: 34 } },
+      ]);
+      expect(stdout).toContain("hello from codex");
+      expect(stdout).toContain("tokens used: 1234");
+      expect(stderr).not.toContain("No turn.completed event received");
+      expect(stderr).not.toContain("[codex turn FAILED]");
+    });
+
+    test.skipIf(!hasPython)(`${name}: turn.failed is a STATED failure, not a disconnect`, () => {
+      const { stderr } = runParser(parsers[0], [
+        { type: "turn.failed", error: { message: "model exploded" } },
+      ]);
+      expect(stderr).toContain("[codex turn FAILED] model exploded");
+      expect(stderr).toContain("not a disconnect");
+      expect(stderr).not.toContain("No turn.completed event received");
+    });
+
+    test.skipIf(!hasPython)(`${name}: silence with no terminal event warns of a disconnect`, () => {
+      const { stderr } = runParser(parsers[0], [
+        { type: "item.completed", item: { type: "reasoning", text: "thinking" } },
+      ]);
+      expect(stderr).toContain("No turn.completed event received");
+    });
+  }
+
+  test.skipIf(!hasPython)("consult-mode: thread.started prints SESSION_ID for session capture", () => {
+    const { stdout } = runParser(consult[0], [
+      { type: "thread.started", thread_id: "0199-abc-123" },
+      { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } },
+    ]);
+    expect(stdout).toContain("SESSION_ID:0199-abc-123");
   });
 });
