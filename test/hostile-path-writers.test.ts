@@ -26,7 +26,12 @@ import { spawnSync } from 'child_process';
  * code is 0 — exit-code-only assertions are exactly what masked bug 1.
  */
 
-const HOSTILE = path.join(os.tmpdir(), "gstack o'brien test");
+// Per-run mkdtemp root: a fixed tmpdir name would collide across concurrent
+// runs (sharded runner, sibling worktrees) — one run's beforeAll rmSync would
+// tear down the other's tree mid-flight. The hostile apostrophe name lives
+// one level below the unique root.
+const RUN_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-hostile-'));
+const HOSTILE = path.join(RUN_ROOT, "gstack o'brien test");
 const STATE = path.join(HOSTILE, 'state');
 const REPO = path.resolve(import.meta.dir, '..');
 
@@ -44,7 +49,6 @@ function runBin(bin: string, args: string[], env: Record<string, string> = {}) {
 }
 
 beforeAll(() => {
-  fs.rmSync(HOSTILE, { recursive: true, force: true });
   fs.mkdirSync(STATE, { recursive: true });
   // The bins resolve SCRIPT_DIR from their own location and import ../lib and
   // ../scripts relative to it, so copy all three alongside each other.
@@ -54,7 +58,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(HOSTILE, { recursive: true, force: true });
+  fs.rmSync(RUN_ROOT, { recursive: true, force: true });
 });
 
 describe('bin writers under a path containing an apostrophe', () => {
@@ -95,5 +99,53 @@ describe('bin writers under a path containing an apostrophe', () => {
     const r = runBin('gstack-developer-profile', ['--derive']);
     expect(r.stdout + r.stderr).not.toContain('ENOENT');
     expect(r.stdout).toContain('DERIVE: ok');
+  });
+
+  test('gstack-telemetry-log appends a row with the error message REDACTED (not just exit 0)', () => {
+    // The bin's tier gate (`gstack-config get telemetry`, default off) exits 0
+    // WITHOUT writing — enable the anonymous tier via the config file that
+    // gstack-config resolves from GSTACK_HOME (already set by runBin).
+    fs.writeFileSync(path.join(STATE, 'config.yaml'), 'telemetry: anonymous\n');
+
+    // 36 alnum chars after ghp_ — matches the github.pat redaction pattern.
+    // Built by concatenation so a token-shaped literal never sits in this file.
+    const FAKE_PAT = 'ghp_' + 'a1B2'.repeat(9);
+    const r = runBin(
+      'gstack-telemetry-log',
+      [
+        '--skill', 'hostile-telemetry-probe',
+        '--outcome', 'failure',
+        '--error-class', 'probe',
+        '--error-message', `auth failed for token ${FAKE_PAT} while pushing`,
+        '--session-id', 'hostile-telemetry-session',
+      ],
+      {
+        // gstack-telemetry-log reads GSTACK_STATE_DIR (not GSTACK_HOME) for
+        // its analytics dir; point both at the same isolated state tree.
+        GSTACK_STATE_DIR: STATE,
+        // Keep the fire-and-forget gstack-telemetry-sync child inert: with no
+        // Supabase URL (and no supabase/config.sh in the copied tree) it
+        // exits 0 before any network attempt.
+        GSTACK_SUPABASE_URL: '',
+      },
+    );
+    expect(r.status).toBe(0);
+    expect(r.stderr ?? '').not.toContain('Expected ";"');
+
+    const jsonl = path.join(STATE, 'analytics', 'skill-usage.jsonl');
+    expect(fs.existsSync(jsonl)).toBe(true);
+    const rows = fs.readFileSync(jsonl, 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    const row = rows.find((j) => j.skill === 'hostile-telemetry-probe');
+    expect(row).toBeDefined();
+    expect(row.outcome).toBe('failure');
+    expect(row.session_id).toBe('hostile-telemetry-session');
+    // #1947: error_message flows through redactFindingSpans before it touches
+    // disk — the credential span becomes <REDACTED-{pattern.id}> while the
+    // rest of the message survives for crash triage. Asserting the marker
+    // (not merely null) proves the bun -e engine call actually ran under the
+    // apostrophe path instead of fail-closing the whole message away.
+    expect(row.error_message).toContain('<REDACTED-github.pat>');
+    expect(row.error_message).toContain('auth failed for token');
+    expect(row.error_message).not.toContain(FAKE_PAT);
   });
 });
