@@ -65,6 +65,61 @@ describe("regression: disambiguateSlugs resolves colliding staged slugs", () => 
     expect(pages.map((p) => p.slug)).toEqual(before);
   });
 
+  it("state consult: a source keeps its recorded suffixed slug when its old collider is absent", () => {
+    // Run 1 assigned A the bare slug and B the suffix; run 2 sees only B
+    // (A unchanged or gone). Without the consult B would flip to bare and
+    // gbrain would hold the same transcript under two slugs.
+    const slug = "transcripts/claude-code/repo/2026-08-25-abc123def456";
+    const state = {
+      sessions: {
+        "/a.jsonl": { page_slug: slug },
+        "/b.jsonl": { page_slug: `${slug}-cafe0123` },
+      },
+    };
+    const pages = [mk(slug, "/b.jsonl")];
+    disambiguateSlugs(pages, state);
+    expect(pages[0].slug).toBe(`${slug}-cafe0123`);
+    expect(pages[0].page_slug).toBe(pages[0].slug);
+  });
+
+  it("state consult: a new source never takes a bare slug owned by an unchanged source", () => {
+    // A owns the bare slug from a prior run but is NOT restaged this run;
+    // new collider C must suffix, not silently overwrite A's page in gbrain.
+    const slug = "transcripts/claude-code/repo/2026-08-25-abc123def456";
+    const state = { sessions: { "/a.jsonl": { page_slug: slug } } };
+    const pages = [mk(slug, "/c.jsonl")];
+    disambiguateSlugs(pages, state);
+    expect(pages[0].slug).not.toBe(slug);
+    expect(pages[0].slug.startsWith(slug + "-")).toBe(true);
+  });
+
+  it("state consult: legacy duplicate records resolve first-owner-wins and self-heal", () => {
+    // Pre-#2724 states could record the SAME bare slug for two sources.
+    // The first owner in state order keeps it; the other gets a stable
+    // suffix — after this run the state records distinct slugs.
+    const slug = "transcripts/codex/repo/2026-08-25-deadbeefcafe";
+    const state = {
+      sessions: {
+        "/first.jsonl": { page_slug: slug },
+        "/second.jsonl": { page_slug: slug },
+      },
+    };
+    const pages = [mk(slug, "/first.jsonl"), mk(slug, "/second.jsonl")];
+    disambiguateSlugs(pages, state);
+    expect(pages[0].slug).toBe(slug);
+    expect(pages[1].slug).not.toBe(slug);
+    expect(pages[1].slug.startsWith(slug + "-")).toBe(true);
+  });
+
+  it("state consult: no state (or empty sessions) behaves exactly like the stateless algorithm", () => {
+    const slug = "transcripts/claude-code/repo/2026-08-25-abc123def456";
+    const a = [mk(slug, "/a.jsonl"), mk(slug, "/b.jsonl")];
+    const b = [mk(slug, "/a.jsonl"), mk(slug, "/b.jsonl")];
+    disambiguateSlugs(a);
+    disambiguateSlugs(b, { sessions: {} });
+    expect(b.map((p) => p.slug)).toEqual(a.map((p) => p.slug));
+  });
+
   it("call-site wiring: the prepare/stage flow actually invokes disambiguateSlugs (source pin)", () => {
     // The unit tests above prove the function works; nothing else proves the
     // flow CALLS it — a refactor could drop the invocation and every test
