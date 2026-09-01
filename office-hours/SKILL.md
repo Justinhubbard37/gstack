@@ -823,7 +823,7 @@ On any Codex error, fall back to the Claude subagent below.
 
 **If CODEX_NOT_AVAILABLE (or Codex errored):**
 
-Dispatch via the Agent tool. The subagent has fresh context — genuine independence.
+Dispatch via the Agent tool with `run_in_background: false` (subagents default to background since Claude Code v2.1.198; the findings must land before the workflow continues). The subagent has fresh context — genuine independence.
 
 Subagent prompt: same mode-appropriate prompt as above (Startup or Builder variant).
 
@@ -1059,7 +1059,7 @@ codex exec "For this product approach, provide: a visual thesis (one sentence �
 ```
 Use a 5-minute timeout (`timeout: 300000`). After completion: `cat "$TMPERR_SKETCH" && rm -f "$TMPERR_SKETCH"`
 
-2. **Claude subagent** (via Agent tool):
+2. **Claude subagent** (via Agent tool, `run_in_background: false` — subagents default to background since Claude Code v2.1.198):
 "For this product approach, what design direction would you recommend? What aesthetic, typography, and interaction patterns fit? What would make this approach feel inevitable to the user? Be specific — font names, hex colors, spacing values."
 
 Present Codex output under `CODEX SAYS (design sketch):` and subagent output under `CLAUDE SUBAGENT (design direction):`.

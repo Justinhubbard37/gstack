@@ -35,6 +35,24 @@ const GENERATED_WITH_GUIDANCE = [
   'ship/sections/test-coverage.md',
   'ship/sections/plan-completion.md',
   'ship/sections/greptile.md',
+  // Sweep carriers (v1.78): every remaining synchronous Agent-dispatch site.
+  'autoplan/sections/design-phase.md',
+  'autoplan/sections/eng-phase.md',
+  'autoplan/sections/dx-phase.md',
+  'cso/SKILL.md',
+  'design-consultation/SKILL.md',
+  'design-review/SKILL.md',
+  'design-shotgun/SKILL.md',
+  'document-release/sections/release-body.md',
+  'office-hours/SKILL.md',
+  'office-hours/sections/design-and-handoff.md',
+  'plan-ceo-review/SKILL.md',
+  'plan-ceo-review/sections/review-sections.md',
+  'plan-design-review/SKILL.md',
+  'plan-devex-review/sections/review-sections.md',
+  'plan-eng-review/sections/review-sections.md',
+  'review/sections/adversarial.md',
+  'ship/sections/adversarial.md',
 ];
 
 // The inverted, post-2.1.198-inert phrasings. Checked across every generated

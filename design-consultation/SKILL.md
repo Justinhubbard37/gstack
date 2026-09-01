@@ -793,7 +793,7 @@ Use a 5-minute timeout (`timeout: 300000`). After the command completes, read st
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 ```
 
-2. **Claude design subagent** (via Agent tool):
+2. **Claude design subagent** (via Agent tool, `run_in_background: false` — subagents default to background since Claude Code v2.1.198):
 Dispatch a subagent with this prompt:
 "Given this product context, propose a design direction that would SURPRISE. What would the cool indie studio do that the enterprise UI team wouldn't?
 - Propose an aesthetic direction, typography stack (specific font names), color palette (hex values)

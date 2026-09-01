@@ -531,7 +531,7 @@ codex exec "For this product approach, provide: a visual thesis (one sentence �
 \`\`\`
 Use a 5-minute timeout (\`timeout: 300000\`). After completion: \`cat "$TMPERR_SKETCH" && rm -f "$TMPERR_SKETCH"\`
 
-2. **Claude subagent** (via Agent tool):
+2. **Claude subagent** (via Agent tool, \`run_in_background: false\` — subagents default to background since Claude Code v2.1.198):
 "For this product approach, what design direction would you recommend? What aesthetic, typography, and interaction patterns fit? What would make this approach feel inevitable to the user? Be specific — font names, hex colors, spacing values."
 
 Present Codex output under \`CODEX SAYS (design sketch):\` and subagent output under \`CLAUDE SUBAGENT (design direction):\`.
@@ -704,7 +704,7 @@ Use a 5-minute timeout (\`timeout: 300000\`). After the command completes, read 
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 \`\`\`
 
-2. **Claude design subagent** (via Agent tool):
+2. **Claude design subagent** (via Agent tool, \`run_in_background: false\` — subagents default to background since Claude Code v2.1.198):
 Dispatch a subagent with this prompt:
 "${subagentPrompt}"
 

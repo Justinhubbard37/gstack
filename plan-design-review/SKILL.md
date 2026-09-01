@@ -1027,7 +1027,7 @@ Use a 5-minute timeout (`timeout: 300000`). After the command completes, read st
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 ```
 
-2. **Claude design subagent** (via Agent tool):
+2. **Claude design subagent** (via Agent tool, `run_in_background: false` — subagents default to background since Claude Code v2.1.198):
 Dispatch a subagent with this prompt:
 "Read the plan file at [plan-file-path]. You are an independent senior product designer reviewing this plan. You have NOT seen any prior review. Evaluate:
 

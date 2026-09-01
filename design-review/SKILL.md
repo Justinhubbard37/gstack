@@ -1432,7 +1432,7 @@ Use a 5-minute timeout (`timeout: 300000`). After the command completes, read st
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 ```
 
-2. **Claude design subagent** (via Agent tool):
+2. **Claude design subagent** (via Agent tool, `run_in_background: false` — subagents default to background since Claude Code v2.1.198):
 Dispatch a subagent with this prompt:
 "Review the frontend source code in this repo. You are an independent senior product designer doing a source-code design audit. Focus on CONSISTENCY PATTERNS across files rather than individual violations:
 - Are spacing values systematic across the codebase?

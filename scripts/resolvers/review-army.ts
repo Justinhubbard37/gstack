@@ -230,7 +230,7 @@ function generateRedTeam(ctx: TemplateContext): string {
 
 **Activation:** Only if DIFF_LINES > 200 OR any specialist produced a CRITICAL finding.
 
-If activated, dispatch one more subagent via the Agent tool (foreground, not background).
+If activated, dispatch one more subagent via the Agent tool (pass \`run_in_background: false\` — foreground; subagents default to background since Claude Code v2.1.198).
 
 The Red Team subagent receives:
 1. The red-team checklist from \`${ctx.paths.skillRoot}/review/specialists/red-team.md\`
