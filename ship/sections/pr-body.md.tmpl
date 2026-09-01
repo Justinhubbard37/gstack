@@ -184,11 +184,14 @@ printf '%s' "v$NEW_VERSION <type>: <summary>" | ~/.claude/skills/gstack/bin/gsta
 HIGH blocks (exit 3, no skip). MEDIUM → AskUserQuestion (PII subset offers
 `--auto-redact`). Same scan runs before the `gh pr edit --body` path (Step 17).
 
-**If GitHub:** create from the SCANNED file (exact bytes scanned = bytes sent):
+**If GitHub:** create from the SCANNED file (exact bytes scanned = bytes sent).
+`$PR_BODY_FILE` comes from the scan block above — restate it in this shell if
+blocks ran separately, and never proceed with an empty file:
 
 ```bash
 # PR title MUST start with v$NEW_VERSION — enforced on every run, no exceptions.
 # (See Step 19 idempotency block + bin/gstack-pr-title-rewrite.sh for the rule.)
+[ -s "$PR_BODY_FILE" ] || { echo "ERROR: scanned body file missing/empty — re-run the scan block." >&2; exit 1; }
 gh pr create --base <base> --title "v$NEW_VERSION <type>: <summary>" --body-file "$PR_BODY_FILE"
 rm -f "$PR_BODY_FILE"
 ```
@@ -199,7 +202,9 @@ rm -f "$PR_BODY_FILE"
 # MR title MUST start with v$NEW_VERSION — enforced on every run, no exceptions.
 # (See Step 19 idempotency block + bin/gstack-pr-title-rewrite.sh for the rule.)
 # Send the SCANNED file's bytes — scan-at-sink means never re-render the body
-# from a fresh heredoc (that reopens the scan-vs-send gap).
+# from a fresh heredoc (that reopens the scan-vs-send gap). $PR_BODY_FILE comes
+# from the scan block above; never proceed with an empty file.
+[ -s "$PR_BODY_FILE" ] || { echo "ERROR: scanned body file missing/empty — re-run the scan block." >&2; exit 1; }
 glab mr create -b <base> -t "v$NEW_VERSION <type>: <summary>" -d "$(cat "$PR_BODY_FILE")"
 rm -f "$PR_BODY_FILE"
 ```
