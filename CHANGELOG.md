@@ -51,7 +51,7 @@ Plan reviews ask their questions again, `browse stop` actually stops Chromium, s
 - Codex preflight: a CLI that cannot execute reports `broken_install`, never `ready` — the wave completed autoplan's hand-maintained preflight chain and narrowed the install-signature grep to failed spawns. Contributed by @ukheni50 (#2745; fixes #2742).
 - ship design-checklist path points at the installed gstack/review copy. Contributed by @Lockyer228 (#2717; fixes #2694).
 - Feature markers live in GStack state, not project checkouts — the wave re-applied the CI seeding to the composite action and added an upgrade migration so nobody gets re-prompted. Contributed by @simonaltit (#2748; fixes #2728).
-- memory-ingest: transcript pages no longer vanish to slug collisions (887 staged → 0 ingested) or a frontmatter-fence render bug. Contributed by @rayers (#2699; fixes #2724).
+- memory-ingest: transcript pages no longer vanish to slug collisions (887 staged → 0 ingested) or a frontmatter-fence render bug; slug assignments persist in the ingest state, so a page keeps its slug across runs and a new collider can never overwrite an unchanged page. Contributed by @rayers (#2699; fixes #2724).
 - browse js/eval returns the value of an async IIFE. Contributed by @loulanyue (#2747; fixes #2727).
 - land-and-deploy checks fork branches in the head repository — the wave replaced the metadata command (gh leaves `nameWithOwner` empty) and made fork branches report-only. Contributed by @pttydou (#2725; fixes #2696).
 - gstack-config rejects malformed `cross_project_learnings` at set. Contributed by @szsunyuan (#2676; fixes #2673).
@@ -61,7 +61,7 @@ Plan reviews ask their questions again, `browse stop` actually stops Chromium, s
 - redact: `.env.local` is not an internal hostname. Contributed by @davidani-davi (#2740).
 - redact: git SSH remotes are not emails — the wave named the lookahead constant. Contributed by @alopes50 (#2734).
 - gbrain ≥0.43 held-lock refusal classifies as engine-locked, not broken-config. Contributed by @pvanl (#2698).
-- A slow gitleaks probe no longer permanently disables secret scanning. Contributed by @deniszjukow (#2715).
+- A slow gitleaks probe no longer permanently disables secret scanning — and after three consecutive slow answers the run stops re-probing per file (a loaded box no longer stalls a big ingest for hours), warning once; the next run probes fresh. Contributed by @deniszjukow (#2715).
 - open-gstack-browser pre-flight actually kills the stale daemon (the pid grep never matched pretty-printed JSON). Contributed by @deniszjukow (#2714).
 - browse CLI honours CHROMIUM_PROFILE in profile-lock cleanup — the wave added the wiring tripwire. Contributed by @adam-badar (#2732).
 - make-pdf's pdftotext probe reads poppler's stderr banner instead of reporting "unknown" everywhere. Contributed by @snymanpaul (#2690).
