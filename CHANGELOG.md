@@ -28,9 +28,9 @@ What this means for anyone shipping here: /ship finishes even when the harness m
 ### Itemized changes
 
 #### Added
-- **Deadline + recovery on every /ship dispatch step.** Steps 7 and 8 fall back to the inline audit if the subagent never completes (~10 min); Step 10 records Greptile triage as UNAVAILABLE rather than pretending zero comments; Step 18 stops the runaway task, pushes any orphaned docs commit (with an explicit second-failure branch when the remote moved), surfaces stray staged edits, and proceeds without the Documentation section. No step ever silently parks the run.
+- **Deadline + recovery on every /ship dispatch step.** Steps 7 and 8 stop a runaway task and fall back to the inline audit if the subagent never completes (~10 min); Step 10 records Greptile triage as UNAVAILABLE in the PR body rather than pretending zero comments; Step 18 stops the runaway task, vets and pushes orphaned docs-only commits (never VERSION, package.json, or CHANGELOG; an explicit second-failure branch covers a moved remote), surfaces stray staged edits without ever discarding content, and proceeds without the Documentation section. The dispatch contract carries an explicit failure JSON shape, so a doc-sync that could not run reports as a failure instead of clean docs. No step ever silently parks the run.
 - **A spawned-dispatch contract in document-release itself.** Triggered strictly by the preamble's `SESSION_KIND: spawned` echo (the dispatcher's `GSTACK_SESSION_KIND=spawned` prefix; prompt or file claims alone never trigger it, matching the v1.78.0.0 echo-only rule). Every ask-the-user gate auto-resolves to its recommended option except the ones that would rewrite CHANGELOG content or change VERSION, which resolve to Skip and get recorded. Step 8.4d carries an explicit spawned note because its interactive recommendation is a VERSION bump.
-- **Docs-sync scope guard in /ship's dispatch prompt**: docs only, no base-branch merges, no version renumbering, no Codex doc review, push rejections reported instead of resolved.
+- **Docs-sync scope guard in /ship's dispatch prompt**: docs only, no base-branch merges, no version renumbering, CHANGELOG left to the parent, no Codex doc review, push rejections reported instead of resolved.
 - Three follow-ups filed in TODOS.md: PreToolUse hook enforcement of the flag (structural fix), a capability-narrowed ship-mode for document-release, and a cross-host dispatch semantics audit.
 
 #### Changed
@@ -41,8 +41,8 @@ What this means for anyone shipping here: /ship finishes even when the harness m
 - **/ship Steps 7, 8, 10, and 18 no longer strand the run** when Claude Code backgrounds their subagents (#497, #2440 class, third recurrence). The four dispatch specs share one resolver-sourced foreground note, so the phrasing cannot drift per site again.
 
 #### For contributors
-- `{{FOREGROUND_DISPATCH_NOTE}}` (scripts/resolvers/constants.ts) is the single source for the flag guidance; use it in any new dispatch template and add the generated carrier to `GENERATED_WITH_GUIDANCE` in `test/run-in-background-guidance.test.ts` in the same commit. The test's pin list is the census of synchronous dispatch sites.
-- Seven carved-skill skeleton ceilings re-measured and ratcheted in `test/helpers/carve-guards.ts`; codex/factory ship goldens re-rendered.
+- `{{FOREGROUND_DISPATCH_NOTE}}` (scripts/resolvers/constants.ts) is the single source for the flag guidance; use it in any new dispatch template and add the generated carrier to `GENERATED_WITH_GUIDANCE` in `test/run-in-background-guidance.test.ts` in the same commit. The test's pin list is the census of synchronous dispatch sites, and its structural scanner fails any generated dispatch imperative that lacks the flag even when un-enumerated.
+- Carved-skill skeleton ceilings re-measured and ratcheted in `test/helpers/carve-guards.ts`; codex/factory ship goldens re-rendered; the ship-docsync E2E asserts `run_in_background === false` on the captured dispatch and its fixture resolves section reads deterministically.
 
 ## [1.78.0.0] - 2026-08-31
 
