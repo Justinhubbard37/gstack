@@ -29,23 +29,17 @@ export function hasAwait(code: string): boolean {
 }
 
 /**
- * Detect whether code is a single top-level expression (such as an IIFE or parenthesized expression),
- * even if it contains internal statements, semicolons, or multiple lines (#2727).
+ * Find the index of the bracket that closes the group opened at `start`
+ * (which must be `(` or `[`), skipping string literals and escapes.
+ * Returns -1 when unbalanced. Shared by the single-expression scanner below.
  */
-export function isSingleParenOrIifeExpression(code: string): boolean {
-  const trimmed = code.trim().replace(/;+\s*$/, '');
-  let src = trimmed;
-  if (src.startsWith('await ') || src.startsWith('await\t') || src.startsWith('await\n')) {
-    src = src.slice(5).trim();
-  }
-  if (!src.startsWith('(')) return false;
-
+function findBalancedClose(src: string, start: number): number {
+  const open = src[start];
+  const close = open === '(' ? ')' : ']';
   let depth = 0;
   let inString: string | null = null;
   let escape = false;
-  let mainCloseIndex = -1;
-
-  for (let i = 0; i < src.length; i++) {
+  for (let i = start; i < src.length; i++) {
     const char = src[i];
     if (escape) {
       escape = false;
@@ -63,49 +57,61 @@ export function isSingleParenOrIifeExpression(code: string): boolean {
       inString = char;
       continue;
     }
-    if (char === '(') {
+    if (char === open) {
       depth++;
-    } else if (char === ')') {
+    } else if (char === close) {
       depth--;
-      if (depth === 0) {
-        mainCloseIndex = i;
-        break;
-      }
+      if (depth === 0) return i;
     }
   }
+  return -1;
+}
 
+/**
+ * Detect whether code is a single top-level expression (such as an IIFE or parenthesized expression),
+ * even if it contains internal statements, semicolons, or multiple lines (#2727).
+ *
+ * The tail after the initial `(...)` group must be a CONTINUOUS member/call/
+ * index chain consumed to end-of-input. Accepting any tail that merely starts
+ * with `(` or `.` classified `(iife)().then(x=>x); stmt` as a single
+ * expression, and the expression wrapper then emitted a SyntaxError.
+ */
+export function isSingleParenOrIifeExpression(code: string): boolean {
+  const trimmed = code.trim().replace(/;+\s*$/, '');
+  let src = trimmed;
+  if (src.startsWith('await ') || src.startsWith('await\t') || src.startsWith('await\n')) {
+    src = src.slice(5).trim();
+  }
+  if (!src.startsWith('(')) return false;
+
+  const mainCloseIndex = findBalancedClose(src, 0);
   if (mainCloseIndex === -1) return false;
 
-  const rest = src.slice(mainCloseIndex + 1).trim();
-  if (rest === '') return true;
-
-  if (rest.startsWith('(')) {
-    let callDepth = 0;
-    let callCloseIndex = -1;
-    let inStr: string | null = null;
-    let esc = false;
-    for (let i = 0; i < rest.length; i++) {
-      const c = rest[i];
-      if (esc) { esc = false; continue; }
-      if (c === '\\' && inStr) { esc = true; continue; }
-      if (inStr) { if (c === inStr) inStr = null; continue; }
-      if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
-      if (c === '(') callDepth++;
-      else if (c === ')') {
-        callDepth--;
-        if (callDepth === 0) {
-          callCloseIndex = i;
-          break;
-        }
-      }
+  // Consume the ENTIRE tail as a chain of `.member`, `(...)`, `[...]`, or
+  // optional-chaining segments. Anything else (a `;`, a second statement,
+  // an operator) means this is not a single expression.
+  let i = mainCloseIndex + 1;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      i++;
+      continue;
     }
-    if (callCloseIndex !== -1) {
-      const afterCall = rest.slice(callCloseIndex + 1).trim();
-      if (afterCall === '' || afterCall.startsWith('.')) return true;
+    if (ch === '(' || ch === '[') {
+      const close = findBalancedClose(src, i);
+      if (close === -1) return false;
+      i = close + 1;
+      continue;
     }
+    if (ch === '.' || (ch === '?' && src[i + 1] === '.')) {
+      i += ch === '.' ? 1 : 2;
+      // Member name (or the `(`/`[` of `?.()` / `?.[]`, handled next loop).
+      while (i < src.length && /[\w$]/.test(src[i])) i++;
+      continue;
+    }
+    return false;
   }
-
-  return false;
+  return true;
 }
 
 /** Detect whether code needs a block wrapper {…} vs expression wrapper (…) inside an async IIFE. */

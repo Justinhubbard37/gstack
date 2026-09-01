@@ -6,6 +6,28 @@ import {
   wrapForEvaluate,
 } from '../src/read-commands';
 
+// Regression: a chained IIFE followed by a SECOND statement was classified as
+// a single expression, and the expression wrapper emitted a SyntaxError. The
+// tail after the initial group must be a continuous member/call/index chain
+// to END of input.
+describe('chained IIFE followed by a second statement', () => {
+  it('is NOT a single expression and wraps to syntactically valid code', () => {
+    const code = "(async()=>{await 1})().then(x=>x); console.log('done')";
+    expect(isSingleParenOrIifeExpression(code)).toBe(false);
+    const wrapped = wrapForEvaluate(code);
+    expect(() => new Function('return ' + wrapped)).not.toThrow();
+  });
+
+  it('still accepts a pure chained IIFE (with optional chaining and index access)', () => {
+    expect(isSingleParenOrIifeExpression('(async()=>{await 1})().then(x=>x)')).toBe(true);
+    expect(isSingleParenOrIifeExpression('(getObj())?.items[0].run()')).toBe(true);
+  });
+
+  it('rejects an operator tail', () => {
+    expect(isSingleParenOrIifeExpression('(a)() + 1')).toBe(false);
+  });
+});
+
 describe('browse js / eval wrapping (#2727)', () => {
   it('detects presence of await keyword', () => {
     expect(hasAwait('await Promise.resolve(1)')).toBe(true);
