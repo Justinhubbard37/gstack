@@ -154,7 +154,7 @@ Bun auto-loads `.env` — no extra config. Conductor workspaces inherit `.env` f
 | 2+3 | `bun run test:evals` | ~$4 combined | E2E + LLM-as-judge (runs both) |
 
 ```bash
-bun run test                 # Tier 1 only (run before every commit, ~90-100s for the full ~7,000-test suite)
+bun run test                 # Tier 1 only (run before every commit, ~90-100s for the full ~8,700-test suite)
 bun run test:e2e             # Tier 2: E2E only (needs EVALS=1, can't run inside Claude Code)
 bun run test:evals           # Tier 2 + 3 combined (~$4.35/run)
 ```

@@ -193,7 +193,10 @@ for the full design + decision trail.
    Only an explicit `--force-restart` replaces a live-but-unresponsive
    daemon (tabs, cookies, and logins are lost). `browse stop` against a
    daemon that already died is success: the desired end state holds, so it
-   cleans the stale state file instead of booting a daemon just to stop it.
+   cleans the stale state file instead of booting a daemon just to stop it —
+   and reaps the headless Chromium child recorded in that state file if one
+   survived. The reap verifies the recorded start time AND a Chromium-looking
+   cmdline before sending any signal, so a recycled PID is never killed.
 
 ### Multi-workspace isolation
 
