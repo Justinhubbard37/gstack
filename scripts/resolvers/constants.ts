@@ -163,8 +163,8 @@ Branch on the echoed \`CODEX_MODE\`:
  * {{FOREGROUND_DISPATCH_NOTE}} in section templates; resolver sites may
  * interpolate it directly. Same name as the placeholder for grep-ability.
  */
-/** The Claude Code release that flipped Agent-tool subagents to background-by-default. One literal, interpolated everywhere the rationale is stated (#497/#2440 class). */
+/** The Claude Code release that flipped Agent-tool subagents to background-by-default (#497/#2440 class). Interpolated at every RESOLVER site; three templates carry the literal inline (autoplan/sections/ceo-phase, cso, design-shotgun) — grep 'Claude Code v2.1' when bumping. */
 export const CC_BACKGROUND_DEFAULT_SINCE = 'Claude Code v2.1.198';
 
 export const FOREGROUND_DISPATCH_NOTE =
-  `**Foreground required:** pass \`run_in_background: false\` on the Agent call — subagents run in the BACKGROUND by default since ${CC_BACKGROUND_DEFAULT_SINCE}. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) Dispatch with the Agent tool itself — never substitute the Skill tool or inline execution to "guarantee" blocking: the explicit flag already makes the Agent call block, and running the work inline forfeits the fresh-context isolation this dispatch exists for.`;
+  `**Foreground required:** pass \`run_in_background: false\` on the Agent call — subagents run in the BACKGROUND by default since ${CC_BACKGROUND_DEFAULT_SINCE}. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) Dispatch with the Agent tool itself — never substitute the Skill tool or inline execution at initial dispatch to "guarantee" blocking: the explicit flag already makes the Agent call block, and running the work inline forfeits the fresh-context isolation this dispatch exists for.`;

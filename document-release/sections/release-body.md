@@ -433,8 +433,8 @@ not an opt-in. The user turns it off only by asking explicitly
 
 **Spawned-session skip** (per the spawned-dispatch contract at the top of this skill): in a
 spawned session, skip this entire section — the dispatching workflow owns its own review
-passes, and the apply gate below needs a human. Note the skip in your completion report and
-continue with Step 9's doc health summary.
+passes, and the apply gate below needs a human. Note the skip in your completion report (the
+Step 9 doc health summary you already produced) and finish the workflow.
 
 **Preflight — decide whether and how the doc review runs:**
 

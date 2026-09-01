@@ -2381,8 +2381,10 @@ Linux cookie import shipped in v0.11.11.0 (Wave 3). Supports Chrome, Chromium, B
 **Context:** Third recurrence of the class (#497 → #2440 → /ship Step 18 stranding). The hook must scope to gstack skill sessions (never break legitimate background Agent use elsewhere), is Claude-host only (other hosts get nothing from it), and mirrors the existing question-preference PreToolUse hook wiring in `bin/gstack-settings-hook*`. Filed from the v1.79.0.0 CEO plan review (approach C, deliberately split out for bake time).
 
 **Effort:** M (human) / S (CC)
-**Priority:** P2
+**Priority:** P1
 **Depends on:** None
+
+*Priority raised P2 → P1 by the v1.79.0.0 adversarial review: the spawned trust chain is agent-self-asserted (the echo exists because the agent typed the env prefix a prompt told it to), so instruction text read before the preamble can convert an interactive run to full-auto. Prose cannot close this; the hook can.*
 
 ### Structural ship-mode for document-release
 

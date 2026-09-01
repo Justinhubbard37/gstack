@@ -4,7 +4,7 @@
 
 **Dispatch the fetch + classification as a subagent** using the Agent tool with `subagent_type: "general-purpose"`. The subagent pulls every Greptile comment, runs the escalation detection algorithm, and classifies each comment. Parent receives a structured list and handles user interaction + file edits.
 
-**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) Dispatch with the Agent tool itself — never substitute the Skill tool or inline execution to "guarantee" blocking: the explicit flag already makes the Agent call block, and running the work inline forfeits the fresh-context isolation this dispatch exists for.
+**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) Dispatch with the Agent tool itself — never substitute the Skill tool or inline execution at initial dispatch to "guarantee" blocking: the explicit flag already makes the Agent call block, and running the work inline forfeits the fresh-context isolation this dispatch exists for.
 
 **Subagent prompt:**
 
@@ -23,7 +23,7 @@ Parse the LAST line as JSON.
 
 If `total` is 0, skip this step silently. Continue to Step 12.
 
-**If the subagent fails, returns invalid JSON, or never completes (backgrounded despite the flag, or no final output after ~10 minutes — stop waiting):** print `Greptile triage did not complete — review the PR comments manually` and continue to Step 12, recording the triage as UNAVAILABLE — not as zero comments — in the PR body wherever review results are reported (an unavailable triage must not read as a clean one; Step 20's metrics schema carries no triage field, so the PR body is the record). Do not block /ship on the triage subagent.
+**If the subagent fails, returns invalid JSON, or never completes (backgrounded despite the flag, or no final output after ~10 minutes — stop waiting; if a backgrounded task is still running, stop it first so a late result never lands mid-ship):** print `Greptile triage did not complete — review the PR comments manually` and continue to Step 12, recording the triage as UNAVAILABLE — not as zero comments — in the PR body wherever review results are reported (an unavailable triage must not read as a clean one; Step 20's metrics schema carries no triage field, so the PR body is the record). Do not block /ship on the triage subagent.
 
 Otherwise, print: `+ {total} Greptile comments ({valid_actionable} valid, {already_fixed} already fixed, {false_positive} FP)`.
 
