@@ -316,10 +316,14 @@ export async function reapRecordedChromium(state: {
   const cmd = readPidCmdline(pid).toLowerCase();
   if (!/chrom|headless_shell/.test(cmd)) return;
   safeKill(pid, 'SIGTERM');
-  await new Promise(r => setTimeout(r, 1000));
+  // Poll instead of a fixed sleep: the common case (daemon's own close is
+  // finishing concurrently) exits in ~100-200ms instead of always paying 1s.
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline && isProcessAlive(pid)) {
+    await new Promise(r => setTimeout(r, 100));
+  }
   if (isProcessAlive(pid)) {
     safeKill(pid, 'SIGKILL');
-    await new Promise(r => setTimeout(r, 500));
   }
 }
 
@@ -496,7 +500,14 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
   // Bound the append-mode daemon log before the new daemon starts writing.
   rotateDaemonLogIfOversized();
 
-  // Clean up stale state file and error log
+  // Clean up stale state file and error log. Reap the previous daemon's
+  // recorded headless Chromium first — the state file is the only carrier of
+  // its identity, and the lock-less headless child is invisible to
+  // killOrphanChromium below (#2709). Identity-gated, so safe when stale.
+  {
+    const staleState = readState();
+    if (staleState) await reapRecordedChromium(staleState);
+  }
   safeUnlink(config.stateFile);
   safeUnlink(path.join(config.stateDir, 'browse-startup-error.log'));
 
@@ -1592,7 +1603,13 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     // Kill an orphaned Chromium still holding the profile lock (the Bun server
     // PID's Chromium child can outlive an abrupt kill/crash), then clear the
     // lock files so the launch is clean. Shared with the auto-restart path (#1781).
+    // Also reap the lock-less headless child recorded in the state file before
+    // deleting it — killOrphanChromium can't see it (#2709).
     await killOrphanChromium();
+    {
+      const staleState = readState();
+      if (staleState) await reapRecordedChromium(staleState);
+    }
     cleanChromiumProfileLocks();
 
     // Delete stale state file
@@ -1837,6 +1854,10 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
       process.exit(0);
     }
     if (!isProcessAlive(stopState.pid) && !(await isServerHealthy(stopState.port))) {
+      // The daemon died abruptly (SIGKILL, crash) — the likeliest orphan case.
+      // Reap the recorded headless Chromium BEFORE destroying the state file,
+      // which is the only carrier of its identity (#2709).
+      await reapRecordedChromium(stopState);
       safeUnlinkQuiet(config.stateFile);
       console.log('No daemon running (cleaned stale state) — nothing to stop.');
       process.exit(0);
