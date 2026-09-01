@@ -82,6 +82,27 @@ describe('run_in_background guidance (#2440)', () => {
     }
   });
 
+  // The spawned-dispatch contract is as regression-prone as the flag — this
+  // class regressed twice via unpinned prose. Pin the document-release
+  // contract, the Step 8.4d spawned note, and the resolver-side Codex
+  // doc-review skip in both generated output and templates.
+  const CONTRACT_PINS: Array<[string[], string]> = [
+    [['document-release/SKILL.md', 'document-release/SKILL.md.tmpl'], 'When dispatched as a subagent'],
+    [
+      ['document-release/sections/release-body.md', 'document-release/sections/release-body.md.tmpl'],
+      'A spawned run must never change VERSION',
+    ],
+    [['document-release/sections/release-body.md'], 'Spawned-session skip'],
+  ];
+  test('document-release carries the spawned-dispatch contract', () => {
+    for (const [sites, phrase] of CONTRACT_PINS) {
+      for (const rel of sites) {
+        const content = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+        expect(content).toContain(phrase);
+      }
+    }
+  });
+
   test('the inverted "do NOT use run_in_background" phrasing never comes back', () => {
     for (const file of allGeneratedSkillFiles()) {
       const content = fs.readFileSync(file, 'utf-8');

@@ -762,6 +762,12 @@ checks the docs against what actually shipped. This is a standard part of /docum
 not an opt-in. The user turns it off only by asking explicitly
 (\`gstack-config set codex_reviews disabled\`).
 
+**Spawned-session skip:** if this session is spawned (\`SESSION_KIND: spawned\` echoed by the
+preamble, or your dispatch prompt marks it — e.g. dispatched from /ship Step 18), skip this
+entire section: the dispatching workflow owns its own review passes, and the apply gate below
+needs a human. Note the skip in your completion report and continue with Step 9's doc health
+summary.
+
 **Preflight — decide whether and how the doc review runs:**
 
 ${codexPreflight({ disabledBehavior: 'skip-all' })}
