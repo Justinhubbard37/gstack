@@ -2,7 +2,7 @@
 
 ## [1.78.0.0] - 2026-08-31
 
-**Both red weekly lanes are green again, and 18 community fixes land with credit.**
+**Plan reviews ask their questions again, the OSV lane is green from 105 advisories, and 18 community fixes land with credit.**
 **The upgrade path can no longer delete your install.**
 
 The fix wave. The weekly periodic eval lane broke at v1.76: the spawned-session rule let the model infer "nobody is reading this" from any scripted-looking prompt and silently auto-decide every review question, so plan reviews stopped asking. reviewCount collapsed to 0 across four skills. The trigger is now machine-verifiable and nothing else: the preamble's own echoed `SESSION_KIND: spawned` status line. No text from a dispatch prompt, file, or page can flip a session to auto-choose; a spawned subagent that missed the env marker is still caught at failure time by the AUQ hooks' spawned escape. The reproduced failure went from 0 review questions to a full question flow on the same harness.
