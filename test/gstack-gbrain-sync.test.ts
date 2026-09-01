@@ -192,6 +192,15 @@ case "$*" in
 esac
 `);
     chmodSync(join(bindir, "gbrain"), 0o755);
+    // #2685: this case is a real (non-dry-run) --code-only child, so it hits
+    // detectAutopilot's PATH-resolved `pgrep -f "gbrain autopilot"`. A live
+    // host autopilot is a correct #1734 refuse — the test cannot inject
+    // processRunning. Stub pgrep to "no match" so the pin is about the
+    // symlink, not the operator's daemon. Blank GBRAIN_HOME so an inherited
+    // lock under $GBRAIN_HOME/.gbrain cannot refuse before pgrep. Do not add
+    // a production env hatch.
+    writeFileSync(join(bindir, "pgrep"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(bindir, "pgrep"), 0o755);
 
     const r = spawnSync("bun", [SCRIPT, "--code-only", "--quiet"], {
       encoding: "utf-8",
@@ -201,6 +210,7 @@ esac
         ...process.env,
         HOME: home,
         GSTACK_HOME: gstackHome,
+        GBRAIN_HOME: "",
         GSTACK_TEST_GBRAIN_LOG: commandLog,
         PATH: `${bindir}:${process.env.PATH || ""}`,
       },

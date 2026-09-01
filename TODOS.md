@@ -49,6 +49,40 @@ wave"). Each was explicitly deferred with rationale, not dropped:
   #2576 (fast-ship rework — re-evaluate against v1.66's CI speedup),
   #2580 (land-and-deploy CI tiers — human-gate UX needs maintainer call).
 
+### P2/P3: v1.78 fix-wave deferrals (filed at wave time, each deferred with rationale)
+
+- **mermaid 10→11-class major bumps in lib/diagram-render** — the wave's
+  dependency pass cleared 102 of 105 OSV advisories via in-range bumps +
+  overrides; the residual ignores (image-size no-fix, @anthropic-ai/sdk under
+  the harness-pinned agent-sdk) carry `ignoreUntil` expiries (~2026-11-30) and
+  re-justify themselves on expiry. When the agent-sdk pin next moves, drop the
+  GHSA-p7fg ignore. Effort S. **Priority:** P3.
+- **#2701 cookie-import profile pills (Local State info_cache)** — confirmed
+  bug + minimal fix known, but PR #2658 rewrites the same file; land or
+  reject #2658 first, then apply the info_cache read + numeric-aware sort.
+  Effort S. **Priority:** P3. **Blocked by:** #2658 disposition.
+- **#2750 split absorption** — the record-scanning Codex JSONL parser (real
+  fix; current Codex streams interleave envelopes so sessions vanish from
+  /retro global) should be absorbed once the author splits it from the
+  bundled schema additions + 1 MiB scan-budget change (asked in the wave's
+  disposition comment). Effort S (review). **Priority:** P3.
+- **#2709 macOS live verification** — the GPU flag set is reporter-validated
+  and darwin-gated with a GSTACK_DISABLE_GPU=off escape; the stop-path reap
+  is Linux-tested. Verify both on real Apple-silicon hardware (flags drop the
+  spin to 0%, screenshots still work, reap kills the survivor) on first
+  access to an M-series box. Effort S. **Priority:** P3.
+- **Periodic-lane stabilization (#2756)** — the weekly lane in its v1.77
+  shape (73-shard sharded runner, pinned CLI, EVALS_ALL census) has never
+  been green; the v1.78 wave killed the deterministic v1.76 AUQ collapse but
+  the residual set churns (band-edge variance, the pre-existing
+  exited/hits=[] startup class, known flakes). Evidence table + suggested
+  direction (band recalibration against a fresh pinned-container
+  distribution) in the issue. Effort M. **Priority:** P2.
+- **Outside-voice resolved-model print** — #2735's second suggestion (print
+  the concrete fallback model at dispatch time) is a functional change
+  needing model resolution in the preflight; descoped from the copy fix.
+  Effort S. **Priority:** P3.
+
 ### P2: v1.69 fix-wave residuals (filed at wave time, each deferred with rationale)
 
 - **`cleanup_prefixed_claude_symlinks` symmetric conversion** — PR #2634 fixed

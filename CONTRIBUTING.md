@@ -98,8 +98,9 @@ prefer namespaced names (`/gstack-review`, `/gstack-ship`).
 # 1. Enter dev mode
 bin/dev-setup
 
-# 2. Edit a skill
-vim review/SKILL.md
+# 2. Edit a skill template (SKILL.md files are generated — edit the .tmpl)
+vim review/SKILL.md.tmpl
+bun run gen:skill-docs   # or: bun run dev:skill (watch mode, auto-regen on change)
 
 # 3. Test it in Claude Code — changes are live
 #    > /review
@@ -154,7 +155,7 @@ Bun auto-loads `.env` — no extra config. Conductor workspaces inherit `.env` f
 | 2+3 | `bun run test:evals` | ~$4 combined | E2E + LLM-as-judge (runs both) |
 
 ```bash
-bun run test                 # Tier 1 only (run before every commit, ~90-100s for the full ~7,000-test suite)
+bun run test                 # Tier 1 only (run before every commit, ~90-100s for the full ~8,700-test suite)
 bun run test:e2e             # Tier 2: E2E only (needs EVALS=1, can't run inside Claude Code)
 bun run test:evals           # Tier 2 + 3 combined (~$4.35/run)
 ```
@@ -304,7 +305,7 @@ Supply-chain gates run alongside it:
 
 - **Quality gate** (`.github/workflows/quality-gate.yml`, every PR and push) — scans the diff's added lines for credentials using gstack's own redact engine (`.github/scripts/gate-secret-scan.mjs`). HIGH findings fail the job; MEDIUM findings surface as an advisory count. Fails closed if the scan can't produce a report. Also gates critical dependency advisories and runs ShellCheck on the setup/build boundaries.
 - **Dependency review** (`.github/workflows/dependency-review.yml`) — reviews dependency changes on PRs that touch lockfiles or workflow files.
-- **OSV scanner** (`.github/workflows/osv-scanner.yml`) — weekly vulnerability scan against the OSV database (config in `.osv-scanner.toml`).
+- **OSV scanner** (`.github/workflows/osv-scanner.yml`) — weekly vulnerability scan against the OSV database. Config lives in `.osv-scanner.toml` and is loaded via an explicit `--config` flag (OSV does not auto-discover that filename); every ignore entry needs a reason and an `ignoreUntil` expiry, enforced by `test/osv-config-wiring.test.ts`.
 - **Dependabot** (`.github/dependabot.yml`) — grouped dependency update PRs.
 
 The supply-chain workflows pin their third-party actions to commit SHAs. The PR template (`.github/PULL_REQUEST_TEMPLATE.md`) asks for evidence — tests run, eval output — not promises.
