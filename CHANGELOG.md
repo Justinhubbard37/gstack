@@ -17,7 +17,7 @@ Source: `test/run-in-background-guidance.test.ts` (the pin list) and `grep -rl '
 |---|---|---|---|
 | Generated files pinned to carry the flag | 2 | 24 | every sync dispatch site |
 | /ship dispatch steps with a deadline + recovery branch | 0 of 4 | 4 of 4 | Steps 7/8/10/18 |
-| /ship Step 18 worst-case wait | unbounded | ~10 min | then documented recovery |
+| /ship Step 18 worst-case wait (backgrounded dispatch) | unbounded | ~10 min | documented recovery; a foreground hang stays harness-bounded |
 | Codex doc review inside a ship-dispatched doc-sync | ~5-10 min per ship | skipped | parent owns reviews |
 | Headless gates that could mutate VERSION mid-ship | 2 | 0 | Step 8.3/8.4d resolve to Skip |
 
@@ -43,6 +43,7 @@ What this means for anyone shipping here: /ship finishes even when the harness m
 #### For contributors
 - `{{FOREGROUND_DISPATCH_NOTE}}` (scripts/resolvers/constants.ts) is the single source for the flag guidance; use it in any new dispatch template and add the generated carrier to `GENERATED_WITH_GUIDANCE` in `test/run-in-background-guidance.test.ts` in the same commit. The test's pin list is the census of synchronous dispatch sites.
 - Seven carved-skill skeleton ceilings re-measured and ratcheted in `test/helpers/carve-guards.ts`; codex/factory ship goldens re-rendered.
+
 ## [1.78.0.0] - 2026-08-31
 
 **Plan reviews ask their questions again, the OSV lane is green from 105 advisories, and 18 community fixes land with credit.**

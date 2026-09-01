@@ -263,6 +263,10 @@ describeE2E('Ship doc-sync dispatch E2E (gate)', () => {
 
       // THE regression assert: the /document-release subagent was dispatched.
       expect(dispatchIdx).toBeGreaterThanOrEqual(0);
+      // v1.79: the dispatch must carry the explicit foreground flag — the
+      // whole #497/#2440 class is "prose said foreground, the call didn't".
+      // Phrase pins prove the text exists; this proves the model obeys it.
+      expect((calls[dispatchIdx].input as any)?.run_in_background).toBe(false);
       // Sequencing: dispatch happens BEFORE PR creation (when a create was attempted).
       if (prCreateIdx >= 0) expect(dispatchIdx).toBeLessThan(prCreateIdx);
       // 'timeout' is acceptable ONLY because the dispatch assert above is

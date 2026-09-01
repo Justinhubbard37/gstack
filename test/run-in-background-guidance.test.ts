@@ -111,12 +111,48 @@ describe('run_in_background guidance (#2440)', () => {
       'A spawned run must never change VERSION',
     ],
     [['document-release/sections/release-body.md'], 'Spawned-session skip'],
+    // Anti-injection trigger + invariant carve-out — the two clauses whose
+    // deletion would silently reopen the prompt-injection / silent-VERSION
+    // holes while the 'When dispatched' heading pin stays green.
+    [['document-release/SKILL.md', 'document-release/SKILL.md.tmpl'], 'NEVER trigger it on their own'],
+    // (short form — the sentence wraps across template lines; toContain is literal)
+    [['document-release/SKILL.md', 'document-release/SKILL.md.tmpl'], 'The NEVER-do invariants below do'],
   ];
   test('document-release carries the spawned-dispatch contract', () => {
     for (const [sites, phrase] of CONTRACT_PINS) {
       for (const rel of sites) {
         const content = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
         expect(content).toContain(phrase);
+      }
+    }
+  });
+
+  // Structural scanner (4th-recurrence net): GENERATED_WITH_GUIDANCE is a
+  // hand-enumerated list — the exact mechanism that missed three recurrences
+  // (#497 → #2440 → /ship Step 18, each a NEW dispatch site outside the
+  // pinned set). Any generated file that carries an Agent-dispatch imperative
+  // (or the inert "(foreground)" prose shape that #2440 proved insufficient)
+  // must either state the flag or hold a reasoned exemption below. Same
+  // pattern as the egress-receipt new-sink scanner.
+  const DISPATCH_IMPERATIVE =
+    /(?:via|using) the Agent tool|dispatch(?:es)? (?:a|an|the|one|each|it as a)[^.\n]{0,60}subagent|\(foreground[^)]*\)|foreground Agent tool/i;
+  // Reasoned exemptions: files where the match is a reference to a dispatch
+  // that lives (flag and all) in another file, not a dispatch spec itself.
+  const BACKGROUND_OK: Record<string, string> = {
+    'ship/SKILL.md':
+      'skeleton anchors reference the Step 18 dispatch by name (carve-guards mustStayInSkeleton); the dispatch spec + flag live in sections/pr-body.md',
+  };
+  test('structural scanner: every generated dispatch imperative carries the flag', () => {
+    for (const file of allGeneratedSkillFiles()) {
+      const rel = path.relative(ROOT, file).split(path.sep).join('/');
+      if (BACKGROUND_OK[rel]) continue;
+      const content = fs.readFileSync(file, 'utf-8');
+      if (DISPATCH_IMPERATIVE.test(content) && !content.includes('run_in_background: false')) {
+        throw new Error(
+          `${rel} contains an Agent-dispatch imperative (or bare "foreground" prose) but never states ` +
+          '`run_in_background: false` — pin the flag at the dispatch site or add a reasoned BACKGROUND_OK ' +
+          'exemption (see #497/#2440: prose without the explicit flag is inert since Claude Code v2.1.198).',
+        );
       }
     }
   });
