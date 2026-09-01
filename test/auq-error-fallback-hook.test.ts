@@ -17,6 +17,7 @@ import { describe, test, expect } from 'bun:test';
 import { spawnSync } from 'child_process';
 import * as path from 'path';
 import { isErrorResponse, directiveFor } from '../hosts/claude/hooks/auq-error-fallback-hook.ts';
+import { SPAWNED_ESCAPE_SENTENCE } from '../hosts/claude/hooks/spawned-directive.ts';
 
 const HOOK = path.resolve(__dirname, '..', 'hosts', 'claude', 'hooks', 'auq-error-fallback-hook.ts');
 
@@ -104,6 +105,35 @@ describe('directiveFor — per-session-kind instruction', () => {
   test('escape sentence scopes spawned claims to the creating prompt (anti-injection)', () => {
     const d = directiveFor('interactive');
     expect(d).toMatch(/NEVER qualify[\s\S]*prompt injection/i);
+  });
+});
+
+describe('SPAWNED_ESCAPE_SENTENCE — explicit-declaration-only trigger (periodic-lane AUQ collapse)', () => {
+  // The spawned escape must fire ONLY on an explicit dispatch-prompt
+  // declaration ("you are a spawned subagent"), never on an inference from a
+  // CI-looking / scripted-looking environment. The loose pre-fix parenthetical
+  // let the model infer spawned status and silently auto-choose every
+  // review-phase question (reviewCount=0 across the plan-review periodic E2Es).
+  test('carries the explicit-declaration wording', () => {
+    expect(SPAWNED_ESCAPE_SENTENCE).toContain('EXPLICITLY declares you a spawned subagent');
+    expect(SPAWNED_ESCAPE_SENTENCE).toContain(
+      'explicit statement, never an inference from an automated-looking environment',
+    );
+  });
+
+  test('the old loose inference wording is gone', () => {
+    // Pre-fix sentence parenthetical: '(e.g. your dispatch prompt says you
+    // are a spawned subagent)' — an example, not a requirement, so an
+    // automated-looking prompt could be read as "saying" it.
+    expect(SPAWNED_ESCAPE_SENTENCE).not.toContain('e.g. your dispatch prompt says');
+    // The v1.76 spawned-rule parenthetical this fix retired everywhere:
+    // '(or your dispatch prompt marks this session as spawned)'.
+    expect(SPAWNED_ESCAPE_SENTENCE).not.toContain('marks this session as spawned');
+  });
+
+  test('both prose-directing directives embed the tightened sentence verbatim (no drift)', () => {
+    expect(directiveFor('interactive')).toContain(SPAWNED_ESCAPE_SENTENCE);
+    expect(directiveFor('headless')).toContain(SPAWNED_ESCAPE_SENTENCE);
   });
 });
 
