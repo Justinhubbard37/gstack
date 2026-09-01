@@ -21,7 +21,21 @@ const ROOT = path.resolve(import.meta.dir, '..');
 // (Step 4.5 moved out of the skeleton), so the pin follows it there. Same for
 // autoplan: the dual-voice dispatch (Phase 1 override rules) lives in its
 // carved CEO-phase section.
-const GENERATED_WITH_GUIDANCE = ['review/sections/review-army.md', 'autoplan/sections/ceo-phase.md'];
+//
+// Third recurrence (#497 → #2440 → /ship Step 18): the four ship dispatch
+// sections (Steps 7/8/10/18) never carried the flag and were never pinned, so
+// a backgrounded doc-sync dispatch stranded the ship run waiting on LAST-line
+// JSON that never came. Every synchronous dispatch carrier is pinned here now;
+// add new dispatch sites to this list in the same commit that creates them.
+const GENERATED_WITH_GUIDANCE = [
+  'review/sections/review-army.md',
+  'autoplan/sections/ceo-phase.md',
+  'ship/sections/review-army.md',
+  'ship/sections/pr-body.md',
+  'ship/sections/test-coverage.md',
+  'ship/sections/plan-completion.md',
+  'ship/sections/greptile.md',
+];
 
 // The inverted, post-2.1.198-inert phrasings. Checked across every generated
 // SKILL.md so the regression can't migrate to another skill unnoticed.
@@ -52,6 +66,19 @@ describe('run_in_background guidance (#2440)', () => {
     for (const rel of GENERATED_WITH_GUIDANCE) {
       const content = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       expect(content).toContain('run_in_background: false');
+    }
+  });
+
+  // Third recurrence (#497 → #2440 → /ship Step 18): a backgrounded doc-sync
+  // dispatch stranded the ship run. Pin the deadline/recovery branch and the
+  // docs-sync scope guard in both the generated section and its template, so
+  // neither a template edit nor a stale regen can drop them silently.
+  const PR_BODY_SITES = ['ship/sections/pr-body.md', 'ship/sections/pr-body.md.tmpl'];
+  test('ship pr-body carries the doc-sync deadline recovery + scope guard', () => {
+    for (const rel of PR_BODY_SITES) {
+      const content = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      expect(content).toContain('document-release did not complete');
+      expect(content).toContain('Scope guard — docs sync ONLY');
     }
   });
 

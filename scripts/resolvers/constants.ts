@@ -146,3 +146,14 @@ Branch on the echoed \`CODEX_MODE\`:
 - **\`model_unusable\`** — authed but the account cannot use its configured model (#2477: HTTP 400 on every call, usually a stale \`model =\` pin in \`~/.codex/config.toml\`). Relay the probe's HINT lines, tell the user the one-line fix (update the pin; \`[notice.model_migrations]\` names the replacement), and fall back to the Claude subagent path. The ~10s round trip is cached for 1h; timeouts fail open to \`ready\`.
 - **\`ready\`** — run the Codex pass below.`;
 }
+
+/**
+ * Canonical foreground-dispatch guidance (#497 → #2440 → third recurrence at
+ * /ship Step 18). Claude Code v2.1.198 made Agent-tool subagents run in the
+ * BACKGROUND by default; a synchronous dispatch site must pass the flag
+ * explicitly or the parent waits on output that never arrives. Rendered via
+ * {{FOREGROUND_DISPATCH_NOTE}} in section templates; resolver sites may
+ * interpolate it directly. Same name as the placeholder for grep-ability.
+ */
+export const FOREGROUND_DISPATCH_NOTE =
+  '**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.)';
