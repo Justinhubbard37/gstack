@@ -35,7 +35,7 @@ const GENERATED_WITH_GUIDANCE = [
   'ship/sections/test-coverage.md',
   'ship/sections/plan-completion.md',
   'ship/sections/greptile.md',
-  // Sweep carriers (v1.78): every remaining synchronous Agent-dispatch site.
+  // Sweep carriers (v1.79): every remaining synchronous Agent-dispatch site.
   'autoplan/sections/design-phase.md',
   'autoplan/sections/eng-phase.md',
   'autoplan/sections/dx-phase.md',

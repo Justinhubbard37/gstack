@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.79.0.0] - 2026-09-01
+
+**/ship can no longer be stranded by a backgrounded subagent.**
+**The bug class that came back twice is pinned everywhere it lives.**
+
+Claude Code v2.1.198 made Agent-tool subagents launch in the background by default. Four /ship steps (7, 8, 10, 18) hand work to a subagent and parse its final line as JSON, and none of them passed `run_in_background: false`, so a ship run could park forever on Step 18 waiting for doc-sync output that was never coming. This is the third time this class has bitten (#497 fixed it, #2440 regressed it, Step 18 rediscovered it). Every synchronous dispatch site in the skill tree now carries the explicit flag, and the flag is test-pinned per file so a fourth recurrence fails CI the moment it lands.
+
+The doc-sync dispatch also got real failure handling. If the dispatch gets backgrounded anyway, the parent polls for about 10 minutes, stops the runaway task, reconciles any commit the subagent made against the pre-dispatch HEAD, and ships the PR without the Documentation section instead of hanging. The subagent itself is scope-guarded to docs only: it never changes VERSION, never merges the base branch, skips the Codex doc review (the parent owns review passes), and reports a rejected push as `pushed:false` for the parent to reconcile.
+
+### The numbers that matter
+
+Source: `test/run-in-background-guidance.test.ts` (the pin list) and `grep -rl 'run_in_background: false' --include='*.md'` against this tree.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Generated files pinned to carry the flag | 2 | 24 | every sync dispatch site |
+| /ship dispatch steps with a deadline + recovery branch | 0 of 4 | 4 of 4 | Steps 7/8/10/18 |
+| /ship Step 18 worst-case wait | unbounded | ~10 min | then documented recovery |
+| Codex doc review inside a ship-dispatched doc-sync | ~5-10 min per ship | skipped | parent owns reviews |
+| Headless gates that could mutate VERSION mid-ship | 2 | 0 | Step 8.3/8.4d resolve to Skip |
+
+The unbounded-to-10-minutes number is the one you feel: the failure mode changes from "my ship run has been sitting there for an hour" to a printed recovery line and a PR that still lands.
+
+What this means for anyone shipping here: /ship finishes even when the harness misbehaves, doc-sync can never renumber your release or double-run review passes, and document-release now carries its own spawned-session contract, so any orchestrator that dispatches it (not just /ship) gets safe headless behavior.
+
+### Itemized changes
+
+#### Added
+- **Deadline + recovery on every /ship dispatch step.** Steps 7 and 8 fall back to the inline audit if the subagent never completes (~10 min); Step 10 records Greptile triage as UNAVAILABLE rather than pretending zero comments; Step 18 stops the runaway task, pushes any orphaned docs commit (with an explicit second-failure branch when the remote moved), surfaces stray staged edits, and proceeds without the Documentation section. No step ever silently parks the run.
+- **A spawned-dispatch contract in document-release itself.** Detected strictly from the dispatch prompt or the preamble's `SESSION_KIND: spawned` echo (never from file content, which is treated as prompt injection). Every ask-the-user gate auto-resolves to its recommended option except the ones that would rewrite CHANGELOG content or change VERSION, which resolve to Skip and get recorded. Step 8.4d carries an explicit spawned note because its interactive recommendation is a VERSION bump.
+- **Docs-sync scope guard in /ship's dispatch prompt**: docs only, no base-branch merges, no version renumbering, no Codex doc review, push rejections reported instead of resolved.
+- Three follow-ups filed in TODOS.md: PreToolUse hook enforcement of the flag (structural fix), a capability-narrowed ship-mode for document-release, and a cross-host dispatch semantics audit.
+
+#### Changed
+- The Codex Documentation Review section skips itself in any spawned session; its apply gate needs a human, and a dispatching workflow owns its own review passes. Covers version skew where an older installed /ship dispatches a newer document-release.
+- Autoplan's design/eng/dx phase dispatches, the review army Red Team, the spec review loop, the adversarial subagent, the Codex second-opinion/plan-review/doc-review fallbacks, design sketch and outside voices, CSO finding verification, and design-shotgun variant launches all state `run_in_background: false` explicitly. Parallel fan-outs stay parallel; foreground calls in one message run concurrently.
+
+#### Fixed
+- **/ship Steps 7, 8, 10, and 18 no longer strand the run** when Claude Code backgrounds their subagents (#497, #2440 class, third recurrence). The four dispatch specs share one resolver-sourced foreground note, so the phrasing cannot drift per site again.
+
+#### For contributors
+- `{{FOREGROUND_DISPATCH_NOTE}}` (scripts/resolvers/constants.ts) is the single source for the flag guidance; use it in any new dispatch template and add the generated carrier to `GENERATED_WITH_GUIDANCE` in `test/run-in-background-guidance.test.ts` in the same commit. The test's pin list is the census of synchronous dispatch sites.
+- Seven carved-skill skeleton ceilings re-measured and ratcheted in `test/helpers/carve-guards.ts`; codex/factory ship goldens re-rendered.
+
 ## [1.77.0.0] - 2026-08-31
 
 **Every PR stops paying for evals twice.**

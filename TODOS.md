@@ -2338,6 +2338,42 @@ Linux cookie import shipped in v0.11.11.0 (Wave 3). Supports Chrome, Chromium, B
 
 ## Ship
 
+### Runtime enforcement of foreground dispatch (PreToolUse hook)
+
+**What:** A PreToolUse hook (settings.json) that forces or verifies `run_in_background: false` on Agent tool calls made inside gstack workflows, making the #497/#2440 bug class structurally impossible on Claude Code instead of prose-pinned.
+
+**Why:** v1.79.0.0 fixed the class at the prose+test layer (every synchronous dispatch site carries the flag, pinned by `test/run-in-background-guidance.test.ts`), but phrase-presence pins are file-level, not call-level, and a genuinely blocking foreground call still can't be interrupted by prose. Runtime enforcement is the structural fix; prose guidance can't survive a model that ignores it.
+
+**Context:** Third recurrence of the class (#497 → #2440 → /ship Step 18 stranding). The hook must scope to gstack skill sessions (never break legitimate background Agent use elsewhere), is Claude-host only (other hosts get nothing from it), and mirrors the existing question-preference PreToolUse hook wiring in `bin/gstack-settings-hook*`. Filed from the v1.79.0.0 CEO plan review (approach C, deliberately split out for bake time).
+
+**Effort:** M (human) / S (CC)
+**Priority:** P2
+**Depends on:** None
+
+### Structural ship-mode for document-release
+
+**What:** A capability-narrowed dispatch mode for /document-release (cannot bump VERSION, run review passes, or push) instead of narrowing the full workflow through prose in /ship's dispatch prompt; the parent /ship owns all git operations.
+
+**Why:** The v1.79.0.0 scope guard works by telling the subagent what not to do; a structural mode makes the forbidden operations unavailable rather than discouraged. Codex outside voice (v1.79.0.0 eng review) called the current shape "runs a large workflow and then disables half of it through prose" — correct long-term, wrong to fold into a regression fix.
+
+**Context:** Redesigns the #2733 JSON contract (files_updated/commit_sha/pushed/documentation_section/decisions), so it needs its own PR with bake time. Start from `ship/sections/pr-body.md.tmpl` Step 18 and `document-release/SKILL.md.tmpl`'s spawned contract; decide whether the mode is a dispatch-prompt parameter or a `GSTACK_DOC_RELEASE_MODE` env the preamble echoes.
+
+**Effort:** L (human) / M (CC)
+**Priority:** P3
+**Depends on:** None
+
+### Cross-host dispatch semantics audit
+
+**What:** Audit every subagent-dispatch site's rendering on non-Claude hosts (codex, factory, openclaw, hermes) and decide per host: rewrite to the host's native delegation primitive, inline-execute the step, or skip it.
+
+**Why:** The codex-host ship render inlines Step 18 instructing an Agent-tool dispatch that Codex cannot perform (no Agent tool, no run_in_background). Pre-existing (predates v1.79.0.0), surfaced by the eng-review outside voice. Host rewrites currently key on the exact string 'use the Agent tool', which none of the ship dispatch openers match, so Claude-specific instructions pass through verbatim.
+
+**Context:** See `hosts/define-host.ts:55`, `hosts/factory.ts:34`, `hosts/hermes.ts:15` for the existing rewrite mechanism, and `test/fixtures/golden/codex-ship-SKILL.md` for what codex actually receives today. The v1.79.0.0 `{{FOREGROUND_DISPATCH_NOTE}}` resolver is a natural place to start host-branching.
+
+**Effort:** M (human) / S (CC)
+**Priority:** P3
+**Depends on:** None
+
 ### /ship Step 12 test harness should exec the actual template bash, not a reimplementation
 
 **What:** `test/ship-version-sync.test.ts` currently reimplements the bash from `ship/SKILL.md.tmpl` Step 12 inside template literals. When the template changes, both sides must be updated — exactly the drift-risk pattern the Step 12 fix is meant to prevent, applied to our own testing strategy. Replace with a helper that extracts the fenced bash blocks from the template at test time and runs them verbatim (similar to the `skill-parser.ts` pattern).
