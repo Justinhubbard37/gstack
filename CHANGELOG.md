@@ -23,7 +23,7 @@ Sources: OSV scanner v2.3.8 (the exact release CI pins) on a frozen clean instal
 | Failed upgrade swap | deletes backup and install | restores backup, aborts loudly |
 | Community PRs absorbed / issues closed | 40 open PRs, 17 of these issues open | 18 absorbed with credit, 17 issues closed |
 | diagram-render offline bundle | 9.96 MB (duplicate mermaid 10 + 11) | 7.59 MB |
-| Free-suite tests | 8,519 | 8,630 (+111; receipts red on v1.77) |
+| Free-suite tests | 8,519 | 8,660 (+141; receipts red on v1.77) |
 
 ### What this means for you
 
@@ -34,7 +34,7 @@ Plan reviews ask their questions again, `browse stop` actually stops Chromium, s
 #### Fixed
 
 - **AskUserQuestion spawned-trigger objectivity (periodic-lane regression).** The v1.76 rule's "(or your dispatch prompt marks this session as spawned)" allowed inference; plan-review E2Es collapsed to zero questions. Two pinned-container verification rounds showed that ANY prose-declaration channel in the eager path keeps question counts unstable, so the rule now keys on exactly one thing: the preamble's own echoed STATUS line. Text can never trigger auto-choose — the strongest form of the anti-injection contract. Subagents without the env marker (Task-tool spawns) are caught at failure time by the AUQ hooks' spawned escape sentence, which now demands an explicit declaration, never an inference; #2733's env-prefix channel is untouched.
-- **mktemp guards at all three skill-content sites (#2679).** redact-doc resolver, ship pr-body, and the vendored upgrade path abort loudly on mktemp failure; the upgrade swap restores the backup on a failed `mv` instead of deleting it; the GitLab MR path sends the scanned file's bytes instead of re-rendering an unscanned heredoc; `gstack-redact --from-file ""` errors instead of silently reading stdin.
+- **mktemp guards at all three skill-content sites (#2679).** redact-doc resolver, ship pr-body, and the vendored upgrade path abort loudly on mktemp failure; the upgrade swap restores the backup on a failed `mv` instead of deleting it, and refuses to start over a stale backup left by a previously crashed upgrade; PR/MR creation refuses a missing or empty scanned body file; the GitLab MR path sends the scanned file's bytes instead of re-rendering an unscanned heredoc; `gstack-redact --from-file ""` errors instead of silently reading stdin.
 - **OSV lane green (supersedes #2695).** Explicit `--config` (auto-discovered configs apply per-directory and never covered `lib/diagram-render/bun.lock`); `overrides` pin ip-address 10.3.1 (clears both nested nodes, including express-rate-limit's exact 10.1.0 pin that a top-level bump provably cannot reach — @anupamme's #2695 credited for the parallel diagnosis) and sharp 0.35.0 (smoke-tested); marked ^18.0.11; full in-range lockfile refresh; diagram-render bumped through its own build-script contract (mermaid 11.16.1, excalidraw 0.18.1, mermaid-to-excalidraw 1.1.2 → 2.2.2, which retires the entire duplicate mermaid-10 advisory chain); every ignore carries a reason, an upgrade trigger, and an `ignoreUntil` expiry, pinned by a new wiring test so the file can never go inert again.
 - **A slow gbrain `--version` probe classifies as `timeout`, never `no-cli` (#2716).** A bun-shim install on a loaded box silently lost every brain-aware block because `no-cli` is the one status `--is-ok` does not forgive.
 - **codex skill: unclosed consult-mode fence, `turn.failed` reported as a failure, portable exit-code capture (#2671, #2669).** Every fenced region after the unclosed fence rendered inverted; a stated turn failure read as a "possible disconnect" (consult mode had no completeness check at all); `${PIPESTATUS[0]}` is empty under zsh so hang detection never fired and clean runs printed spurious exit noise. A repo-wide CommonMark-faithful fence-pairing test now guards every generated doc, and the exit-capture form is executed under real bash and zsh in tests. Expect `codex_timeout` telemetry to start firing for zsh users — that's the counter working, not a regression.
@@ -44,6 +44,7 @@ Plan reviews ask their questions again, `browse stop` actually stops Chromium, s
 - **Persistent timeline Stop hook opt-out (#2677).** `--no-team` stays one-shot; the new `timeline_stop_hook` config key (flags, env, full gstack-config surface) survives upgrades, and an explicit "no" removes a live registration.
 - **browse: macOS headless GPU spin tamed + the lock-less headless Chromium is reaped on stop (#2709).** Darwin-gated flag set (reporter-validated, `GSTACK_DISABLE_GPU=off` escape) exposed as a pure, unit-testable function; the daemon records the launched child's pid + start time, and stop paths reap a survivor only after verifying both the recorded start time and a Chromium-looking cmdline, so a recycled PID is never killed.
 - **gstack-wtree: a failed `touch` falls through to the HEAD seed (#2687 hardening).** The underlying same-size-rewrite race was fixed in v1.74; the reporter's repro now runs 20/20 clean, and the one silent path that could reopen it is closed.
+- **Large gstack-redact reports survive a piped consumer.** Reports past the 64KiB pipe buffer were silently truncated when the reader was slow (`process.exit` beat the drain) — CI quality gates parsing the JSON saw a corrupt report. The report path now lets stdout flush; pinned by a test proven red against the old exit pattern.
 
 #### Community PRs absorbed (authorship preserved on the branch commits)
 
@@ -68,7 +69,7 @@ Plan reviews ask their questions again, `browse stop` actually stops Chromium, s
 
 #### For contributors
 
-- Tests: 8,519 → 8,630 (+111 across the wave; every behavior fix carries a regression test proven red on a v1.77.0.0 scratch worktree via base-compatible reproducers — tests that merely fail to compile on the base don't count as receipts).
+- Tests: 8,519 → 8,660 (+141 across the wave; every behavior fix carries a regression test proven red on a v1.77.0.0 scratch worktree via base-compatible reproducers — tests that merely fail to compile on the base don't count as receipts).
 - New structural guards: generated-doc fence pairing (CommonMark state machine, not mod-2 counting), no bare `${PIPESTATUS[0]}` in codex sections (plus real bash+zsh execution), OSV config wiring (flag ↔ filename ↔ entry hygiene, `ignoreUntil` mandatory), gstack-redact CLI empty-path rejection, cli.ts profile-dir delegation.
 - 19 carve skeleton ceilings re-pinned with measured values (+~440 bytes/skill for the AUQ fence); autoplan re-pinned again for the broken-install preflight arm.
 - `gen-skill-docs --link-root` exists for render-into-tmp-then-swap callers; direct-render callers need no change.
