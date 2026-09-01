@@ -48,7 +48,7 @@ import {
 import { atomicWriteSync } from "./fs-atomic";
 import { homedir } from "os";
 import { dirname, join } from "path";
-import { buildGbrainEnv, gbrainConfigDir, NEEDS_SHELL_ON_WINDOWS } from "./gbrain-exec";
+import { buildGbrainEnv, gbrainConfigDir, isExecTimeout, NEEDS_SHELL_ON_WINDOWS } from "./gbrain-exec";
 
 export type LocalEngineStatus =
   | "ok"
@@ -265,10 +265,13 @@ function hashPath(p: string): string {
 // classifier said `no-cli`, which the `--is-ok` whitelist does NOT forgive —
 // so a slow box silently lost every brain-aware block. The cache stores the
 // discriminated result (per-process, same lifetime the old null had).
-interface GbrainBinProbe {
+export interface GbrainBinProbe {
   bin: string | null;
   timedOut: boolean;
 }
+// Caching a TIMEOUT for process lifetime is deliberate: the memo exists to
+// dedupe the ~3 probes a single skill preamble fires, and preamble processes
+// are short-lived — a retry next invocation gets a fresh probe anyway.
 const _gbrainBinCache = new Map<string, GbrainBinProbe>();
 // On Windows the shim is `gbrain.cmd` → `bun run cli.ts`; a cold spawn can
 // exceed 2s, and a false negative here poisons the 60s status cache with
@@ -299,10 +302,7 @@ export function probeGbrainBin(env?: NodeJS.ProcessEnv): GbrainBinProbe {
     // Same discrimination the `sources list` probe below already uses: a
     // killed/expired spawn is a TIMEOUT (binary present but slow), anything
     // else (ENOENT, non-zero exit) is genuinely no CLI.
-    const ex = err as { killed?: boolean; signal?: string; code?: unknown };
-    const timedOut =
-      ex?.killed === true || ex?.signal === "SIGTERM" || ex?.code === "ETIMEDOUT";
-    result = { bin: null, timedOut };
+    result = { bin: null, timedOut: isExecTimeout(err) };
   }
   _gbrainBinCache.set(key, result);
   return result;
@@ -507,7 +507,7 @@ function freshClassify(env?: NodeJS.ProcessEnv): LocalEngineStatus {
       // Probe killed by the timeout with no recognized error: the engine is
       // most likely healthy but slow (cold pooler connections measured at
       // 6.9-10.7s in #1964). Don't tell the user their config is malformed.
-      if (e.killed === true || e.signal === "SIGTERM" || e.code === "ETIMEDOUT") {
+      if (isExecTimeout(e)) {
         return "timeout";
       }
 
