@@ -71,6 +71,13 @@ wave"). Each was explicitly deferred with rationale, not dropped:
   is Linux-tested. Verify both on real Apple-silicon hardware (flags drop the
   spin to 0%, screenshots still work, reap kills the survivor) on first
   access to an M-series box. Effort S. **Priority:** P3.
+- **Periodic-lane stabilization (#2756)** — the weekly lane in its v1.77
+  shape (73-shard sharded runner, pinned CLI, EVALS_ALL census) has never
+  been green; the v1.78 wave killed the deterministic v1.76 AUQ collapse but
+  the residual set churns (band-edge variance, the pre-existing
+  exited/hits=[] startup class, known flakes). Evidence table + suggested
+  direction (band recalibration against a fresh pinned-container
+  distribution) in the issue. Effort M. **Priority:** P2.
 - **Outside-voice resolved-model print** — #2735's second suggestion (print
   the concrete fallback model at dispatch time) is a functional change
   needing model resolution in the preflight; descoped from the copy fix.
