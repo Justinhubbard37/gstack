@@ -164,4 +164,4 @@ Branch on the echoed \`CODEX_MODE\`:
  * interpolate it directly. Same name as the placeholder for grep-ability.
  */
 export const FOREGROUND_DISPATCH_NOTE =
-  '**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.)';
+  '**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) Dispatch with the Agent tool itself — never substitute the Skill tool or inline execution to "guarantee" blocking: the explicit flag already makes the Agent call block, and running the work inline forfeits the fresh-context isolation this dispatch exists for.';

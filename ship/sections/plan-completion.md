@@ -4,7 +4,7 @@
 
 **Dispatch this step as a subagent** using the Agent tool with `subagent_type: "general-purpose"`. The subagent reads the plan file and every referenced code file in its own fresh context. Parent gets only the conclusion.
 
-**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) The Gate Logic below consumes this audit's LAST-line JSON before /ship can proceed.
+**Foreground required:** pass `run_in_background: false` on the Agent call — subagents run in the BACKGROUND by default since Claude Code v2.1.198. (Merely omitting the flag no longer produces a foreground run; it must be explicitly false.) Dispatch with the Agent tool itself — never substitute the Skill tool or inline execution to "guarantee" blocking: the explicit flag already makes the Agent call block, and running the work inline forfeits the fresh-context isolation this dispatch exists for. The Gate Logic below consumes this audit's LAST-line JSON before /ship can proceed.
 
 **Subagent prompt:** Pass these instructions to the subagent:
 
