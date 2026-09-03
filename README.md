@@ -533,6 +533,17 @@ On Windows without Developer Mode (MSYS2 / Git Bash), `setup` falls back to file
 **Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has a gstack section. Add this:
 
 ```
+
+**Chromium install failed or hung during `./setup`?** The browser is best-effort:
+setup records the reason, finishes registering every skill, and prints which
+skills need Chromium (`/qa`, `/qa-only`, `/design-review`, `/browse`, make-pdf,
+`/pair-agent`). Fix the cause and re-run `./setup`. Knobs:
+`GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>` raises the download bound
+(default 600) on slow links; `GSTACK_SKIP_PLAYWRIGHT=1` skips the Chromium
+install entirely (CI, no-browser boxes); `GSTACK_CHROMIUM_NO_SANDBOX=1` is the
+fix when Chromium installs but cannot launch because the host blocks
+unprivileged user namespaces (Ubuntu 24.04+ AppArmor default, #2157).
+
 ## gstack
 Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
 Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
