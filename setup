@@ -960,6 +960,10 @@ link_claude_skill_dirs() {
         _skill_md_src="$_render_dir/$dir_name/SKILL.md"
       fi
       _link_or_copy "$_skill_md_src" "$target/SKILL.md"
+      # Ownership marker for Windows COPY installs (#2119): there is no symlink
+      # to readlink, so gstack-relink and the mode-flip cleanup below prove
+      # provenance by this marker instead of by name.
+      if [ "$IS_WINDOWS" -eq 1 ]; then : > "$target/.gstack-owned" 2>/dev/null || true; fi
       # Link every runtime asset the skill ships next to its SKILL.md (#2317,
       # #2454): sections/ for carved skills, review's checklist.md +
       # specialists/, qa's templates/ + references/, gstack-upgrade's
@@ -1062,10 +1066,13 @@ cleanup_old_claude_symlinks() {
     fi
   done
   # Windows install pattern: real dir with real-file SKILL.md (no symlink
-  # available, so we can't readlink to verify provenance). Iterate known
-  # gstack skill names from "$gstack_dir"/*, so a name match plus IS_WINDOWS
-  # is safe to treat as gstack-managed during a mode flip. When the payload
-  # is gone this branch is a no-op — a real file has no proven owner.
+  # available, so we can't readlink to verify provenance). A bare name match
+  # deleted a user's own same-name skill (#2119); ownership is now proven by
+  # the .gstack-owned marker link_claude_skill_dirs writes, or — for copies
+  # made before the marker existed — by the copy being byte-identical to the
+  # gstack source SKILL.md or carrying gen-skill-docs' AUTO-GENERATED header
+  # (every generated SKILL.md does; a hand-written skill does not). Anything
+  # else is foreign and is left alone.
   if [ "${IS_WINDOWS:-0}" -eq 1 ] && [ -d "$gstack_dir" ]; then
     for skill_dir in "$gstack_dir"/*/; do
       if [ -f "$skill_dir/SKILL.md" ]; then
@@ -1074,7 +1081,10 @@ cleanup_old_claude_symlinks() {
         case "$skill_name" in gstack-*) continue ;; esac
         old_target="$skills_dir/$skill_name"
         if [ -d "$old_target" ] && [ ! -L "$old_target" ] \
-          && [ -f "$old_target/SKILL.md" ] && [ ! -L "$old_target/SKILL.md" ]; then
+          && [ -f "$old_target/SKILL.md" ] && [ ! -L "$old_target/SKILL.md" ] \
+          && { [ -f "$old_target/.gstack-owned" ] \
+               || cmp -s "$old_target/SKILL.md" "$skill_dir/SKILL.md" \
+               || grep -q 'AUTO-GENERATED from SKILL.md.tmpl' "$old_target/SKILL.md" 2>/dev/null; }; then
           rm -rf "$old_target"
           removed+=("$skill_name")
         fi

@@ -259,21 +259,39 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_old_claude_symlink
     }
   });
 
-  test('Windows real-file leftover is removed when the payload still names it', () => {
+  // #2119: a bare name match used to delete a USER's own skill that happened to
+  // share a gstack skill name. Provenance must be proven: the .gstack-owned
+  // marker, a byte-identical copy of the payload source, or gen-skill-docs'
+  // AUTO-GENERATED header (legacy copies made before the marker existed).
+  test('Windows real-file leftover is removed only when provably gstack-owned', () => {
+    const generated = '---\nname: ship\n---\n<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n# ship\n';
     const r = runCleanup({
       isWindows: '1',
       payload: true,
       plant(skills, payload) {
-        const src = path.join(payload, 'qa');
-        fs.mkdirSync(src);
-        fs.writeFileSync(path.join(src, 'SKILL.md'), '---\nname: qa\n---\n');
-        plantUserSkill(skills, 'qa');
+        for (const name of ['qa', 'ship', 'review', 'browse']) {
+          fs.mkdirSync(path.join(payload, name));
+          fs.writeFileSync(path.join(payload, name, 'SKILL.md'), name === 'ship' ? generated : `---\nname: ${name}\n---\n`);
+        }
+        // Byte-identical copy of the payload source → ours.
+        fs.mkdirSync(path.join(skills, 'qa'));
+        fs.copyFileSync(path.join(payload, 'qa', 'SKILL.md'), path.join(skills, 'qa', 'SKILL.md'));
+        // Legacy copy carrying the generated header but drifted from source → ours.
+        fs.mkdirSync(path.join(skills, 'ship'));
+        fs.writeFileSync(path.join(skills, 'ship', 'SKILL.md'), generated.replace('# ship', '# ship (older render)'));
+        // Marker-carrying copy with arbitrary content → ours.
+        fs.mkdirSync(path.join(skills, 'browse'));
+        fs.writeFileSync(path.join(skills, 'browse', 'SKILL.md'), '---\nname: browse\n---\n# stale copy\n');
+        fs.writeFileSync(path.join(skills, 'browse', '.gstack-owned'), '');
+        // The user's OWN skill that shares a gstack name → foreign, must survive.
+        plantUserSkill(skills, 'review');
         plantUserSkill(skills, 'my-own');
       },
     });
     try {
       expect(r.status).toBe(0);
-      expect(r.names).toEqual(['gstack', 'my-own']);
+      expect(r.names).toEqual(['gstack', 'my-own', 'review']);
+      expect(fs.readFileSync(path.join(r.tmp, 'skills', 'review', 'SKILL.md'), 'utf-8')).toContain('user-owned');
     } finally {
       fs.rmSync(r.tmp, { recursive: true, force: true });
     }

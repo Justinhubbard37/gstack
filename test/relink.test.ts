@@ -672,3 +672,105 @@ describe('gstack-patch-names (#620/#578)', () => {
     expect(content).toBe('# qa\nSome content.');
   });
 });
+
+// ============================================================
+// Ownership gate (#2119): relink runs on every ./setup and must never delete
+// or link over a skill it does not own. Ownership = symlink into INSTALL_DIR
+// or RENDER_DIR, a real dir whose SKILL.md is such a symlink, or the
+// .gstack-owned marker setup writes for Windows copy installs.
+// ============================================================
+describe('gstack-relink ownership gate (#2119)', () => {
+  const FOREIGN = '---\nname: qa\ndescription: my own qa skill\n---\n# not gstack';
+
+  function relink(env: Record<string, string> = {}): string {
+    return run(`${path.join(installDir, 'bin', 'gstack-relink')} 2>&1`, {
+      GSTACK_INSTALL_DIR: installDir,
+      GSTACK_SKILLS_DIR: skillsDir,
+      ...env,
+    });
+  }
+  function setPrefix(v: 'true' | 'false') {
+    run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix ${v}`, {
+      GSTACK_INSTALL_DIR: installDir, GSTACK_SKILLS_DIR: skillsDir,
+    });
+  }
+
+  test('flat mode: a foreign real dir with a real SKILL.md is never linked over (Linux ln -snf would replace the file)', () => {
+    setupMockInstall(['qa', 'ship']);
+    // The foreign skill exists before gstack ever runs (gstack-config `set`
+    // auto-relinks, so fixtures go in first).
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.writeFileSync(path.join(skillsDir, 'qa', 'SKILL.md'), FOREIGN);
+    setPrefix('false');
+    const out = relink();
+    const md = path.join(skillsDir, 'qa', 'SKILL.md');
+    expect(fs.lstatSync(md).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(md, 'utf-8')).toBe(FOREIGN);
+    expect(out).toContain('skipped');
+    expect(out).toContain('Skipped 1 foreign entry');
+    // The other skill still links normally.
+    expect(fs.lstatSync(path.join(skillsDir, 'ship', 'SKILL.md')).isSymbolicLink()).toBe(true);
+  });
+
+  test('prefix flip: a foreign flat entry sharing a skill name survives the cleanup pass', () => {
+    setupMockInstall(['qa']);
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.writeFileSync(path.join(skillsDir, 'qa', 'SKILL.md'), FOREIGN);
+    setPrefix('true');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(skillsDir, 'qa', 'SKILL.md'), 'utf-8')).toBe(FOREIGN);
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'))).toBe(true);
+    expect(out).toContain('skipped');
+  });
+
+  test('a foreign directory symlink sharing a skill name is left in place', () => {
+    setupMockInstall(['qa']);
+    const elsewhere = path.join(tmpDir, 'elsewhere', 'qa');
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, 'SKILL.md'), FOREIGN);
+    fs.symlinkSync(elsewhere, path.join(skillsDir, 'qa'));
+    setPrefix('false');
+    const out = relink();
+    expect(fs.lstatSync(path.join(skillsDir, 'qa')).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa'))).toBe(elsewhere);
+    expect(fs.readFileSync(path.join(elsewhere, 'SKILL.md'), 'utf-8')).toBe(FOREIGN);
+    expect(out).toContain('skipped');
+  });
+
+  test('an entry whose SKILL.md links into RENDER_DIR is ours and is cleaned on a mode flip', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    const renderDir = path.join(tmpDir, 'render', 'claude');
+    fs.mkdirSync(path.join(renderDir, 'qa'), { recursive: true });
+    fs.writeFileSync(path.join(renderDir, 'qa', 'SKILL.md'), '---\nname: gstack-qa\ndescription: rendered\n---\n');
+    // Stale prefixed entry from a prior prefix-mode run, pointing at the render.
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.symlinkSync(path.join(renderDir, 'qa', 'SKILL.md'), path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    const out = relink({ GSTACK_USER_RENDER_DIR: renderDir });
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(renderDir, 'qa', 'SKILL.md'));
+    expect(out).not.toContain('skipped');
+  });
+
+  test('a real-file copy carrying the .gstack-owned marker (Windows install shape) is ours', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.writeFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), '---\nname: gstack-qa\n---\n');
+    fs.writeFileSync(path.join(skillsDir, 'gstack-qa', '.gstack-owned'), '');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(out).not.toContain('skipped');
+  });
+
+  test('a real-file copy WITHOUT the marker is foreign and survives', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.writeFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), FOREIGN);
+    const out = relink();
+    expect(fs.readFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), 'utf-8')).toBe(FOREIGN);
+    expect(out).toContain('skipped');
+  });
+});

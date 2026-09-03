@@ -42,12 +42,70 @@ PREFIX=$("$GSTACK_CONFIG" get skill_prefix 2>/dev/null || echo "false")
 # every skill back to the canonical (blockless) source.
 RENDER_DIR="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claude}"
 
-# Helper: remove old skill entry (symlink or real directory with symlinked SKILL.md)
+# ─── Ownership gate ───────────────────────────────────────────────────────────
+# relink runs on every ./setup and used to `rm -rf` any same-name entry with a
+# symlinked SKILL.md and `ln -snf` over any existing SKILL.md — so a user's own
+# skill that happened to share a name (a personal `qa`, a fork under another
+# path) was deleted or had its SKILL.md replaced by a symlink into gstack
+# (#2119; Linux replaces a real file with `ln -snf`, macOS refuses by accident).
+# setup:1040 and gstack-uninstall:204 already gate on readlink; this is the
+# same rule for the one remaining unguarded deleter.
+#
+# An entry is OURS when:
+#   - it is a symlink resolving into $INSTALL_DIR or $RENDER_DIR, or
+#   - it is a real dir whose SKILL.md is a symlink resolving into either, or
+#   - it is a real dir carrying the .gstack-owned marker setup writes for
+#     Windows copy installs (no symlinks there to read).
+# Anything else — a foreign symlink, a real dir with a real SKILL.md and no
+# marker, or an entry whose readlink fails — is FOREIGN: never deleted, never
+# linked over, reported on stderr.
+_target_is_ours() {
+  # $1 = a path that readlink resolved; ours when it lives under our roots.
+  case "$1" in
+    "$INSTALL_DIR"/*|"$RENDER_DIR"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_entry_is_ours() {
+  local entry="$1" dest
+  if [ -L "$entry" ]; then
+    dest="$(readlink "$entry" 2>/dev/null || true)"
+    [ -n "$dest" ] || return 1
+    _target_is_ours "$dest"
+    return $?
+  fi
+  if [ -d "$entry" ]; then
+    [ -f "$entry/.gstack-owned" ] && return 0
+    if [ -L "$entry/SKILL.md" ]; then
+      dest="$(readlink "$entry/SKILL.md" 2>/dev/null || true)"
+      [ -n "$dest" ] || return 1
+      _target_is_ours "$dest"
+      return $?
+    fi
+    return 1
+  fi
+  return 1
+}
+
+FOREIGN_SKIPPED=()
+_report_foreign() {
+  echo "  skipped $1: not a gstack-managed entry (foreign skill with the same name) — left untouched" >&2
+  FOREIGN_SKIPPED+=("$1")
+}
+
+# Helper: remove an OLD skill entry from the opposite prefix mode. Only entries
+# we can prove are ours are removed; anything else is reported and kept.
 _cleanup_skill_entry() {
   local entry="$1"
+  [ -e "$entry" ] || [ -L "$entry" ] || return 0
+  if ! _entry_is_ours "$entry"; then
+    _report_foreign "$entry"
+    return 0
+  fi
   if [ -L "$entry" ]; then
     rm -f "$entry"
-  elif [ -d "$entry" ] && [ -L "$entry/SKILL.md" ]; then
+  elif [ -d "$entry" ]; then
     rm -rf "$entry"
   fi
 }
@@ -100,6 +158,14 @@ for skill_dir in "$INSTALL_DIR"/*/; do
     esac
   fi
   target="$SKILLS_DIR/$link_name"
+  # A destination that already exists and is NOT ours is a foreign skill that
+  # shares our name. Never `ln -snf` over its SKILL.md (on Linux that replaces
+  # a real file with a symlink into gstack) and never mkdir into it — skip
+  # loudly and leave registration of that one name to the user.
+  if { [ -e "$target" ] || [ -L "$target" ]; } && ! _entry_is_ours "$target"; then
+    _report_foreign "$target"
+    continue
+  fi
   # Upgrade old directory symlinks to real directories
   [ -L "$target" ] && rm -f "$target"
   # Create real directory with symlinked SKILL.md (absolute path)
@@ -123,4 +189,7 @@ if [ "$PREFIX" = "true" ]; then
   echo "Relinked $SKILL_COUNT skills as gstack-*"
 else
   echo "Relinked $SKILL_COUNT skills as flat names"
+fi
+if [ ${#FOREIGN_SKIPPED[@]} -gt 0 ]; then
+  echo "Skipped ${#FOREIGN_SKIPPED[@]} foreign entr$( [ ${#FOREIGN_SKIPPED[@]} -eq 1 ] && echo y || echo ies) (not gstack-managed, left untouched): ${FOREIGN_SKIPPED[*]}"
 fi
