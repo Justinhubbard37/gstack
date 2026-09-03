@@ -776,7 +776,33 @@ if [ -f /etc/os-release ]; then
   fi
 fi
 
-if ! ensure_playwright_browser; then
+# Chromium is BEST-EFFORT (#1900, #1901, #1902, #913, #2233). Every later step
+# — skill registration (# 4), Codex/Kiro installs, migrations, hooks — is
+# independent of the browser, so a failed or wedged download must never abort
+# setup under `set -e`. Each failure records a reason code in _PW_FAIL_REASON;
+# the skills that need Chromium (/qa, /qa-only, /design-review, /browse,
+# make-pdf, /pair-agent) are named in the final summary instead of the user
+# discovering a half-installed gstack. Lock contention is a reason too: another
+# setup is installing Chromium right now, so this run registers skills and
+# re-probes next time. The download is bounded (default 600s, env
+# GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT) because Playwright's own retries cover a
+# flaky socket but not a wedged bunx; the killed tree is the whole process
+# group via _kill_tree. Reason codes: skipped, chromium-install,
+# chromium-install-timeout, chromium-install-locked, windows-no-node,
+# windows-node-modules, post-install-launch.
+# test/setup-playwright-best-effort.test.ts pins this block.
+_PW_FAIL_REASON=""
+_pw_fail() {
+  local code="$1"; shift
+  _PW_FAIL_REASON="${_PW_FAIL_REASON:+$_PW_FAIL_REASON,}$code"
+  echo "  Chromium bootstrap: $code — $*" >&2
+}
+_PW_INSTALL_TIMEOUT="${GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT:-600}"
+case "$_PW_INSTALL_TIMEOUT" in ''|*[!0-9]*) _PW_INSTALL_TIMEOUT=600 ;; esac
+
+if [ "${GSTACK_SKIP_PLAYWRIGHT:-0}" = "1" ]; then
+  _pw_fail skipped "GSTACK_SKIP_PLAYWRIGHT=1 — Chromium install skipped by request (#913)"
+elif ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
   # XProtect self-heal (#2554): the probe failure may be the OS killing the
   # cached Chromium, not a missing install. Clear quarantine on the Playwright
@@ -806,48 +832,50 @@ if ! ensure_playwright_browser; then
       else
         bunx playwright install chromium
       fi
-    )
+    ) &
+    _PW_RC=0
+    _wait_with_deadline $! "$_PW_INSTALL_TIMEOUT" || _PW_RC=$?
+    if [ "$_PW_RC" -eq 124 ]; then
+      _pw_fail chromium-install-timeout "bunx playwright install chromium exceeded ${_PW_INSTALL_TIMEOUT}s and was killed (raise with GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>)"
+    elif [ "$_PW_RC" -ne 0 ]; then
+      _pw_fail chromium-install "bunx playwright install chromium exited $_PW_RC (offline, proxy, or blocked download?)"
+    fi
     rm -rf "$_PW_LOCK" 2>/dev/null || true
     # Restore the original handler (never `trap - EXIT`, which would clear
     # cleanup_copied_bun for the rest of the script).
     trap cleanup_copied_bun EXIT
   else
-    echo "  another gstack setup is already installing Chromium (lock: $_PW_LOCK)." >&2
-    echo "  Wait for it to finish, then re-run ./setup. If no other setup is running," >&2
-    echo "  remove the stale lock: rm -rf \"$_PW_LOCK\"" >&2
-    exit 1
+    _pw_fail chromium-install-locked "another gstack setup is installing Chromium (lock: $_PW_LOCK) — re-run ./setup after it finishes, or remove a stale lock: rm -rf \"$_PW_LOCK\""
   fi
 
-  if [ "$IS_WINDOWS" -eq 1 ]; then
+  if [ -z "$_PW_FAIL_REASON" ] && [ "$IS_WINDOWS" -eq 1 ]; then
     # On Windows, Node.js launches Chromium (not Bun — see oven-sh/bun#4253).
     # Ensure playwright is importable by Node from the gstack directory.
     if ! command -v node >/dev/null 2>&1; then
-      echo "gstack setup failed: Node.js is required on Windows (Bun cannot launch Chromium due to a pipe bug)" >&2
-      echo "  Install Node.js: https://nodejs.org/" >&2
-      exit 1
+      _pw_fail windows-no-node "Node.js is required on Windows to launch Chromium (Bun cannot: oven-sh/bun#4253) — install from https://nodejs.org/ and re-run ./setup"
+    else
+      echo "Windows detected — verifying Node.js can load Playwright..."
+      if ! (
+        cd "$SOURCE_GSTACK_DIR"
+        # Bun's node_modules already has playwright; verify Node can require it
+        node -e "require('playwright')" 2>/dev/null || npm install --no-save playwright
+        # @ngrok/ngrok is externalized in server-node.mjs and resolved at runtime.
+        # Verify the platform-specific native binary is installed so /pair-agent
+        # tunnels don't fail later with a cryptic module-not-found error.
+        node -e "require('@ngrok/ngrok')" 2>/dev/null || npm install --no-save @ngrok/ngrok
+      ); then
+        _pw_fail windows-node-modules "npm could not install playwright / @ngrok/ngrok for Node.js"
+      fi
     fi
-    echo "Windows detected — verifying Node.js can load Playwright..."
-    (
-      cd "$SOURCE_GSTACK_DIR"
-      # Bun's node_modules already has playwright; verify Node can require it
-      node -e "require('playwright')" 2>/dev/null || npm install --no-save playwright
-      # @ngrok/ngrok is externalized in server-node.mjs and resolved at runtime.
-      # Verify the platform-specific native binary is installed so /pair-agent
-      # tunnels don't fail later with a cryptic module-not-found error.
-      node -e "require('@ngrok/ngrok')" 2>/dev/null || npm install --no-save @ngrok/ngrok
-    )
   fi
 fi
 
-if ! ensure_playwright_browser; then
+if [ -z "$_PW_FAIL_REASON" ] && ! ensure_playwright_browser; then
   if [ "$IS_WINDOWS" -eq 1 ]; then
-    echo "gstack setup failed: Playwright Chromium could not be launched via Node.js" >&2
-    echo "  This is a known issue with Bun on Windows (oven-sh/bun#4253)." >&2
-    echo "  Ensure Node.js is installed and 'node -e \"require('playwright')\"' works." >&2
+    _pw_fail post-install-launch "Playwright Chromium could not be launched via Node.js (oven-sh/bun#4253) — ensure 'node -e \"require('playwright')\"' works, then re-run ./setup"
   else
-    echo "gstack setup failed: Playwright Chromium could not be launched" >&2
+    _pw_fail post-install-launch "Playwright Chromium installed but could not be launched — on Ubuntu 24.04+ (AppArmor blocks unprivileged user namespaces) try GSTACK_CHROMIUM_NO_SANDBOX=1 (#2157)"
   fi
-  exit 1
 fi
 
 # 2b. Ensure a color-emoji font is installed so make-pdf emoji render (Linux).
@@ -859,7 +887,9 @@ if ! ensure_emoji_font; then
   echo "    Fedora:        sudo dnf install google-noto-color-emoji-fonts" >&2
   echo "    Arch:          sudo pacman -S noto-fonts-emoji" >&2
   echo "    Alpine:        sudo apk add font-noto-emoji" >&2
-else
+elif [ -z "$_PW_FAIL_REASON" ]; then
+  # Only when Chromium is actually usable — restarting a daemon that cannot
+  # launch its browser just produces a second failure line.
   refresh_browse_daemon_for_fonts
 fi
 
@@ -2595,5 +2625,25 @@ if ! grep -q '^redact_prepush_hook:' "$_GSTACK_CFG_FILE" 2>/dev/null; then
     log "Tip: gstack can block pushes containing credentials (per-repo git hook)."
     log "     Enable once: gstack-config set redact_prepush_hook true — /ship"
     log "     installs the hook automatically in every repo you ship from."
+  fi
+fi
+
+# ─── Chromium bootstrap summary (best-effort browser, see # 2) ───────────────
+# Printed LAST so it is the thing the user sees, after every skill registered.
+if [ -n "${_PW_FAIL_REASON:-}" ]; then
+  log ""
+  log "Browser unavailable: Chromium bootstrap did not complete ($_PW_FAIL_REASON)."
+  log "  Skills that need it: /qa, /qa-only, /design-review, /browse, make-pdf, /pair-agent."
+  log "  Everything else is installed and works. Fix the cause and re-run ./setup."
+  case "$_PW_FAIL_REASON" in
+    *chromium-install-timeout*) log "  Slow link? Raise the bound: GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=1800 ./setup" ;;
+  esac
+  case "$_PW_FAIL_REASON" in
+    *post-install-launch*) log "  Ubuntu 24.04+ (AppArmor user namespaces): GSTACK_CHROMIUM_NO_SANDBOX=1 ./setup (#2157)" ;;
+  esac
+  # Reason code only — never a path or command line — so a support thread can
+  # be matched to a code. Telemetry-gated inside gstack-telemetry-log.
+  if [ -x "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" ]; then
+    "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" --event-type onboarding --skill _setup_playwright --outcome "$_PW_FAIL_REASON" >/dev/null 2>&1 || true
   fi
 fi
