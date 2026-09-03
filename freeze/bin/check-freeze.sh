@@ -31,8 +31,12 @@ if [ ! -f "$_HOOK_HELPER" ] || ! . "$_HOOK_HELPER" 2>/dev/null; then
   exit 0
 fi
 
-# Locate the freeze directory state file
-STATE_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.gstack}"
+# Locate the freeze directory state file. The writer (/freeze via
+# gstack-paths) and this reader MUST resolve the same root or the boundary
+# fails open: with GSTACK_HOME set, /freeze wrote freeze-dir.txt under
+# GSTACK_HOME while this hook read $HOME/.gstack, found nothing, and allowed
+# everything (#1459, #1509). gstack_hook_state_root mirrors gstack-paths.
+STATE_DIR="$(gstack_hook_state_root)"
 FREEZE_FILE="$STATE_DIR/freeze-dir.txt"
 
 # If no freeze file exists, allow everything (not yet configured)
