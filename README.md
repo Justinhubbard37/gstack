@@ -393,6 +393,11 @@ while IFS= read -r dir; do
       ;;
   esac
 done
+# Directories gstack created carry a .gstack-owned marker (the only signal on
+# Windows, where installs are file copies with no symlink to read)
+for marker in ~/.claude/skills/*/.gstack-owned; do
+  [ -f "$marker" ] && rm -rf "$(dirname "$marker")"
+done
 # Alias skills install as copies (no symlink to detect) — remove by name
 rm -rf ~/.claude/skills/_gstack-command ~/.claude/skills/connect-chrome 2>/dev/null
 
@@ -539,6 +544,19 @@ skills need Chromium (`/qa`, `/qa-only`, `/design-review`, `/browse`, make-pdf,
 install entirely (CI, no-browser boxes); `GSTACK_CHROMIUM_NO_SANDBOX=1` is the
 fix when Chromium installs but cannot launch because the host blocks
 unprivileged user namespaces (Ubuntu 24.04+ AppArmor default, #2157).
+
+**Setup ended with "Not registered (a skill you own already uses the name; left untouched)"?**
+gstack only deletes or links over a skill entry it can prove it created: a
+symlink into gstack, a directory carrying the `.gstack-owned` marker `./setup`
+writes into every directory it creates, or a SKILL.md that is byte-identical to
+gstack's or carries the generated `<!-- AUTO-GENERATED from ... -->` banner. A
+`qa/` or `ship/` you wrote yourself is left untouched by `./setup`,
+`gstack-relink`, and both prefix-mode flips, and the linker names it in the
+final summary. Rename or move yours, or switch modes (`./setup --prefix` /
+`--no-prefix`) so the names stop colliding. If you started your own skill from
+a generated gstack SKILL.md and then edited it, that file is moved to
+`~/.gstack/backups/skills/<timestamp>/<skill>/SKILL.md` before gstack's is
+linked in, never deleted.
 
 **Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has a gstack section. Add this:
 
