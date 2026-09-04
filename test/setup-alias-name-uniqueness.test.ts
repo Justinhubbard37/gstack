@@ -16,7 +16,7 @@
  * corrupted the generated SKILL.md — the source files must stay byte-intact.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { spawnSync } from 'child_process';
+import { runBashScript } from './helpers/bash-script';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -74,7 +74,7 @@ beforeAll(() => {
     installOnce,
     installOnce,
   ].join('\n');
-  const result = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 60_000 });
+  const result = runBashScript(script, { timeout: 60_000 });
   if (result.status !== 0) {
     throw new Error(`alias install failed: ${result.stderr}\n${result.stdout}`);
   }
@@ -168,7 +168,7 @@ describe('alias installs are rewritten copies (#2511, #2201)', () => {
         extractFn('link_claude_root_skill_alias'),
         `link_claude_root_skill_alias "${ROOT}" "${legacyDir}"`,
       ].join('\n');
-      const result = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 30_000 });
+      const result = runBashScript(script, { timeout: 30_000 });
       expect(result.status).toBe(0);
 
       const aliasSkill = path.join(aliasDir, 'SKILL.md');

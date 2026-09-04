@@ -14,6 +14,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { spawnSync } from 'child_process';
+import { runBashScript } from './helpers/bash-script';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -86,7 +87,7 @@ describe(':user render targets the out-dir, never the checkout (#2569)', () => {
           extractFn(src, '_swap_in_render'),
           `_swap_in_render "${live}" "${fresh}"`,
         ].join('\n');
-        const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 15_000 });
+        const r = runBashScript(script, { timeout: 15_000 });
         expect(r.status).toBe(0);
         // Live dir now serves the fresh render at the SAME path (links into
         // it stay valid), tmp and .old are gone.
@@ -126,7 +127,7 @@ describe(':user render targets the out-dir, never the checkout (#2569)', () => {
         '  echo "render failed — previous render left in place" >&2',
         'fi',
       ].join('\n');
-      const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 15_000 });
+      const r = runBashScript(script, { timeout: 15_000 });
       expect(r.status).toBe(0);
       expect(fs.readFileSync(path.join(live, 'ship', 'SKILL.md'), 'utf-8')).toBe('previous-render\n');
       // The installed symlink still resolves — the skill set did not vanish.
@@ -191,7 +192,7 @@ describe('link_claude_skill_dirs prefers rendered SKILL.md (behavior)', () => {
         extractFn(SETUP_SRC, 'link_claude_skill_dirs'),
         `link_claude_skill_dirs "${src}" "${skills}"`,
       ].join('\n');
-      const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 15_000 });
+      const r = runBashScript(script, { timeout: 15_000 });
       expect(r.status).toBe(0);
 
       expect(fs.readFileSync(path.join(skills, 'alpha', 'SKILL.md'), 'utf-8')).toContain('rendered-alpha');

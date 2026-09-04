@@ -21,7 +21,7 @@
  *     down to uselessness.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { spawnSync } from 'child_process';
+import { runBashScript } from './helpers/bash-script';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -82,7 +82,7 @@ beforeAll(() => {
     extractFn('link_claude_skill_dirs'),
     `link_claude_skill_dirs "${ROOT}" "${installDir}"`,
   ].join('\n');
-  const result = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 60_000 });
+  const result = runBashScript(script, { timeout: 60_000 });
   if (result.status !== 0) {
     throw new Error(`installer functions failed: ${result.stderr}\n${result.stdout}`);
   }

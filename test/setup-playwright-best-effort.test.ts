@@ -17,6 +17,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { spawnSync } from 'child_process';
+import { runBashScript } from './helpers/bash-script';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -403,7 +404,7 @@ function runEmojiStep(reason: string, fontOk: boolean): { stdout: string; stderr
     emoji,
     'echo "REACHED_END=1"',
   ].join('\n');
-  const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
+  const r = runBashScript(script, { timeout: 10_000 });
   if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
   return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1 };
 }
@@ -450,7 +451,7 @@ function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing', prelud
       tail,
       'echo "REACHED_END=1"',
     ].join('\n');
-    const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
+    const r = runBashScript(script, { timeout: 10_000 });
     if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
     const argv = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, 'utf-8') : '';
     return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1, argv };
@@ -582,7 +583,7 @@ function runLinker(opts: {
     `link_claude_skill_dirs "${payload}" "${skills}"`,
     'echo "FOREIGN=${_FOREIGN_SKIPPED_ENTRIES[*]:-}"',
   ].join('\n');
-  const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000, env: { PATH: process.env.PATH ?? '', HOME: tmp } });
+  const r = runBashScript(script, { timeout: 10_000, env: { PATH: process.env.PATH ?? '', HOME: tmp } });
   if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
   return { status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', skills, payload, tmp };
 }
@@ -628,12 +629,12 @@ describe.skipIf(process.platform === 'win32')('setup: .gstack-owned ownership ma
       fs.writeFileSync(path.join(r.skills, 'review', 'SKILL.md'), '---\nname: review\n---\n# mine, hand-written\n');
       fs.mkdirSync(path.join(r.skills, 'my-own'));
       fs.writeFileSync(path.join(r.skills, 'my-own', 'SKILL.md'), '---\nname: my-own\n---\n');
-      const flip = spawnSync('bash', ['-c', [
+      const flip = runBashScript([
         'set -e', 'IS_WINDOWS=1',
         extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('_backup_skill_md'), '_BACKED_UP_SKILL_MDS=()', '_SKILL_BACKUP_ROOT="$HOME/.gstack/backups/skills/test"',
         extractFn('cleanup_old_claude_symlinks'),
         `cleanup_old_claude_symlinks "${r.payload}" "${r.skills}"`,
-      ].join('\n')], { encoding: 'utf-8', timeout: 10_000 });
+      ].join('\n'), { timeout: 10_000 });
       expect(flip.status).toBe(0);
       expect(flip.stdout).toContain('cleaned up old entries:');
       expect(flip.stdout).toContain('qa');

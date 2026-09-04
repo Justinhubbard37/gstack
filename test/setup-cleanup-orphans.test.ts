@@ -8,7 +8,7 @@
  * skills must stay.
  */
 import { describe, test, expect } from 'bun:test';
-import { spawnSync } from 'child_process';
+import { runBashScript } from './helpers/bash-script';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -72,10 +72,7 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_old_claude_symlink
       extractFn('cleanup_old_claude_symlinks'),
       `cleanup_old_claude_symlinks "${gstackArg}" "${skills}"`,
     ].join('\n');
-    const result = spawnSync('bash', ['-c', script], {
-      encoding: 'utf-8',
-      timeout: 5000,
-    });
+    const result = runBashScript(script, { timeout: 5000 });
     const names = fs.existsSync(skills)
       ? fs.readdirSync(skills).sort()
       : [];

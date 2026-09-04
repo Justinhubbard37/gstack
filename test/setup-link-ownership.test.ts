@@ -9,7 +9,7 @@
  * test/setup-cleanup-orphans.test.ts.
  */
 import { describe, test, expect } from 'bun:test';
-import { spawnSync } from 'child_process';
+import { runBashScript } from './helpers/bash-script';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -53,10 +53,7 @@ function mkTree(): { tmp: string; skills: string; payload: string } {
   return { tmp, skills, payload };
 }
 function bash(lines: string[], tmp: string) {
-  const r = spawnSync('bash', ['-c', lines.join('\n')], {
-    encoding: 'utf-8', timeout: 10_000,
-    env: { PATH: process.env.PATH ?? '', HOME: tmp, GSTACK_USER_RENDER_DIR: path.join(tmp, 'no-render') },
-  });
+  const r = runBashScript(lines.join('\n'), { timeout: 10_000, env: { PATH: process.env.PATH ?? '', HOME: tmp, GSTACK_USER_RENDER_DIR: path.join(tmp, 'no-render') } });
   // An extracted function calling a helper this harness forgot to extract must
   // fail loudly, not degrade into "foreign, skipped".
   if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
