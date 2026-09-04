@@ -59,27 +59,56 @@ RENDER_DIR="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claud
 # Anything else — a foreign symlink, a real dir with a real SKILL.md and no
 # marker, or an entry whose readlink fails — is FOREIGN: never deleted, never
 # linked over, reported on stderr.
+# The install/render roots as written AND as resolved: a standalone relink
+# detects INSTALL_DIR as ~/.claude/skills/gstack, which may itself be a symlink
+# to a checkout, while setup linked entries against the checkout's real path.
+# Both spellings are ours. (Roots stay quoted inside the case patterns, so a
+# glob character or space in a path is matched literally.)
+_INSTALL_REAL="$(cd "$INSTALL_DIR" 2>/dev/null && pwd -P || printf '%s' "$INSTALL_DIR")"
+_RENDER_REAL="$(cd "$RENDER_DIR" 2>/dev/null && pwd -P || printf '%s' "$RENDER_DIR")"
 _target_is_ours() {
-  # $1 = a path that readlink resolved; ours when it lives under our roots.
+  # $1 = an ABSOLUTE path a symlink resolves to; ours when it lives under one
+  # of our roots. "$ROOT"/* requires the separator, so /home/u/gstack2/x never
+  # matches a /home/u/gstack root.
   case "$1" in
-    "$INSTALL_DIR"/*|"$RENDER_DIR"/*) return 0 ;;
+    "$INSTALL_DIR"/*|"$RENDER_DIR"/*|"$_INSTALL_REAL"/*|"$_RENDER_REAL"/*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# readlink of a RELATIVE symlink (older installs wrote `gstack/qa/SKILL.md`)
+# is relative to the link's own directory, not to $PWD. Anchor it there, then
+# canonicalize the DIRECTORY part (pwd -P) so `..` segments and symlinked
+# path components (a `gstack` alias dir, a symlinked install) compare against
+# the real roots. The basename is kept verbatim: canonicalizing it would follow
+# the final link and turn every dangling target into "not ours".
+_link_target_abs() {
+  local link="$1" dest d b d_real
+  dest="$(readlink "$link" 2>/dev/null || true)"
+  [ -n "$dest" ] || return 1
+  case "$dest" in
+    /*) ;;
+    *)  dest="$(dirname "$link")/$dest" ;;
+  esac
+  d="$(dirname "$dest")"; b="$(basename "$dest")"
+  if d_real="$(cd "$d" 2>/dev/null && pwd -P)"; then
+    printf '%s\n' "$d_real/$b"
+  else
+    printf '%s\n' "$dest"
+  fi
 }
 
 _entry_is_ours() {
   local entry="$1" dest
   if [ -L "$entry" ]; then
-    dest="$(readlink "$entry" 2>/dev/null || true)"
-    [ -n "$dest" ] || return 1
+    dest="$(_link_target_abs "$entry")" || return 1
     _target_is_ours "$dest"
     return $?
   fi
   if [ -d "$entry" ]; then
     [ -f "$entry/.gstack-owned" ] && return 0
     if [ -L "$entry/SKILL.md" ]; then
-      dest="$(readlink "$entry/SKILL.md" 2>/dev/null || true)"
-      [ -n "$dest" ] || return 1
+      dest="$(_link_target_abs "$entry/SKILL.md")" || return 1
       _target_is_ours "$dest"
       return $?
     fi

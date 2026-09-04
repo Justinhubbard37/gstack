@@ -764,6 +764,38 @@ describe('gstack-relink ownership gate (#2119)', () => {
     expect(out).not.toContain('skipped');
   });
 
+  test('a legacy RELATIVE symlink into the install (gstack/qa/SKILL.md) is ours and is cleaned', () => {
+    setupMockInstall(['qa']);
+    // Older setups wrote relative links; the skills dir sits beside the install
+    // dir named `gstack`, so `gstack/qa/SKILL.md` resolves into INSTALL_DIR.
+    const installAlias = path.join(skillsDir, 'gstack');
+    fs.symlinkSync(installDir, installAlias);
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.symlinkSync('../gstack/qa/SKILL.md', path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    setPrefix('false');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(out).not.toContain('skipped');
+  });
+
+  test('an entry linked against the REAL path of a symlinked install dir is ours', () => {
+    setupMockInstall(['qa']);
+    const realInstall = fs.realpathSync(installDir);
+    const linkInstall = path.join(tmpDir, 'install-link');
+    fs.symlinkSync(realInstall, linkInstall);
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.symlinkSync(path.join(realInstall, 'qa', 'SKILL.md'), path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    // relink detects the install through the symlinked spelling.
+    run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix false`, {
+      GSTACK_INSTALL_DIR: linkInstall, GSTACK_SKILLS_DIR: skillsDir,
+    });
+    const out = run(`${path.join(installDir, 'bin', 'gstack-relink')} 2>&1`, {
+      GSTACK_INSTALL_DIR: linkInstall, GSTACK_SKILLS_DIR: skillsDir,
+    });
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(out).not.toContain('skipped');
+  });
+
   test('a real-file copy WITHOUT the marker is foreign and survives', () => {
     setupMockInstall(['qa']);
     setPrefix('false');
