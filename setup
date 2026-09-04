@@ -593,9 +593,9 @@ _kill_tree() {
     done
   elif [ -d /proc ]; then
     # debian-slim and git-bash ship no pgrep: walk /proc for children. The
-    # comm field "(name)" may contain spaces, so strip through the closing
-    # paren before reading the ppid (second field after it).
-    for child in $(awk -v p="$pid" '{ s=$0; sub(/^[^)]*\) /, "", s); split(s, f, " "); if (f[2]==p) print $1 }' /proc/[0-9]*/stat 2>/dev/null); do
+    # comm field "(name)" may contain spaces and parens, so strip through the
+    # LAST closing paren (proc(5)) before reading the ppid (second field after it).
+    for child in $(awk -v p="$pid" '{ s=$0; sub(/^.*\) /, "", s); split(s, f, " "); if (f[2]==p) print $1 }' /proc/[0-9]*/stat 2>/dev/null); do
       _kill_tree "$child"
     done
   fi
@@ -999,23 +999,48 @@ elif ! ensure_playwright_browser; then
   # Stale-lock self-heal: a SIGKILL'd prior setup leaves the lock dir behind
   # forever (mkdir mutexes have no owner). If the recorded holder PID is dead,
   # reclaim instead of telling the user to rmdir by hand.
-  if [ -d "$_PW_LOCK" ] && [ -f "$_PW_LOCK/pid" ]; then
-    _PW_HOLDER=$(cat "$_PW_LOCK/pid" 2>/dev/null || true)
-    # A pid must be a positive integer: "", "-1" (kill -0 -1 signals every
-    # process and "succeeds") or "0" (the process group) are stale, not live.
-    case "$_PW_HOLDER" in ''|*[!0-9]*) _PW_HOLDER=0 ;; esac
-    if [ "$_PW_HOLDER" -eq 0 ] || ! kill -0 "$_PW_HOLDER" 2>/dev/null; then
-      echo "  reclaiming stale Chromium-install lock (holder pid ${_PW_HOLDER:-?} is gone)" >&2
+  if [ -d "$_PW_LOCK" ]; then
+    _PW_STALE=0; _PW_HOLDER=0
+    _PW_LOCK_OLD=""
+    [ -n "$(find "$_PW_LOCK" -maxdepth 0 -mmin +$(( _PW_INSTALL_TIMEOUT / 60 + 1 )) 2>/dev/null)" ] && _PW_LOCK_OLD=1
+    if [ ! -f "$_PW_LOCK/pid" ]; then
+      # No holder recorded (killed between mkdir and echo, or mid-write by a
+      # live setup): nothing to probe, so only age can prove abandonment.
+      [ -n "$_PW_LOCK_OLD" ] && _PW_STALE=1
+    else
+      _PW_HOLDER=$(cat "$_PW_LOCK/pid" 2>/dev/null || true)
+      # A pid must be a positive integer: "", "-1" (kill -0 -1 signals every
+      # process and "succeeds") or "0" (the process group) are stale, not live.
+      case "$_PW_HOLDER" in ''|*[!0-9]*) _PW_HOLDER=0 ;; esac
+      if [ "$_PW_HOLDER" -eq 0 ] || ! kill -0 "$_PW_HOLDER" 2>/dev/null; then
+        _PW_STALE=1
+      elif [ -n "$_PW_LOCK_OLD" ]; then
+        # The holder is alive but the lock is older than the install bound: the
+        # holder is past its own deadline, or its pid was recycled to an
+        # unrelated long-lived process. Either way nobody is installing.
+        _PW_STALE=1
+      fi
+    fi
+    if [ "$_PW_STALE" -eq 1 ]; then
+      echo "  reclaiming stale Chromium-install lock (holder pid ${_PW_HOLDER:-?} is gone or past the install bound)" >&2
       # Rename first: two setups judging the same lock stale race on rm -rf +
       # mkdir, and the loser would delete the winner's fresh lock. mv of a
-      # directory is atomic, so exactly one of them reclaims.
-      if mv "$_PW_LOCK" "$_PW_LOCK.stale.$$" 2>/dev/null; then rm -rf "$_PW_LOCK.stale.$$" 2>/dev/null || true; fi
+      # directory is atomic, so exactly one of them reclaims — and if the dir
+      # we moved already belongs to a NEW live holder (it re-created the lock
+      # between our judgment and our mv), hand it straight back.
+      if mv "$_PW_LOCK" "$_PW_LOCK.stale.$$" 2>/dev/null; then
+        _PW_MOVED_PID=$(cat "$_PW_LOCK.stale.$$/pid" 2>/dev/null || true)
+        case "$_PW_MOVED_PID" in ''|*[!0-9]*) _PW_MOVED_PID=0 ;; esac
+        if { [ "$_PW_MOVED_PID" -gt 0 ] && [ "$_PW_MOVED_PID" != "$_PW_HOLDER" ] && kill -0 "$_PW_MOVED_PID" 2>/dev/null; } \
+           || { [ ! -f "$_PW_LOCK.stale.$$/pid" ] && [ -z "$_PW_LOCK_OLD" ]; }; then
+          # A new live holder, or a fresh lock whose holder has not written its
+          # pid yet (mkdir done, echo pending): not ours to reclaim.
+          mv "$_PW_LOCK.stale.$$" "$_PW_LOCK" 2>/dev/null || true
+        else
+          rm -rf "$_PW_LOCK.stale.$$" 2>/dev/null || true
+        fi
+      fi
     fi
-  elif [ -d "$_PW_LOCK" ] && [ -n "$(find "$_PW_LOCK" -maxdepth 0 -mmin +$(( _PW_INSTALL_TIMEOUT / 60 + 1 )) 2>/dev/null)" ]; then
-    # A lock with no pid file (killed between mkdir and echo) has no holder to
-    # probe; once it is older than the install bound nobody is using it.
-    echo "  reclaiming abandoned Chromium-install lock (no holder recorded, older than the install bound)" >&2
-    if mv "$_PW_LOCK" "$_PW_LOCK.stale.$$" 2>/dev/null; then rm -rf "$_PW_LOCK.stale.$$" 2>/dev/null || true; fi
   fi
   if mkdir "$_PW_LOCK" 2>/dev/null; then
     echo "$$" > "$_PW_LOCK/pid" 2>/dev/null || true

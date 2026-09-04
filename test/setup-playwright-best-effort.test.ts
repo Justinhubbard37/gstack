@@ -115,6 +115,7 @@ function runBlock(opts: {
   env?: Record<string, string>;
   preLockPid?: string;      // pre-create the install lock held by this pid
   preLockNoPidAgeMin?: number; // pre-create a lock dir with NO pid file, this many minutes old
+  preLockAgeMin?: number;   // with preLockPid: age the lock dir this many minutes
   markKill?: boolean;       // record _kill_tree invocations to $MARK
   isWindows?: '0' | '1';
   prelude?: string;         // extra shell lines (node/npm stubs) injected before the block
@@ -130,6 +131,10 @@ function runBlock(opts: {
     const lock = path.join(tmp, 'gstack-playwright-install.lock');
     fs.mkdirSync(lock);
     fs.writeFileSync(path.join(lock, 'pid'), opts.preLockPid);
+    if (opts.preLockAgeMin !== undefined) {
+      const t = new Date(Date.now() - opts.preLockAgeMin * 60_000);
+      fs.utimesSync(lock, t, t);
+    }
   }
   if (opts.preLockNoPidAgeMin !== undefined) {
     const lock = path.join(tmp, 'gstack-playwright-install.lock');
@@ -235,6 +240,14 @@ describe('setup: Chromium bootstrap block executes best-effort', () => {
       expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('bunx-called');
       expect(r.stdout).not.toContain('chromium-install-locked');
     }
+  }, 15_000);
+
+  test('a lock held by a LIVE pid but older than the install bound is reclaimed (holder past its deadline, or a recycled pid)', () => {
+    const r = runBlock({ probe: 'fail', bunx: 'exit 0', preLockPid: String(process.pid), preLockAgeMin: 30, env: { GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: '60' } });
+    expect(r.status).toBe(0);
+    expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('bunx-called');
+    expect(r.stdout).not.toContain('chromium-install-locked');
+    expect(r.stderr).toContain('past the install bound');
   }, 15_000);
 
   test('a lock dir with NO pid file is reclaimed once older than the install bound, and honored while fresh', () => {
@@ -604,7 +617,7 @@ describe.skipIf(process.platform === 'win32')('setup: .gstack-owned ownership ma
       fs.writeFileSync(path.join(r.skills, 'my-own', 'SKILL.md'), '---\nname: my-own\n---\n');
       const flip = spawnSync('bash', ['-c', [
         'set -e', 'IS_WINDOWS=1',
-        extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'),
+        extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('_backup_skill_md'), '_BACKED_UP_SKILL_MDS=()', '_SKILL_BACKUP_ROOT="$HOME/.gstack/backups/skills/test"',
         extractFn('cleanup_old_claude_symlinks'),
         `cleanup_old_claude_symlinks "${r.payload}" "${r.skills}"`,
       ].join('\n')], { encoding: 'utf-8', timeout: 10_000 });
