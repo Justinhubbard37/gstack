@@ -569,6 +569,13 @@ _kill_tree() {
     for child in $(pgrep -P "$pid" 2>/dev/null); do
       _kill_tree "$child"
     done
+  elif [ -d /proc ]; then
+    # debian-slim and git-bash ship no pgrep: walk /proc for children. The
+    # comm field "(name)" may contain spaces, so strip through the closing
+    # paren before reading the ppid (second field after it).
+    for child in $(awk -v p="$pid" '{ s=$0; sub(/^[^)]*\) /, "", s); split(s, f, " "); if (f[2]==p) print $1 }' /proc/[0-9]*/stat 2>/dev/null); do
+      _kill_tree "$child"
+    done
   fi
   kill -9 "$pid" 2>/dev/null || true
 }
@@ -935,8 +942,9 @@ fi
 # setup is installing Chromium right now, so this run registers skills and
 # re-probes next time. The download is bounded (default 600s, env
 # GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT) because Playwright's own retries cover a
-# flaky socket but not a wedged bunx; the killed tree is the whole process
-# group via _kill_tree. Reason codes: skipped, chromium-install,
+# flaky socket but not a wedged bunx; a wedged installer is killed with its
+# child tree (_kill_tree: pgrep-walked, /proc-walked where pgrep is missing).
+# Reason codes: skipped, chromium-install,
 # chromium-install-timeout, chromium-install-locked, windows-no-node,
 # windows-node-modules, post-install-launch.
 # test/setup-playwright-best-effort.test.ts pins this block.
@@ -947,13 +955,12 @@ _pw_fail() {
   echo "  Chromium bootstrap: $code — $*" >&2
 }
 _PW_INSTALL_TIMEOUT="${GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT:-600}"
-# Positive seconds only: 0 would kill the install on the first poll, so it
-# (and anything non-numeric) falls back to the default.
+# Normalize to a plain positive integer or fall back to the default: empty and
+# non-numeric are garbage; "0"/"000" would kill the install on the first poll;
+# "0600" is 600; anything past nine digits is not a deadline (a value bash
+# cannot compare would leave the install unbounded — the exact failure the
+# bound exists to prevent).
 case "$_PW_INSTALL_TIMEOUT" in ''|*[!0-9]*) _PW_INSTALL_TIMEOUT=600 ;; esac
-# Normalize to a plain positive integer: "000"/"0" mean the default (never
-# kill-on-first-poll), "0600" is 600, and anything past nine digits is garbage
-# rather than a deadline (a value bash cannot compare would leave the install
-# unbounded — the exact failure the bound exists to prevent).
 [ "${#_PW_INSTALL_TIMEOUT}" -le 9 ] || _PW_INSTALL_TIMEOUT=600
 _PW_INSTALL_TIMEOUT=$((10#$_PW_INSTALL_TIMEOUT))
 [ "$_PW_INSTALL_TIMEOUT" -gt 0 ] || _PW_INSTALL_TIMEOUT=600
@@ -972,10 +979,21 @@ elif ! ensure_playwright_browser; then
   # reclaim instead of telling the user to rmdir by hand.
   if [ -d "$_PW_LOCK" ] && [ -f "$_PW_LOCK/pid" ]; then
     _PW_HOLDER=$(cat "$_PW_LOCK/pid" 2>/dev/null || true)
-    if [ -n "$_PW_HOLDER" ] && ! kill -0 "$_PW_HOLDER" 2>/dev/null; then
-      echo "  reclaiming stale Chromium-install lock (holder pid $_PW_HOLDER is gone)" >&2
-      rm -rf "$_PW_LOCK" 2>/dev/null || true
+    # A pid must be a positive integer: "", "-1" (kill -0 -1 signals every
+    # process and "succeeds") or "0" (the process group) are stale, not live.
+    case "$_PW_HOLDER" in ''|*[!0-9]*) _PW_HOLDER=0 ;; esac
+    if [ "$_PW_HOLDER" -eq 0 ] || ! kill -0 "$_PW_HOLDER" 2>/dev/null; then
+      echo "  reclaiming stale Chromium-install lock (holder pid ${_PW_HOLDER:-?} is gone)" >&2
+      # Rename first: two setups judging the same lock stale race on rm -rf +
+      # mkdir, and the loser would delete the winner's fresh lock. mv of a
+      # directory is atomic, so exactly one of them reclaims.
+      if mv "$_PW_LOCK" "$_PW_LOCK.stale.$$" 2>/dev/null; then rm -rf "$_PW_LOCK.stale.$$" 2>/dev/null || true; fi
     fi
+  elif [ -d "$_PW_LOCK" ] && [ -n "$(find "$_PW_LOCK" -maxdepth 0 -mmin +$(( _PW_INSTALL_TIMEOUT / 60 + 1 )) 2>/dev/null)" ]; then
+    # A lock with no pid file (killed between mkdir and echo) has no holder to
+    # probe; once it is older than the install bound nobody is using it.
+    echo "  reclaiming abandoned Chromium-install lock (no holder recorded, older than the install bound)" >&2
+    if mv "$_PW_LOCK" "$_PW_LOCK.stale.$$" 2>/dev/null; then rm -rf "$_PW_LOCK.stale.$$" 2>/dev/null || true; fi
   fi
   if mkdir "$_PW_LOCK" 2>/dev/null; then
     echo "$$" > "$_PW_LOCK/pid" 2>/dev/null || true
@@ -2857,7 +2875,7 @@ fi
 
 # ─── Chromium bootstrap summary (best-effort browser, see # 2) ───────────────
 # Printed LAST so it is the thing the user sees, after every skill registered.
-_PW_BROWSER_SKILLS="/qa, /qa-only, /design-review, /browse, make-pdf, /pair-agent"
+_PW_BROWSER_SKILLS="/qa, /qa-only, /design-review, /browse, make-pdf, /pair-agent, and any other skill that drives the browser"
 if [ "${_PW_FAIL_REASON:-}" = "skipped" ]; then
   # An explicit opt-out is not a failure: say what is unavailable and stop.
   log ""

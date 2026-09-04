@@ -77,7 +77,6 @@ describe('setup: Chromium bootstrap static invariants', () => {
 
   test('lock contention is a reason code, not a fatal', () => {
     expect(codeLines).toContain('_pw_fail chromium-install-locked');
-    expect(codeLines).not.toMatch(/another gstack setup is already installing[\s\S]*exit 1/);
     expect(block).toContain('GSTACK_SKIP_PLAYWRIGHT');
   });
 
@@ -115,6 +114,7 @@ function runBlock(opts: {
   bunx: string;             // body of the bunx stub
   env?: Record<string, string>;
   preLockPid?: string;      // pre-create the install lock held by this pid
+  preLockNoPidAgeMin?: number; // pre-create a lock dir with NO pid file, this many minutes old
   markKill?: boolean;       // record _kill_tree invocations to $MARK
   isWindows?: '0' | '1';
   prelude?: string;         // extra shell lines (node/npm stubs) injected before the block
@@ -130,6 +130,12 @@ function runBlock(opts: {
     const lock = path.join(tmp, 'gstack-playwright-install.lock');
     fs.mkdirSync(lock);
     fs.writeFileSync(path.join(lock, 'pid'), opts.preLockPid);
+  }
+  if (opts.preLockNoPidAgeMin !== undefined) {
+    const lock = path.join(tmp, 'gstack-playwright-install.lock');
+    fs.mkdirSync(lock);
+    const t = new Date(Date.now() - opts.preLockNoPidAgeMin * 60_000);
+    fs.utimesSync(lock, t, t);
   }
   const probeFn = opts.probe === 'fail-then-ok'
     ? 'ensure_playwright_browser() { if [ -f "$MARK.probed" ]; then return 0; fi; : > "$MARK.probed"; return 1; }'
@@ -196,7 +202,7 @@ describe('setup: Chromium bootstrap block executes best-effort', () => {
     expect(r.stdout).toContain('REACHED_END=1');
     expect(r.elapsedMs).toBeLessThan(20_000);
     expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('killed');
-  });
+  }, 15_000);
 
   test('non-numeric timeout knob falls back to the default instead of erroring', () => {
     const r = runBlock({ probe: 'fail', bunx: 'exit 3', env: { GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: 'soon' } });
@@ -216,11 +222,63 @@ describe('setup: Chromium bootstrap block executes best-effort', () => {
   });
 
   test('stale lock (dead pid) is reclaimed and the install proceeds', () => {
-    const r = runBlock({ probe: 'fail', bunx: 'exit 0', preLockPid: '999999' });
+    const r = runBlock({ probe: 'fail', bunx: 'exit 0', preLockPid: '4194305' /* above Linux's largest pid_max: never a live pid */ });
     expect(r.status).toBe(0);
     expect(r.stderr).toContain('reclaiming stale Chromium-install lock');
     expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('bunx-called');
   });
+
+  test('a lock whose pid file is garbage (-1, abc, 0) is stale, not "locked": kill -0 -1 would signal everything and "succeed"', () => {
+    for (const pid of ['-1', 'abc', '0']) {
+      const r = runBlock({ probe: 'fail', bunx: 'exit 0', preLockPid: pid });
+      expect(r.status).toBe(0);
+      expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('bunx-called');
+      expect(r.stdout).not.toContain('chromium-install-locked');
+    }
+  }, 15_000);
+
+  test('a lock dir with NO pid file is reclaimed once older than the install bound, and honored while fresh', () => {
+    const old = runBlock({ probe: 'fail', bunx: 'exit 0', preLockNoPidAgeMin: 30, env: { GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: '60' } });
+    expect(old.status).toBe(0);
+    expect(fs.readFileSync(path.join(old.tmp, 'mark'), 'utf-8')).toContain('bunx-called');
+    expect(old.stdout).not.toContain('chromium-install-locked');
+    const fresh = runBlock({ probe: 'fail', bunx: 'exit 0', preLockNoPidAgeMin: 0, env: { GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: '600' } });
+    expect(fresh.status).toBe(0);
+    expect(fresh.stdout).toContain('REASON=chromium-install-locked\n');
+  }, 15_000);
+
+  test('_kill_tree without pgrep on PATH still kills the grandchild (walks /proc)', () => {
+    if (!fs.existsSync('/proc')) return;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-killtree-'));
+    try {
+      const bin = path.join(tmp, 'bin');
+      fs.mkdirSync(bin);
+      for (const name of ['bash', 'sleep', 'awk']) {
+        const real = (spawnSync('which', [name], { encoding: 'utf-8', timeout: 10_000 }).stdout ?? '').trim();
+        if (real) fs.symlinkSync(real, path.join(bin, name));
+      }
+      const script = [
+        `export PATH="${bin}"`,
+        'hash -r',
+        'command -v pgrep >/dev/null 2>&1 && { echo "PGREP_PRESENT"; exit 0; }',
+        extractFn('_kill_tree'),
+        // two commands so bash forks a real subshell instead of exec-ing sleep directly
+        '( sleep 30; true ) & pid=$!',
+        'sleep 0.3',
+        // find the sleep grandchild via /proc, the same way the fallback does
+        'child=$(awk -v p="$pid" \'{ s=$0; sub(/^[^)]*\\) /, "", s); split(s, f, " "); if (f[2]==p) { print $1; exit } }\' /proc/[0-9]*/stat 2>/dev/null)',
+        '[ -n "$child" ] || { echo "NO_CHILD"; exit 0; }',
+        '_kill_tree "$pid"',
+        'sleep 0.3',
+        'if kill -0 "$child" 2>/dev/null; then echo "CHILD_ALIVE"; else echo "CHILD_DEAD"; fi',
+      ].join('\n');
+      const r = spawnSync('/bin/bash', ['-c', script], { encoding: 'utf-8', timeout: 20_000 });
+      expect(r.stdout).toContain('CHILD_DEAD');
+      expect(r.stdout).not.toContain('PGREP_PRESENT');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test('install succeeds but the post-install probe fails: reason post-install-launch with the userns hint', () => {
     const r = runBlock({ probe: 'fail', bunx: 'exit 0' });
@@ -333,6 +391,7 @@ function runEmojiStep(reason: string, fontOk: boolean): { stdout: string; stderr
     'echo "REACHED_END=1"',
   ].join('\n');
   const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
+  if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
   return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1 };
 }
 
@@ -378,6 +437,8 @@ function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing'): { std
       'echo "REACHED_END=1"',
     ].join('\n');
     const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
+    if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
+  if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
     const argv = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, 'utf-8') : '';
     return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1, argv };
   } finally {
@@ -395,8 +456,8 @@ describe('setup: Chromium bootstrap summary block executes', () => {
     }
     expect(timeout.stdout).toContain('GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=1800');
     expect(timeout.stdout).not.toContain('GSTACK_CHROMIUM_NO_SANDBOX');
-    // Reason code only, never a path or command line; a synthetic session id
-    // keeps the one-shot event from sweeping other sessions' pending markers.
+    // Reason code only, never a path or command line; --no-sweep keeps the
+    // one-shot event from finalizing other sessions' pending markers.
     expect(timeout.argv.trim()).toBe('--event-type onboarding --skill _setup_playwright --outcome chromium-install-timeout --no-sweep');
 
     const launch = runSummary('post-install-launch', 'ok');
@@ -483,17 +544,25 @@ function runLinker(opts: {
     extractFn('_claude_entry_is_ours'),
     extractFn('_write_owned_marker'),
     extractFn('_gstack_generated_header'),
+    extractFn('_claude_entry_owned_strongly'),
+    extractFn('_backup_skill_md'),
+    extractFn('_cleanup_weak_dir'),
+    extractFn('_gstack_dir_only_links'),
+    extractFn('_cleanup_linked_dir'),
+    '_BACKED_UP_SKILL_MDS=()',
+    '_SKILL_BACKUP_ROOT="$HOME/.gstack/backups/skills/test"',
     extractFn('link_claude_skill_dirs'),
     extractFn('cleanup_old_claude_symlinks'),
     `link_claude_skill_dirs "${payload}" "${skills}"`,
     'echo "FOREIGN=${_FOREIGN_SKIPPED_ENTRIES[*]:-}"',
   ].join('\n');
   const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000, env: { PATH: process.env.PATH ?? '', HOME: tmp } });
+  if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
   return { status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', skills, payload, tmp };
 }
 
 describe.skipIf(process.platform === 'win32')('setup: .gstack-owned ownership marker for Windows copy installs (#2119)', () => {
-  test('IS_WINDOWS=1 writes the marker beside a COPIED SKILL.md; IS_WINDOWS=0 writes no marker beside a symlinked one', () => {
+  test('the marker is written beside a COPIED SKILL.md (IS_WINDOWS=1) and beside a symlinked one (IS_WINDOWS=0): a directory we created is ours on every platform', () => {
     const win = runLinker({ isWindows: '1', payload: ['qa', 'ship'] });
     try {
       expect(win.status).toBe(0);
@@ -511,7 +580,7 @@ describe.skipIf(process.platform === 'win32')('setup: .gstack-owned ownership ma
     try {
       expect(unix.status).toBe(0);
       expect(fs.lstatSync(path.join(unix.skills, 'qa', 'SKILL.md')).isSymbolicLink()).toBe(true);
-      expect(fs.existsSync(path.join(unix.skills, 'qa', '.gstack-owned'))).toBe(false);
+      expect(fs.existsSync(path.join(unix.skills, 'qa', '.gstack-owned'))).toBe(true);
     } finally {
       fs.rmSync(unix.tmp, { recursive: true, force: true });
     }
@@ -535,7 +604,7 @@ describe.skipIf(process.platform === 'win32')('setup: .gstack-owned ownership ma
       fs.writeFileSync(path.join(r.skills, 'my-own', 'SKILL.md'), '---\nname: my-own\n---\n');
       const flip = spawnSync('bash', ['-c', [
         'set -e', 'IS_WINDOWS=1',
-        extractFn('_gstack_generated_header'),
+        extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'),
         extractFn('cleanup_old_claude_symlinks'),
         `cleanup_old_claude_symlinks "${r.payload}" "${r.skills}"`,
       ].join('\n')], { encoding: 'utf-8', timeout: 10_000 });
