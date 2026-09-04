@@ -73,25 +73,31 @@ gstack_hook_decision() {
 #   /guard, /unfreeze, /investigate) resolve through gstack-paths; a reader that
 #   used a different chain failed OPEN whenever GSTACK_HOME was set (#1459).
 #   test/hook-scripts.test.ts pins parity against gstack-paths.
+#   Printed WITHOUT a trailing newline: callers capture with a sentinel
+#   (`r="$(gstack_hook_state_root; printf x)"; r="${r%x}"`) so a root that
+#   itself ends in a newline round-trips exactly as gstack-paths' %q does —
+#   otherwise writer and reader would again disagree on the directory.
 gstack_hook_state_root() {
   if [ -n "${GSTACK_HOME:-}" ]; then
-    printf '%s\n' "$GSTACK_HOME"
+    printf '%s' "$GSTACK_HOME"
   elif [ -n "${CLAUDE_PLUGIN_DATA:-}" ] && printf '%s' "${CLAUDE_PLUGIN_ROOT:-}" | grep -qi "gstack"; then
-    printf '%s\n' "$CLAUDE_PLUGIN_DATA"
+    printf '%s' "$CLAUDE_PLUGIN_DATA"
   elif [ -n "${HOME:-}" ]; then
-    printf '%s\n' "$HOME/.gstack"
+    printf '%s' "$HOME/.gstack"
   else
-    printf '%s\n' ".gstack"
+    printf '%s' ".gstack"
   fi
 }
 
 # gstack_hook_log_fire SKILL PATTERN
 #   Append a hook_fire analytics record (pattern name only, never command
-#   content). Resolves the state root through gstack_hook_state_root so tests
-#   never pollute the operator's real analytics file. Best-effort: failures
-#   never affect the hook decision.
+#   content). Respects GSTACK_HOME so tests never pollute the operator's real
+#   analytics file. Deliberately NOT gstack_hook_state_root: every other
+#   analytics writer and reader (gstack-skill-start, gstack-retro-metrics,
+#   gstack-analytics) uses this two-step chain, and the usage log must stay one
+#   file. Best-effort: failures never affect the hook decision.
 gstack_hook_log_fire() {
-  _ghlf_dir="$(gstack_hook_state_root)/analytics"
+  _ghlf_dir="${GSTACK_HOME:-$HOME/.gstack}/analytics"
   mkdir -p "$_ghlf_dir" 2>/dev/null || true
   # Fields are JSON-encoded (a repo basename can carry quotes/backslashes) —
   # same rule this file states for decisions: never raw-interpolate into JSON.

@@ -694,6 +694,28 @@ describe('check-careful.sh', () => {
       });
     });
 
+    test('an older hook-extract.sh without gstack_hook_state_root still loads rules from $HOME/.gstack and emits a decision (no set -e death)', () => {
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-careful-oldhelper-'));
+      const carefulBin = path.join(base, 'careful', 'bin');
+      fs.mkdirSync(carefulBin, { recursive: true });
+      fs.copyFileSync(CAREFUL_SCRIPT, path.join(carefulBin, 'check-careful.sh'));
+      const helper = fs.readFileSync(HOOK_EXTRACT, 'utf-8');
+      const start = helper.indexOf('gstack_hook_state_root() {');
+      const end = helper.indexOf('\n}\n', start) + 3;
+      fs.writeFileSync(path.join(carefulBin, 'hook-extract.sh'), helper.slice(0, start) + helper.slice(end));
+      const fakeHome = path.join(base, 'home');
+      fs.mkdirSync(path.join(fakeHome, '.gstack'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.gstack', 'careful-patterns.txt'), 'terraform\\s+destroy\n');
+      try {
+        const { exitCode, output } = runHook(path.join(carefulBin, 'check-careful.sh'), carefulInput('terraform destroy'), { HOME: fakeHome, GSTACK_HOME: '' });
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('Project rule');
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true });
+      }
+    });
+
     test('safe commands still allow with a pattern file present', () => {
       withPatternFile('terraform\\s+destroy\n', (gstackHome) => {
         const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('ls -la'), { GSTACK_HOME: gstackHome });
@@ -1002,5 +1024,113 @@ describe('check-freeze.sh state-root resolution (#1459 / #1509)', () => {
     for (const env of combos) {
       expect(hookStateRoot(env)).toBe(pathsStateRoot(env));
     }
+  });
+});
+
+// ============================================================
+// gstack_hook_log_fire analytics sink follows the same state root (#1459)
+// ============================================================
+// The hook_fire record lands under ${GSTACK_HOME:-$HOME/.gstack}/analytics —
+// the SAME two-step chain every other analytics writer and reader uses
+// (gstack-skill-start, gstack-retro-metrics, gstack-analytics) — deliberately
+// NOT the plugin-aware state root the freeze FILE uses, so the usage log stays
+// one file. Logging is best-effort: an unwritable sink never changes the decision.
+describe('gstack_hook_log_fire writes under the resolved state root', () => {
+  const BOUNDARY = '/Users/dev/project/src/';
+  const OUTSIDE = '/Users/dev/other-project/index.ts';
+
+  function withEmptyDir(fn: (dir: string) => void) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-logfire-'));
+    try { fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+  function lastRecord(file: string): any {
+    const lines = fs.readFileSync(file, 'utf-8').trim().split('\n');
+    return JSON.parse(lines[lines.length - 1]);
+  }
+
+  test('REGRESSION: a freeze deny under GSTACK_HOME appends hook_fire to $GSTACK_HOME/analytics, not $HOME/.gstack', () => {
+    withFreezeDir(BOUNDARY, (gstackHome) => {
+      withEmptyDir((fakeHome) => {
+        const { exitCode, output } = runHook(FREEZE_SCRIPT, freezeInput(OUTSIDE), {
+          GSTACK_HOME: gstackHome, HOME: fakeHome, CLAUDE_PLUGIN_DATA: '', CLAUDE_PLUGIN_ROOT: '',
+        });
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        const rec = lastRecord(path.join(gstackHome, 'analytics', 'skill-usage.jsonl'));
+        expect(rec.event).toBe('hook_fire');
+        expect(rec.skill).toBe('freeze');
+        expect(rec.pattern).toBe('boundary_deny');
+        expect(typeof rec.ts).toBe('string');
+        expect(fs.existsSync(path.join(fakeHome, '.gstack'))).toBe(false);
+      });
+    });
+  });
+
+  test('plugin install: the freeze FILE is read from CLAUDE_PLUGIN_DATA but hook_fire still lands under $HOME/.gstack/analytics (one usage log)', () => {
+    withFreezeDir(BOUNDARY, (pluginData) => {
+      withEmptyDir((fakeHome) => {
+        const { output } = runHook(FREEZE_SCRIPT, freezeInput(OUTSIDE),
+          freezeEnv(pluginData, { HOME: fakeHome, CLAUDE_PLUGIN_ROOT: '/Plugins/GSTACK' }));
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        const rec = lastRecord(path.join(fakeHome, '.gstack', 'analytics', 'skill-usage.jsonl'));
+        expect(rec.event).toBe('hook_fire');
+        expect(rec.skill).toBe('freeze');
+        expect(fs.existsSync(path.join(pluginData, 'analytics'))).toBe(false);
+      });
+    });
+  });
+
+  test('a GSTACK_HOME ending in a newline round-trips exactly (writer %q and reader sentinel agree)', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-freeze-nl-'));
+    const nlDir = path.join(base, 'root\n');
+    fs.mkdirSync(nlDir);
+    fs.writeFileSync(path.join(nlDir, 'freeze-dir.txt'), BOUNDARY);
+    try {
+      const { output } = runHook(FREEZE_SCRIPT, freezeInput(OUTSIDE), {
+        GSTACK_HOME: nlDir, HOME: base, CLAUDE_PLUGIN_DATA: '', CLAUDE_PLUGIN_ROOT: '',
+      });
+      expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('a hook helper from an older install that lacks gstack_hook_state_root DENIES (fail closed), never exit 127', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-freeze-oldhelper-'));
+    const freezeBin = path.join(base, 'freeze', 'bin');
+    const carefulBin = path.join(base, 'careful', 'bin');
+    fs.mkdirSync(freezeBin, { recursive: true });
+    fs.mkdirSync(carefulBin, { recursive: true });
+    fs.copyFileSync(FREEZE_SCRIPT, path.join(freezeBin, 'check-freeze.sh'));
+    const helper = fs.readFileSync(HOOK_EXTRACT, 'utf-8');
+    const start = helper.indexOf('gstack_hook_state_root() {');
+    const end = helper.indexOf('\n}\n', start) + 3;
+    fs.writeFileSync(path.join(carefulBin, 'hook-extract.sh'), helper.slice(0, start) + helper.slice(end));
+    try {
+      withFreezeDir(BOUNDARY, (stateDir) => {
+        const { exitCode, output } = runHook(path.join(freezeBin, 'check-freeze.sh'), freezeInput('/Users/dev/project/src/x.ts'), freezeEnv(stateDir));
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('fail closed');
+      });
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('an unwritable analytics sink never changes the decision: deny is still emitted as valid JSON', () => {
+    withFreezeDir(BOUNDARY, (gstackHome) => {
+      // `analytics` is a regular FILE, so mkdir -p and the >> append both fail.
+      fs.writeFileSync(path.join(gstackHome, 'analytics'), 'not a directory');
+      withEmptyDir((fakeHome) => {
+        const { exitCode, output, raw } = runHook(FREEZE_SCRIPT, freezeInput(OUTSIDE), {
+          GSTACK_HOME: gstackHome, HOME: fakeHome, CLAUDE_PLUGIN_DATA: '', CLAUDE_PLUGIN_ROOT: '',
+        });
+        expect(exitCode).toBe(0);
+        expect(() => JSON.parse(raw)).not.toThrow();
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(fs.readFileSync(path.join(gstackHome, 'analytics'), 'utf-8')).toBe('not a directory');
+      });
+    });
   });
 });

@@ -36,7 +36,14 @@ fi
 # fails open: with GSTACK_HOME set, /freeze wrote freeze-dir.txt under
 # GSTACK_HOME while this hook read $HOME/.gstack, found nothing, and allowed
 # everything (#1459, #1509). gstack_hook_state_root mirrors gstack-paths.
-STATE_DIR="$(gstack_hook_state_root)"
+# A helper from an older install that lacks the function must fail CLOSED
+# (the existence check above only proves the file sourced), never exit 127
+# with no JSON — Claude Code treats that as non-blocking.
+if ! command -v gstack_hook_state_root >/dev/null 2>&1; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[freeze] Hook helpers out of date (partial upgrade?) - blocked, fail closed. Re-run ./setup or /unfreeze."}}\n'
+  exit 0
+fi
+STATE_DIR="$(gstack_hook_state_root; printf x)"; STATE_DIR="${STATE_DIR%x}"
 FREEZE_FILE="$STATE_DIR/freeze-dir.txt"
 
 # If no freeze file exists, allow everything (not yet configured)
