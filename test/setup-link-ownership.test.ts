@@ -33,6 +33,13 @@ const HELPERS = [
   extractFn('_claude_entry_is_ours'),
   extractFn('_write_owned_marker'),
   extractFn('_gstack_generated_header'),
+  extractFn('_claude_entry_owned_strongly'),
+  extractFn('_backup_skill_md'),
+  extractFn('_cleanup_weak_dir'),
+  extractFn('_gstack_dir_only_links'),
+  extractFn('_cleanup_linked_dir'),
+  '_BACKED_UP_SKILL_MDS=()',
+  '_SKILL_BACKUP_ROOT="$HOME/.gstack/backups/skills/test"',
 ].join('\n');
 
 const FOREIGN = '---\nname: qa\ndescription: mine\n---\n# not gstack\n';
@@ -50,6 +57,9 @@ function bash(lines: string[], tmp: string) {
     encoding: 'utf-8', timeout: 10_000,
     env: { PATH: process.env.PATH ?? '', HOME: tmp, GSTACK_USER_RENDER_DIR: path.join(tmp, 'no-render') },
   });
+  // An extracted function calling a helper this harness forgot to extract must
+  // fail loudly, not degrade into "foreign, skipped".
+  if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
   return { status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -140,6 +150,9 @@ describe.skipIf(process.platform === 'win32')('setup: _install_alias_skill_md ne
       expect(r.stdout).toContain('FOREIGN=connect-chrome');
       expect(fs.readFileSync(path.join(t.skills, 'gstack-connect-chrome', 'SKILL.md'), 'utf-8')).toContain('name: gstack-connect-chrome');
       expect(fs.readFileSync(path.join(t.skills, 'gstack-connect-chrome', 'SKILL.md'), 'utf-8')).not.toContain('old alias copy');
+      // The refreshed copy is stamped, so next run's provenance is the marker, not the banner.
+      expect(fs.readFileSync(path.join(t.skills, 'gstack-connect-chrome', '.gstack-owned'), 'utf-8').trim()).toBe(fs.realpathSync(t.payload));
+      expect(fs.existsSync(path.join(t.skills, 'connect-chrome', '.gstack-owned'))).toBe(false);
     } finally {
       fs.rmSync(t.tmp, { recursive: true, force: true });
     }
@@ -152,7 +165,7 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_prefixed_claude_sy
     fs.mkdirSync(path.join(t.payload, 'qa'));
     fs.writeFileSync(path.join(t.payload, 'qa', 'SKILL.md'), GENERATED('qa'));
     plant(t.skills, t.payload);
-    const r = bash(['set -e', `IS_WINDOWS=${isWindows}`, extractFn('_gstack_generated_header'), extractFn('cleanup_prefixed_claude_symlinks'),
+    const r = bash(['set -e', `IS_WINDOWS=${isWindows}`, extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('cleanup_prefixed_claude_symlinks'),
       `cleanup_prefixed_claude_symlinks "${t.payload}" "${t.skills}"`], t.tmp);
     const names = fs.readdirSync(t.skills).sort();
     fs.rmSync(t.tmp, { recursive: true, force: true });
@@ -188,6 +201,25 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_prefixed_claude_sy
     expect(h.names).toEqual(['gstack']);
   });
 
+  test('Windows: weak proof (banner, no marker) removes only SKILL.md; the user\'s other files and the directory survive', () => {
+    const r = runFlip('1', (skills) => {
+      fs.mkdirSync(path.join(skills, 'gstack-qa', 'my-templates'), { recursive: true });
+      fs.writeFileSync(path.join(skills, 'gstack-qa', 'SKILL.md'), GENERATED('gstack-qa').replace('# gstack-qa', '# started from gstack, then customized'));
+      fs.writeFileSync(path.join(skills, 'gstack-qa', 'my-templates', 'checklist.md'), '- mine\n');
+    });
+    expect(r.status).toBe(0);
+    expect(r.names).toEqual(['gstack', 'gstack-qa']);
+    expect(r.stdout).toContain('cleaned gstack-qa/SKILL.md');
+    // Strong proof (marker) still removes the directory we created.
+    const m = runFlip('1', (skills) => {
+      fs.mkdirSync(path.join(skills, 'gstack-qa', 'sections'), { recursive: true });
+      fs.writeFileSync(path.join(skills, 'gstack-qa', 'SKILL.md'), '# stale\n');
+      fs.writeFileSync(path.join(skills, 'gstack-qa', 'sections', 'x.md'), 'x\n');
+      fs.writeFileSync(path.join(skills, 'gstack-qa', '.gstack-owned'), '/payload\n');
+    });
+    expect(m.names).toEqual(['gstack']);
+  });
+
   test('Windows: a ONE-line AUTO-GENERATED substring from another generator is not provenance — the entry survives', () => {
     const r = runFlip('1', (skills) => {
       fs.mkdirSync(path.join(skills, 'gstack-qa'));
@@ -209,5 +241,162 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_prefixed_claude_sy
     });
     expect(reap.names).toEqual(['gstack']);
     expect(reap.stdout).toContain('cleaned up prefixed entries: gstack-qa');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('setup: weakly-proven files are moved aside, never overwritten (#2119 review)', () => {
+  test('Linux linker: a customized banner copy is moved to the backup root before the symlink lands; an identical copy is not', () => {
+    const t = mkTree();
+    try {
+      fs.mkdirSync(path.join(t.payload, 'qa'));
+      fs.writeFileSync(path.join(t.payload, 'qa', 'SKILL.md'), GENERATED('qa'));
+      fs.mkdirSync(path.join(t.payload, 'ship'));
+      fs.writeFileSync(path.join(t.payload, 'ship', 'SKILL.md'), GENERATED('ship'));
+      const custom = GENERATED('qa').replace('# qa', '# my qa, started from gstack');
+      fs.mkdirSync(path.join(t.skills, 'qa'));
+      fs.writeFileSync(path.join(t.skills, 'qa', 'SKILL.md'), custom);
+      fs.mkdirSync(path.join(t.skills, 'ship'));
+      fs.copyFileSync(path.join(t.payload, 'ship', 'SKILL.md'), path.join(t.skills, 'ship', 'SKILL.md'));
+      const r = bash(['set -e', 'IS_WINDOWS=0', 'SKILL_PREFIX=0', HELPERS, extractFn('link_claude_skill_dirs'),
+        `link_claude_skill_dirs "${t.payload}" "${t.skills}"`,
+        'echo "BACKED=${_BACKED_UP_SKILL_MDS[*]:-}"'], t.tmp);
+      expect(r.status).toBe(0);
+      expect(fs.lstatSync(path.join(t.skills, 'qa', 'SKILL.md')).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(path.join(t.skills, 'ship', 'SKILL.md')).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(path.join(t.tmp, '.gstack', 'backups', 'skills', 'test', 'qa', 'SKILL.md'), 'utf-8')).toBe(custom);
+      // Weakly-proven, pre-existing: no marker (it must never become deletable whole). Created dirs do get one.
+      expect(fs.existsSync(path.join(t.skills, 'qa', '.gstack-owned'))).toBe(false);
+      expect(fs.existsSync(path.join(t.tmp, '.gstack', 'backups', 'skills', 'test', 'ship'))).toBe(false);
+      expect(r.stdout).toContain('BACKED=qa\n');
+    } finally {
+      fs.rmSync(t.tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('Windows flip: weak proof leaves the user\'s files in place', () => {
+    const t = mkTree();
+    try {
+      fs.mkdirSync(path.join(t.payload, 'qa'));
+      fs.writeFileSync(path.join(t.payload, 'qa', 'SKILL.md'), GENERATED('qa'));
+      fs.mkdirSync(path.join(t.skills, 'gstack-qa', 'my-templates'), { recursive: true });
+      fs.writeFileSync(path.join(t.skills, 'gstack-qa', 'SKILL.md'), GENERATED('gstack-qa'));
+      fs.writeFileSync(path.join(t.skills, 'gstack-qa', 'my-templates', 'checklist.md'), '- mine\n');
+      const r = bash(['set -e', 'IS_WINDOWS=1', extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('cleanup_prefixed_claude_symlinks'),
+        `cleanup_prefixed_claude_symlinks "${t.payload}" "${t.skills}"`], t.tmp);
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(path.join(t.skills, 'gstack-qa', 'SKILL.md'))).toBe(false);
+      expect(fs.readFileSync(path.join(t.skills, 'gstack-qa', 'my-templates', 'checklist.md'), 'utf-8')).toBe('- mine\n');
+    } finally {
+      fs.rmSync(t.tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('_run_relink_quiet forwards relink\'s skipped and moved lines once, deduped against setup\'s own report', () => {
+    const t = mkTree();
+    try {
+      const fake = path.join(t.tmp, 'fake-relink');
+      fs.writeFileSync(fake, '#!/usr/bin/env bash\necho "linked 3 skills"\necho "  skipped qa: existing entry is not gstack-managed (foreign skill with the same name) — left untouched" >&2\necho "  skipped ship: existing entry is not gstack-managed (foreign skill with the same name) — left untouched" >&2\necho "Moved 1 pre-existing SKILL.md file(s) to /x before linking gstack\'s: review"\n');
+      fs.chmodSync(fake, 0o755);
+      const r = bash(['set -e', '_FOREIGN_SKIPPED_ENTRIES=(qa)', `GSTACK_RELINK="${fake}"`, 'INSTALL_SKILLS_DIR=/dev/null', 'SOURCE_GSTACK_DIR=/dev/null',
+        extractFn('_run_relink_quiet'), '_run_relink_quiet', 'echo "FOREIGN=${_FOREIGN_SKIPPED_ENTRIES[*]:-}"'], t.tmp);
+      expect(r.status).toBe(0);
+      expect(r.stderr.match(/skipped ship/g)?.length).toBe(1);
+      expect(r.stderr).not.toContain('skipped qa');
+      expect(r.stderr).toContain('Moved 1 pre-existing');
+      expect(r.stderr).not.toContain('linked 3 skills');
+      expect(r.stdout).toContain('FOREIGN=qa ship\n');
+    } finally {
+      fs.rmSync(t.tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('setup: banner census, checkout naming, legacy linked dirs, markers (#2119 review)', () => {
+  test('every generated SKILL.md in this tree passes _gstack_generated_header (four carry the banner past line 40)', () => {
+    const files = fs.readdirSync(ROOT, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(ROOT, d.name, 'SKILL.md'))
+      .concat([path.join(ROOT, 'SKILL.md')])
+      .filter((f) => fs.existsSync(f) && fs.readFileSync(f, 'utf-8').includes('<!-- AUTO-GENERATED from'));
+    expect(files.length).toBeGreaterThan(30);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-banner-census-'));
+    try {
+      const r = bash(['set -e', extractFn('_gstack_generated_header'),
+        `for f in ${files.map((f) => `"${f}"`).join(' ')}; do _gstack_generated_header "$f" || echo "MISS $f"; done`], tmp);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe('');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('a link into a checkout named without a gstack segment is ours when the tree carries setup + VERSION + bin/', () => {
+    const t = mkTree();
+    try {
+      fs.mkdirSync(path.join(t.payload, 'qa'));
+      fs.writeFileSync(path.join(t.payload, 'qa', 'SKILL.md'), GENERATED('qa'));
+      const other = path.join(t.tmp, 'gs-feature');
+      fs.mkdirSync(path.join(other, 'qa'), { recursive: true });
+      fs.mkdirSync(path.join(other, 'bin'));
+      fs.writeFileSync(path.join(other, 'VERSION'), '1.0.0.0\n');
+      fs.writeFileSync(path.join(other, 'setup'), '#!/bin/bash\n');
+      fs.writeFileSync(path.join(other, 'qa', 'SKILL.md'), GENERATED('qa'));
+      fs.mkdirSync(path.join(t.skills, 'qa'));
+      fs.symlinkSync(path.join(other, 'qa', 'SKILL.md'), path.join(t.skills, 'qa', 'SKILL.md'));
+      const r = bash(['set -e', 'IS_WINDOWS=0', 'SKILL_PREFIX=0', HELPERS, extractFn('link_claude_skill_dirs'),
+        `link_claude_skill_dirs "${t.payload}" "${t.skills}"`, 'echo "FOREIGN=${_FOREIGN_SKIPPED_ENTRIES[*]:-}"'], t.tmp);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('FOREIGN=\n');
+      expect(fs.readlinkSync(path.join(t.skills, 'qa', 'SKILL.md'))).toBe(path.join(t.payload, 'qa', 'SKILL.md'));
+      // Re-pointed, but the directory pre-existed: no marker (only directories we create get one).
+      expect(fs.existsSync(path.join(t.skills, 'qa', '.gstack-owned'))).toBe(false);
+    } finally {
+      fs.rmSync(t.tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('Linux linker: a created directory gets the marker; a pre-existing unclaimed directory (user files, no SKILL.md) is linked into without one', () => {
+    const t = mkTree();
+    try {
+      for (const n of ['qa', 'ship']) { fs.mkdirSync(path.join(t.payload, n)); fs.writeFileSync(path.join(t.payload, n, 'SKILL.md'), GENERATED(n)); }
+      fs.mkdirSync(path.join(t.skills, 'ship'));
+      fs.writeFileSync(path.join(t.skills, 'ship', 'notes.md'), 'mine\n');
+      const r = bash(['set -e', 'IS_WINDOWS=0', 'SKILL_PREFIX=0', HELPERS, extractFn('link_claude_skill_dirs'),
+        `link_claude_skill_dirs "${t.payload}" "${t.skills}"`, 'echo "FOREIGN=${_FOREIGN_SKIPPED_ENTRIES[*]:-}"'], t.tmp);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('FOREIGN=\n');
+      expect(fs.existsSync(path.join(t.skills, 'qa', '.gstack-owned'))).toBe(true);
+      expect(fs.lstatSync(path.join(t.skills, 'ship', 'SKILL.md')).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(path.join(t.skills, 'ship', '.gstack-owned'))).toBe(false);
+      expect(fs.readFileSync(path.join(t.skills, 'ship', 'notes.md'), 'utf-8')).toBe('mine\n');
+    } finally {
+      fs.rmSync(t.tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('flip on a legacy linked dir (no marker): all-links dir removed whole; a dir with a user file keeps the file, loses our links', () => {
+    const t = mkTree();
+    try {
+      fs.mkdirSync(path.join(t.payload, 'qa', 'sections'), { recursive: true });
+      fs.writeFileSync(path.join(t.payload, 'qa', 'SKILL.md'), GENERATED('qa'));
+      fs.mkdirSync(path.join(t.payload, 'ship'));
+      fs.writeFileSync(path.join(t.payload, 'ship', 'SKILL.md'), GENERATED('ship'));
+      for (const [name, src] of [['gstack-qa', 'qa'], ['gstack-ship', 'ship']] as const) {
+        fs.mkdirSync(path.join(t.skills, name));
+        fs.symlinkSync(path.join(t.payload, src, 'SKILL.md'), path.join(t.skills, name, 'SKILL.md'));
+        fs.symlinkSync(path.join(t.payload, 'qa', 'sections'), path.join(t.skills, name, 'sections'));
+      }
+      fs.writeFileSync(path.join(t.skills, 'gstack-ship', 'my-notes.md'), 'keep\n');
+      const r = bash(['set -e', 'IS_WINDOWS=0', extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('cleanup_prefixed_claude_symlinks'),
+        `cleanup_prefixed_claude_symlinks "${t.payload}" "${t.skills}"`], t.tmp);
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(path.join(t.skills, 'gstack-qa'))).toBe(false);
+      expect(fs.existsSync(path.join(t.skills, 'gstack-ship', 'SKILL.md'))).toBe(false);
+      expect(fs.existsSync(path.join(t.skills, 'gstack-ship', 'sections'))).toBe(false);
+      expect(fs.readFileSync(path.join(t.skills, 'gstack-ship', 'my-notes.md'), 'utf-8')).toBe('keep\n');
+      expect(r.stdout).toContain('cleaned gstack-ship/SKILL.md');
+    } finally {
+      fs.rmSync(t.tmp, { recursive: true, force: true });
+    }
   });
 });

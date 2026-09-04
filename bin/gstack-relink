@@ -49,8 +49,18 @@ RENDER_DIR="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claud
 # path) was deleted or had its SKILL.md replaced by a symlink into gstack
 # (#2119; Linux replaces a real file with `ln -snf`, macOS refuses by accident).
 # setup (link_claude_skill_dirs, cleanup_old_claude_symlinks,
-# cleanup_prefixed_claude_symlinks) and gstack-uninstall apply the same rule;
-# keep the four in sync until the shared helper TODOS.md files lands.
+# cleanup_prefixed_claude_symlinks) applies the same rule; keep the two files
+# in sync until the shared helper filed in TODOS.md lands. gstack-uninstall
+# has its own stricter inventory+banner gate.
+#
+# Proof comes in two strengths. STRONG (a symlink resolving into gstack, or the
+# .gstack-owned marker) means we created the entry: it may be deleted whole or
+# refreshed in place. WEAK (byte-identity with our source, or gen-skill-docs'
+# two-line banner on a real file) proves only that the SKILL.md came from us:
+# it authorizes touching that one file, never deleting the directory, and a
+# differing file is moved to ${GSTACK_HOME:-~/.gstack}/backups/skills/<ts>/
+# before we link over it (a user who started their own skill from a gstack
+# SKILL.md looks exactly like a pre-marker legacy copy).
 #
 # An entry is OURS when:
 #   - it is a symlink resolving into $INSTALL_DIR or $RENDER_DIR (as written or
@@ -75,11 +85,17 @@ _target_is_ours() {
   # $1 = an ABSOLUTE path a symlink resolves to; ours when it lives under one
   # of our roots. "$ROOT"/* requires the separator, so /home/u/gstack2/x never
   # matches a /home/u/gstack root.
+  local root
   case "$1" in
     "$INSTALL_DIR"/*|"$RENDER_DIR"/*|"$_INSTALL_REAL"/*|"$_RENDER_REAL"/*) return 0 ;;
     gstack/*|*/gstack/*|*/.gstack/render/claude/*) return 0 ;;
-    *) return 1 ;;
   esac
+  # A checkout named without a `gstack` segment (git worktree add
+  # ../gstack-<branch>): the target's skill root is a gstack tree if it
+  # carries setup + VERSION + bin/. Same rule as setup's _gstack_target_is_ours.
+  root="${1%/*/SKILL.md}"
+  if [ "$root" != "$1" ] && [ -f "$root/VERSION" ] && [ -f "$root/setup" ] && [ -d "$root/bin" ]; then return 0; fi
+  return 1
 }
 
 # readlink of a RELATIVE symlink (older installs wrote `gstack/qa/SKILL.md`)
@@ -92,12 +108,6 @@ _link_target_abs() {
   local link="$1" dest d b d_real
   dest="$(readlink "$link" 2>/dev/null || true)"
   [ -n "$dest" ] || return 1
-  # Fast path: the common absolute link setup/relink wrote is decided without
-  # any further fork (relink runs on every ./setup and gstack-config set).
-  case "$dest" in
-    */../*|*/./*|*/..|*/.) ;;  # dot segments: canonicalize before judging (/x/gstack/../foreign)
-    /*) if _target_is_ours "$dest"; then printf '%s\n' "$dest"; return 0; fi ;;
-  esac
   case "$dest" in
     /*) ;;
     *)  dest="${link%/*}/$dest" ;;
@@ -110,22 +120,38 @@ _link_target_abs() {
   fi
 }
 
-# _entry_is_ours ENTRY SKILL — SKILL names the gstack skill this entry would
-# serve, so a real-file copy can be compared against our own source.
-_entry_is_ours() {
-  local entry="$1" skill="${2:-}" dest src
+# _entry_owned_strongly ENTRY — we created this entry: a symlink resolving
+# into gstack, or a real dir carrying the .gstack-owned marker or a SKILL.md
+# symlink into gstack.
+_entry_owned_strongly() {
+  local entry="$1" dest
   if [ -L "$entry" ]; then
     dest="$(_link_target_abs "$entry")" || return 1
     _target_is_ours "$dest"
     return $?
   fi
-  if [ -d "$entry" ]; then
-    [ -f "$entry/.gstack-owned" ] && return 0
-    if [ -L "$entry/SKILL.md" ]; then
-      dest="$(_link_target_abs "$entry/SKILL.md")" || return 1
-      _target_is_ours "$dest"
-      return $?
-    fi
+  [ -d "$entry" ] || return 1
+  [ -f "$entry/.gstack-owned" ] && return 0
+  if [ -L "$entry/SKILL.md" ]; then
+    dest="$(_link_target_abs "$entry/SKILL.md")" || return 1
+    _target_is_ours "$dest"
+    return $?
+  fi
+  return 1
+}
+
+# _entry_is_ours ENTRY SKILL — strong proof, or WEAK proof on a real-file
+# SKILL.md (SKILL names the gstack skill this entry would serve, so the copy
+# can be compared against our own source).
+_entry_is_ours() {
+  local entry="$1" skill="${2:-}" src
+  _entry_owned_strongly "$entry" && return 0
+  if [ -d "$entry" ] && [ ! -L "$entry/SKILL.md" ]; then
+    # No SKILL.md at all: an UNCLAIMED directory (a weak cleanup left the
+    # user's other files behind, or the dir was never a skill). Adding our
+    # SKILL.md overwrites nothing, so the link pass may proceed; the cleanup
+    # pass has nothing of ours to remove (see _cleanup_skill_entry).
+    [ -e "$entry/SKILL.md" ] || return 0
     if [ -f "$entry/SKILL.md" ]; then
       for src in "$RENDER_DIR/$skill/SKILL.md" "$INSTALL_DIR/$skill/SKILL.md"; do
         [ -n "$skill" ] && [ -f "$src" ] && cmp -s "$entry/SKILL.md" "$src" && return 0
@@ -134,7 +160,7 @@ _entry_is_ours() {
       # top (same rule as setup's _gstack_generated_header), not a one-line
       # substring another generator could emit. A gstack fork rendering the
       # same banner is the accepted, filed residual.
-      case "$(head -n 40 "$entry/SKILL.md" 2>/dev/null)" in
+      case "$(head -c 8192 "$entry/SKILL.md" 2>/dev/null)" in
         *'<!-- AUTO-GENERATED from '*'<!-- Regenerate: bun run gen:skill-docs -->'*) return 0 ;;
       esac
     fi
@@ -145,15 +171,32 @@ _entry_is_ours() {
 
 FOREIGN_SKIPPED=()
 _report_foreign() {
-  echo "  skipped $1: not a gstack-managed entry (foreign skill with the same name) — left untouched" >&2
-  FOREIGN_SKIPPED+=("$1")
+  # Same wording and bare name as setup's own line, so setup can dedupe when it
+  # forwards relink's output.
+  echo "  skipped ${1##*/}: existing entry is not gstack-managed (foreign skill with the same name) — left untouched" >&2
+  FOREIGN_SKIPPED+=("${1##*/}")
+}
+
+# Weakly-proven real files we would otherwise overwrite go here, one summary
+# line at the end. mv, not cp: the link that follows needs the path free.
+BACKUP_ROOT="${GSTACK_HOME:-$HOME/.gstack}/backups/skills/$(date +%Y%m%dT%H%M%S)"
+BACKED_UP=()
+_backup_skill_md() {
+  local file="$1" name="$2"
+  mkdir -p "$BACKUP_ROOT/$name" 2>/dev/null || return 0
+  if mv -f "$file" "$BACKUP_ROOT/$name/SKILL.md" 2>/dev/null; then BACKED_UP+=("$name"); fi
+  return 0
 }
 
 # Helper: remove an OLD skill entry from the opposite prefix mode. Only entries
 # we can prove are ours are removed; anything else is reported and kept.
 _cleanup_skill_entry() {
-  local entry="$1" skill="${2:-}"
+  local entry="$1" skill="${2:-}" e dest
   [ -e "$entry" ] || [ -L "$entry" ] || return 0
+  # Unclaimed dir (no SKILL.md, no marker): nothing of ours to clean.
+  if [ -d "$entry" ] && [ ! -L "$entry" ] && [ ! -e "$entry/SKILL.md" ] && [ ! -L "$entry/SKILL.md" ] && [ ! -f "$entry/.gstack-owned" ]; then
+    return 0
+  fi
   if ! _entry_is_ours "$entry" "$skill"; then
     _report_foreign "$entry"
     return 0
@@ -161,14 +204,47 @@ _cleanup_skill_entry() {
   if [ -L "$entry" ]; then
     rm -f "$entry"
   elif [ -d "$entry" ]; then
-    rm -rf "$entry"
+    # Whole-directory removal needs proof that nothing of the user's is inside:
+    # the marker (we created the dir) or a directory holding nothing but links.
+    if [ -f "$entry/.gstack-owned" ] || { [ -L "$entry/SKILL.md" ] && _dir_only_links "$entry"; }; then
+      rm -rf "$entry"
+    else
+      # Otherwise only what is ours goes: the SKILL.md, the marker, and our
+      # runtime-asset links. The user's files stay, and so does the directory
+      # if it is not empty afterwards.
+      rm -f "$entry/SKILL.md" "$entry/.gstack-owned"
+      for e in "$entry"/* "$entry"/.[!.]* "$entry"/..?*; do
+        [ -L "$e" ] || continue
+        dest="$(_link_target_abs "$e")" || continue
+        if _target_is_ours "$dest"; then rm -f "$e"; fi
+      done
+      rmdir "$entry" 2>/dev/null || echo "  cleaned ${entry##*/}/SKILL.md (other files in that directory were left in place)"
+    fi
   fi
+}
+# _dir_only_links DIR — deleting DIR whole loses no real data: every entry is
+# a symlink or our marker.
+_dir_only_links() {
+  local d="$1" e
+  for e in "$d"/* "$d"/.[!.]* "$d"/..?*; do
+    { [ -e "$e" ] || [ -L "$e" ]; } || continue
+    [ -L "$e" ] && continue
+    [ "${e##*/}" = ".gstack-owned" ] && continue
+    return 1
+  done
+  return 0
 }
 
 _link_root_skill_alias() {
   local target="$SKILLS_DIR/_gstack-command"
 
   [ -f "$INSTALL_DIR/SKILL.md" ] || return 0
+  # Same ownership gate as every other entry (#2119): a user's own
+  # `_gstack-command` skill is reported and left alone, never overwritten.
+  if { [ -e "$target" ] || [ -L "$target" ]; } && ! _entry_is_ours "$target" ""; then
+    _report_foreign "$target"
+    return 0
+  fi
   [ -L "$target" ] && rm -f "$target"
   mkdir -p "$target"
   # Copy-then-rewrite, never a symlink (#2511): a symlinked alias re-serves
@@ -178,6 +254,9 @@ _link_root_skill_alias() {
   # write through it into the generated source.
   rm -f "$target/SKILL.md"
   sed "1,/^---\$/ s/^name:[[:space:]].*/name: _gstack-command/" "$INSTALL_DIR/SKILL.md" > "$target/SKILL.md"
+  # The rewritten copy is a real file on every platform: the marker, not the
+  # banner, is what proves it ours on the next run.
+  printf '%s\n' "$_INSTALL_REAL" > "$target/.gstack-owned" 2>/dev/null || true
 }
 
 _link_root_skill_alias
@@ -221,16 +300,29 @@ for skill_dir in "$INSTALL_DIR"/*/; do
     _report_foreign "$target"
     continue
   fi
+  # Remember whether WE are creating this directory: only then may the marker
+  # below make it deletable whole. A directory we merely link into (unclaimed,
+  # or a legacy install) never gets one — legacy all-links dirs are removed by
+  # the only-links rule instead.
+  _pre_exists=0
+  if [ -e "$target" ] || [ -L "$target" ]; then _pre_exists=1; fi
   # Upgrade old directory symlinks to real directories
   [ -L "$target" ] && rm -f "$target"
   # Create real directory with symlinked SKILL.md (absolute path)
   mkdir -p "$target"
   skill_md_src="$INSTALL_DIR/$skill/SKILL.md"
   [ -f "$RENDER_DIR/$skill/SKILL.md" ] && skill_md_src="$RENDER_DIR/$skill/SKILL.md"
+  # A real-file SKILL.md we can only WEAKLY prove ours and whose content
+  # differs from what we are about to serve is moved aside, not overwritten.
+  if [ -f "$target/SKILL.md" ] && [ ! -L "$target/SKILL.md" ] && ! _entry_owned_strongly "$target" \
+     && ! cmp -s "$target/SKILL.md" "$skill_md_src"; then
+    _backup_skill_md "$target/SKILL.md" "$link_name"
+  fi
   ln -snf "$skill_md_src" "$target/SKILL.md"
-  # On Windows without Developer Mode `ln -snf` degrades to a copy; leave the
-  # same provenance marker setup writes so the next flip can prove ownership.
-  if [ ! -L "$target/SKILL.md" ]; then
+  # Provenance marker on every platform (path-independent proof; on Windows
+  # without Developer Mode `ln -snf` degrades to a copy and this is the only
+  # proof), but only for a directory we created or already owned.
+  if [ "$_pre_exists" -eq 0 ] || [ -f "$target/.gstack-owned" ]; then
     printf '%s\n' "$_INSTALL_REAL" > "$target/.gstack-owned" 2>/dev/null || true
   fi
   SKILL_COUNT=$((SKILL_COUNT + 1))
@@ -249,6 +341,9 @@ if [ "$PREFIX" = "true" ]; then
   echo "Relinked $SKILL_COUNT skills as gstack-*"
 else
   echo "Relinked $SKILL_COUNT skills as flat names"
+fi
+if [ ${#BACKED_UP[@]} -gt 0 ]; then
+  echo "Moved ${#BACKED_UP[@]} pre-existing SKILL.md file(s) to $BACKUP_ROOT before linking gstack's: ${BACKED_UP[*]}"
 fi
 if [ ${#FOREIGN_SKIPPED[@]} -gt 0 ]; then
   echo "Skipped ${#FOREIGN_SKIPPED[@]} foreign entr$( [ ${#FOREIGN_SKIPPED[@]} -eq 1 ] && echo y || echo ies) (not gstack-managed, left untouched): ${FOREIGN_SKIPPED[*]}"
