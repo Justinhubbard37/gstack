@@ -12,6 +12,22 @@
 # not a boundary.
 set -euo pipefail
 
+# Deny-tier backstop: any unexpected non-zero death (a failing pipeline under
+# set -e, a deleted cwd, EACCES) would otherwise exit with no decision JSON,
+# which Claude Code treats as non-blocking — the edit proceeds. Every
+# deliberate output below sets _FREEZE_DECIDED first so a late failure after
+# a decision never prints a second JSON object.
+_FREEZE_DECIDED=""
+_freeze_backstop() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ -z "$_FREEZE_DECIDED" ]; then
+    _FREEZE_DECIDED=1
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[freeze] Hook failed unexpectedly (exit %s) - blocked, fail closed. Re-run ./setup or /unfreeze."}}\n' "$rc"
+    exit 0
+  fi
+}
+trap _freeze_backstop EXIT
+
 # Read stdin
 INPUT=$(cat)
 
@@ -27,6 +43,7 @@ _HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # (an if-guard cannot catch it) — the existence check must come first.
 _HOOK_HELPER="$_HOOK_DIR/../../careful/bin/hook-extract.sh"
 if [ ! -f "$_HOOK_HELPER" ] || ! . "$_HOOK_HELPER" 2>/dev/null; then
+  _FREEZE_DECIDED=1
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[freeze] Hook helpers unavailable (broken install?) - blocked, fail closed. Reinstall gstack or run /unfreeze."}}\n'
   exit 0
 fi
@@ -40,6 +57,7 @@ fi
 # (the existence check above only proves the file sourced), never exit 127
 # with no JSON — Claude Code treats that as non-blocking.
 if ! command -v gstack_hook_state_root >/dev/null 2>&1; then
+  _FREEZE_DECIDED=1
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[freeze] Hook helpers out of date (partial upgrade?) - blocked, fail closed. Re-run ./setup or /unfreeze."}}\n'
   exit 0
 fi
@@ -48,6 +66,7 @@ FREEZE_FILE="$STATE_DIR/freeze-dir.txt"
 
 # If no freeze file exists, allow everything (not yet configured)
 if [ ! -f "$FREEZE_FILE" ]; then
+  _FREEZE_DECIDED=1
   echo '{}'
   exit 0
 fi
@@ -66,6 +85,7 @@ esac
 
 # If freeze dir is empty, allow
 if [ -z "$FREEZE_DIR" ]; then
+  _FREEZE_DECIDED=1
   echo '{}'
   exit 0
 fi
@@ -79,12 +99,14 @@ set -e
 # Unparseable payload (or no parser available): DENY. A boundary hook that
 # allows what it cannot read is not a boundary.
 if [ "$EXTRACT_RC" -ne 0 ] && [ -n "$INPUT" ]; then
+  _FREEZE_DECIDED=1
   gstack_hook_decision deny "[freeze] Could not parse the tool payload to check the freeze boundary. Blocked (fail closed). Freeze boundary: $FREEZE_DIR"
   exit 0
 fi
 
 # Parsed fine but no file_path field: a non-file tool payload — allow.
 if [ -z "$FILE_PATH" ]; then
+  _FREEZE_DECIDED=1
   echo '{}'
   exit 0
 fi
@@ -130,6 +152,7 @@ FREEZE_DIR=$(_resolve_path "$FREEZE_DIR")
 case "$FILE_PATH" in
   "${FREEZE_DIR}/"*|"${FREEZE_DIR}")
     # Inside freeze boundary — allow
+    _FREEZE_DECIDED=1
     echo '{}'
     ;;
   *)
@@ -140,6 +163,7 @@ case "$FILE_PATH" in
     # The reason is JSON-encoded by the shared helper. Never interpolate paths
     # into hand-built JSON: a path containing a quote or newline produced
     # malformed JSON here, and the deny silently no-oped.
+    _FREEZE_DECIDED=1
     gstack_hook_decision deny "[freeze] Blocked: $FILE_PATH is outside the freeze boundary ($FREEZE_DIR). Only edits within the frozen directory are allowed."
     ;;
 esac

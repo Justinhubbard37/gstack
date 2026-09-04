@@ -110,6 +110,11 @@ function pathsStateRoot(env: Record<string, string>): string {
 // Frontmatter hooks run before any runtime variable exists, so a
 // ${CLAUDE_SKILL_DIR}-relative command silently never resolves and the guard
 // never fires. Every command: line must anchor on $HOME like careful/freeze.
+function withEmptyDir(fn: (dir: string) => void) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-hook-empty-'));
+  try { fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
 describe('frontmatter hook command paths', () => {
   test.each(['investigate/SKILL.md', 'careful/SKILL.md', 'freeze/SKILL.md', 'guard/SKILL.md'])(
     '%s hook commands are $HOME-anchored, never CLAUDE_SKILL_DIR',
@@ -716,6 +721,30 @@ describe('check-careful.sh', () => {
       }
     });
 
+    test('plugin install: patterns under CLAUDE_PLUGIN_DATA load when CLAUDE_PLUGIN_ROOT names gstack (same root the writer uses)', () => {
+      withPatternFile('terraform\\s+destroy\n', (pluginData) => {
+        withEmptyDir((fakeHome) => {
+          const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('terraform destroy'),
+            { HOME: fakeHome, GSTACK_HOME: '', CLAUDE_PLUGIN_DATA: pluginData, CLAUDE_PLUGIN_ROOT: '/plugins/gstack' });
+          expect(exitCode).toBe(0);
+          expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+          expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('Project rule');
+        });
+      });
+    });
+
+    test('GSTACK_HOME outranks CLAUDE_PLUGIN_DATA for careful patterns, exactly as for the freeze file', () => {
+      withPatternFile('terraform\\s+destroy\n', (gstackHome) => {
+        withEmptyDir((pluginData) => {
+          const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('terraform destroy'),
+            { GSTACK_HOME: gstackHome, CLAUDE_PLUGIN_DATA: pluginData, CLAUDE_PLUGIN_ROOT: '/plugins/gstack' });
+          expect(exitCode).toBe(0);
+          expect(output.hookSpecificOutput?.permissionDecision).toBe('ask');
+          expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('Project rule');
+        });
+      });
+    });
+
     test('safe commands still allow with a pattern file present', () => {
       withPatternFile('terraform\\s+destroy\n', (gstackHome) => {
         const { exitCode, output } = runHook(CAREFUL_SCRIPT, carefulInput('ls -la'), { GSTACK_HOME: gstackHome });
@@ -963,10 +992,6 @@ describe('check-freeze.sh state-root resolution (#1459 / #1509)', () => {
   const BOUNDARY = '/Users/dev/project/src/';
   const OUTSIDE = '/Users/dev/other-project/index.ts';
 
-  function withEmptyDir(fn: (dir: string) => void) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-freeze-empty-'));
-    try { fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }
 
   test('REGRESSION: freeze file under GSTACK_HOME (HOME has none) denies an outside edit', () => {
     withFreezeDir(BOUNDARY, (gstackHome) => {
@@ -1039,10 +1064,6 @@ describe('gstack_hook_log_fire writes under the resolved state root', () => {
   const BOUNDARY = '/Users/dev/project/src/';
   const OUTSIDE = '/Users/dev/other-project/index.ts';
 
-  function withEmptyDir(fn: (dir: string) => void) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-logfire-'));
-    try { fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }
   function lastRecord(file: string): any {
     const lines = fs.readFileSync(file, 'utf-8').trim().split('\n');
     return JSON.parse(lines[lines.length - 1]);
@@ -1095,6 +1116,25 @@ describe('gstack_hook_log_fire writes under the resolved state root', () => {
     }
   });
 
+  test('an unexpected set -e death inside the hook (a tool on PATH failing) DENIES via the EXIT backstop instead of exiting with no JSON', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-freeze-backstop-'));
+    const fakeBin = path.join(base, 'bin');
+    fs.mkdirSync(fakeBin);
+    fs.writeFileSync(path.join(fakeBin, 'head'), '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(path.join(fakeBin, 'head'), 0o755);
+    try {
+      withFreezeDir(BOUNDARY, (stateDir) => {
+        const { exitCode, output } = runHook(FREEZE_SCRIPT, freezeInput('/Users/dev/project/src/x.ts'),
+          freezeEnv(stateDir, { PATH: `${fakeBin}:${process.env.PATH ?? ''}` }));
+        expect(exitCode).toBe(0);
+        expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('failed unexpectedly');
+      });
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('a hook helper from an older install that lacks gstack_hook_state_root DENIES (fail closed), never exit 127', () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-freeze-oldhelper-'));
     const freezeBin = path.join(base, 'freeze', 'bin');
@@ -1111,7 +1151,9 @@ describe('gstack_hook_log_fire writes under the resolved state root', () => {
         const { exitCode, output } = runHook(path.join(freezeBin, 'check-freeze.sh'), freezeInput('/Users/dev/project/src/x.ts'), freezeEnv(stateDir));
         expect(exitCode).toBe(0);
         expect(output.hookSpecificOutput?.permissionDecision).toBe('deny');
-        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('fail closed');
+        // 'out of date' is the helper-without-function branch; the plain
+        // helpers-unavailable deny also says 'fail closed', so pin the specific one.
+        expect(output.hookSpecificOutput?.permissionDecisionReason).toContain('out of date');
       });
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
