@@ -12,7 +12,7 @@ Evaluated 2026-09-02. Read-only; see REPORT.md for the maintainer-facing result.
 
 | File | sha256 | What |
 |---|---|---|
-| REPORT.md | `bf084e6aba224c976b260fb6f592688490805d587fc430891da37466ef552da9` | eight-section report (shortlist, contested, defer, skip, absorbed, PR dispositions, port order) |
+| REPORT.md | `087a8476c3bb8d081626ee55eff00845a18ef2e8cbec049ce1c63ec860a33bb4` | eight-section report (shortlist, contested, defer, skip, absorbed, PR dispositions, port order) |
 | residual-index-lite.json | `a342e6cd7b57e08b05ad2355e04765e995496dbf7bbb65399ea38c8a4b344644` | 287 residual items: cross-reference status, panel verdict, refuter pointer |
 | records-other.json | `b13e64596bee93ceffb4161d30dc30f9cc6f5fd2db3dd0184bc31187b328a19f` | 128 items already absorbed / superseded / not applicable, one-line evidence each |
 | refuters.json | `4c7740a2f5bd0978f564468cab18d9a5945cb2a38108759a23d74900f2af2b0f` | 48 adversarial refuter verdicts on the top-ranked candidates |

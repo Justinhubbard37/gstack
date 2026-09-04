@@ -530,10 +530,6 @@ Data is stored in [Supabase](https://supabase.com) (open source Firebase alterna
 
 On Windows without Developer Mode (MSYS2 / Git Bash), `setup` falls back to file copies instead of symlinks because `ln -snf` produces frozen copies that don't refresh on `git pull`. **Re-run `cd ~/.claude/skills/gstack && ./setup` after every `git pull`** so your skill files match the repo. `setup` prints a one-line note reminding you. Unix and WSL keep symlinks and don't need the re-run.
 
-**Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has a gstack section. Add this:
-
-```
-
 **Chromium install failed or hung during `./setup`?** The browser is best-effort:
 setup records the reason, finishes registering every skill, and prints which
 skills need Chromium (`/qa`, `/qa-only`, `/design-review`, `/browse`, make-pdf,
@@ -544,6 +540,9 @@ install entirely (CI, no-browser boxes); `GSTACK_CHROMIUM_NO_SANDBOX=1` is the
 fix when Chromium installs but cannot launch because the host blocks
 unprivileged user namespaces (Ubuntu 24.04+ AppArmor default, #2157).
 
+**Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has a gstack section. Add this:
+
+```
 ## gstack
 Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
 Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,

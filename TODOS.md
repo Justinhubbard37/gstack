@@ -9,10 +9,14 @@ Filed from the time-attack/gstack residual evaluation
 Waves B–E2 of that plan are scheduled work, not TODOs; these are the items the
 reviews deliberately deferred, each with rationale:
 
-- **Shared `_gstack_owned_link` helper** — the readlink ownership gate now
-  exists in three places (setup:1040 cleanup, bin/gstack-uninstall:204,
-  bin/gstack-relink `_entry_is_ours`). Extract one sourced helper so the
-  destructive-path guard cannot drift. Effort S. Priority P2. Depends on: none.
+- **Shared `_gstack_owned_link` helper** — the ownership gate now exists in
+  four places (setup's `_claude_entry_is_ours` used by link_claude_skill_dirs,
+  cleanup_old_claude_symlinks, cleanup_prefixed_claude_symlinks; bin/gstack-relink
+  `_entry_is_ours`; bin/gstack-uninstall's per-entry loop). Extract one sourced
+  helper so the destructive-path guard cannot drift, and while there: make the
+  `.gstack-owned` marker's recorded install path load-bearing (today any marker
+  counts, so a Windows fork copy carrying gstack's generated header is still
+  treated as ours on a mode flip). Effort S. Priority P2. Depends on: none.
 - **Config-key reader tripwire** — `transcript_ingest_mode=off` sat unread for
   months while setup-gbrain advertised it. A free test that asserts every key
   in bin/gstack-config's default table is read by at least one binary (or is
