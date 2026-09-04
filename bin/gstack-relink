@@ -92,9 +92,10 @@ _target_is_ours() {
   esac
   # A checkout named without a `gstack` segment (git worktree add
   # ../gstack-<branch>): the target's skill root is a gstack tree if it
-  # carries setup + VERSION + bin/. Same rule as setup's _gstack_target_is_ours.
+  # carries setup + VERSION + bin/gstack-relink (a hand-written skill repo with
+  # a VERSION file does not). Same rule as setup's _gstack_target_is_ours.
   root="${1%/*/SKILL.md}"
-  if [ "$root" != "$1" ] && [ -f "$root/VERSION" ] && [ -f "$root/setup" ] && [ -d "$root/bin" ]; then return 0; fi
+  if [ "$root" != "$1" ] && [ -f "$root/VERSION" ] && [ -f "$root/setup" ] && [ -f "$root/bin/gstack-relink" ]; then return 0; fi
   return 1
 }
 
@@ -146,6 +147,9 @@ _entry_owned_strongly() {
 _entry_is_ours() {
   local entry="$1" skill="${2:-}" src
   _entry_owned_strongly "$entry" && return 0
+  # A symlink that did not resolve into gstack is someone else's; never follow
+  # it into the "unclaimed directory" rule below.
+  [ -L "$entry" ] && return 1
   if [ -d "$entry" ] && [ ! -L "$entry/SKILL.md" ]; then
     # No SKILL.md at all: an UNCLAIMED directory (a weak cleanup left the
     # user's other files behind, or the dir was never a skill). Adding our
@@ -182,16 +186,18 @@ _report_foreign() {
 BACKUP_ROOT="${GSTACK_HOME:-$HOME/.gstack}/backups/skills/$(date +%Y%m%dT%H%M%S)"
 BACKED_UP=()
 _backup_skill_md() {
+  # Non-zero when the file could NOT be moved: the caller leaves the entry alone.
   local file="$1" name="$2"
-  mkdir -p "$BACKUP_ROOT/$name" 2>/dev/null || return 0
-  if mv -f "$file" "$BACKUP_ROOT/$name/SKILL.md" 2>/dev/null; then BACKED_UP+=("$name"); fi
+  mkdir -p "$BACKUP_ROOT/$name" 2>/dev/null || return 1
+  mv -f "$file" "$BACKUP_ROOT/$name/SKILL.md" 2>/dev/null || return 1
+  BACKED_UP+=("$name")
   return 0
 }
 
 # Helper: remove an OLD skill entry from the opposite prefix mode. Only entries
 # we can prove are ours are removed; anything else is reported and kept.
 _cleanup_skill_entry() {
-  local entry="$1" skill="${2:-}" e dest
+  local entry="$1" skill="${2:-}" e dest src
   [ -e "$entry" ] || [ -L "$entry" ] || return 0
   # Unclaimed dir (no SKILL.md, no marker): nothing of ours to clean.
   if [ -d "$entry" ] && [ ! -L "$entry" ] && [ ! -e "$entry/SKILL.md" ] && [ ! -L "$entry/SKILL.md" ] && [ ! -f "$entry/.gstack-owned" ]; then
@@ -211,7 +217,19 @@ _cleanup_skill_entry() {
     else
       # Otherwise only what is ours goes: the SKILL.md, the marker, and our
       # runtime-asset links. The user's files stay, and so does the directory
-      # if it is not empty afterwards.
+      # if it is not empty afterwards. A real SKILL.md that differs from our
+      # source (raw, or with its name: rewritten to the entry name) is a
+      # customized file: moved to the backup root, never deleted.
+      if [ -f "$entry/SKILL.md" ] && [ ! -L "$entry/SKILL.md" ] && [ -n "$skill" ]; then
+        src="$INSTALL_DIR/$skill/SKILL.md"; [ -f "$RENDER_DIR/$skill/SKILL.md" ] && src="$RENDER_DIR/$skill/SKILL.md"
+        if [ -f "$src" ] && ! cmp -s "$entry/SKILL.md" "$src" \
+           && ! sed "1,/^---\$/ s/^name:[[:space:]].*/name: ${entry##*/}/" "$src" | cmp -s - "$entry/SKILL.md"; then
+          if ! _backup_skill_md "$entry/SKILL.md" "${entry##*/}"; then
+            echo "  kept ${entry##*/}/SKILL.md: could not back up the customized file — left untouched" >&2
+            return 0
+          fi
+        fi
+      fi
       rm -f "$entry/SKILL.md" "$entry/.gstack-owned"
       for e in "$entry"/* "$entry"/.[!.]* "$entry"/..?*; do
         [ -L "$e" ] || continue
@@ -225,12 +243,15 @@ _cleanup_skill_entry() {
 # _dir_only_links DIR — deleting DIR whole loses no real data: every entry is
 # a symlink or our marker.
 _dir_only_links() {
-  local d="$1" e
+  # Every entry must be a symlink resolving into gstack, or our marker: a
+  # user's own link (notes.md -> ~/notes) makes the directory mixed.
+  local d="$1" e dest
   for e in "$d"/* "$d"/.[!.]* "$d"/..?*; do
     { [ -e "$e" ] || [ -L "$e" ]; } || continue
-    [ -L "$e" ] && continue
     [ "${e##*/}" = ".gstack-owned" ] && continue
-    return 1
+    [ -L "$e" ] || return 1
+    dest="$(_link_target_abs "$e")" || return 1
+    _target_is_ours "$dest" || return 1
   done
   return 0
 }
@@ -245,6 +266,8 @@ _link_root_skill_alias() {
     _report_foreign "$target"
     return 0
   fi
+  local pre=0
+  if [ -e "$target" ] || [ -L "$target" ]; then pre=1; fi
   [ -L "$target" ] && rm -f "$target"
   mkdir -p "$target"
   # Copy-then-rewrite, never a symlink (#2511): a symlinked alias re-serves
@@ -255,8 +278,11 @@ _link_root_skill_alias() {
   rm -f "$target/SKILL.md"
   sed "1,/^---\$/ s/^name:[[:space:]].*/name: _gstack-command/" "$INSTALL_DIR/SKILL.md" > "$target/SKILL.md"
   # The rewritten copy is a real file on every platform: the marker, not the
-  # banner, is what proves it ours on the next run.
-  printf '%s\n' "$_INSTALL_REAL" > "$target/.gstack-owned" 2>/dev/null || true
+  # banner, is what proves it ours on the next run — written only for a
+  # directory we created (or already marked), never one we merely wrote into.
+  if [ "$pre" -eq 0 ] || [ -f "$target/.gstack-owned" ]; then
+    printf '%s\n' "$_INSTALL_REAL" > "$target/.gstack-owned" 2>/dev/null || true
+  fi
 }
 
 _link_root_skill_alias
@@ -316,7 +342,11 @@ for skill_dir in "$INSTALL_DIR"/*/; do
   # differs from what we are about to serve is moved aside, not overwritten.
   if [ -f "$target/SKILL.md" ] && [ ! -L "$target/SKILL.md" ] && ! _entry_owned_strongly "$target" \
      && ! cmp -s "$target/SKILL.md" "$skill_md_src"; then
-    _backup_skill_md "$target/SKILL.md" "$link_name"
+    if ! _backup_skill_md "$target/SKILL.md" "$link_name"; then
+      echo "  skipped $link_name: could not back up its customized SKILL.md — left untouched" >&2
+      FOREIGN_SKIPPED+=("$link_name")
+      continue
+    fi
   fi
   ln -snf "$skill_md_src" "$target/SKILL.md"
   # Provenance marker on every platform (path-independent proof; on Windows

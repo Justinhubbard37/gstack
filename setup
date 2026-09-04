@@ -155,9 +155,10 @@ _gstack_target_is_ours() {
   esac
   # A checkout named without a `gstack` segment (git worktree add
   # ../gstack-<branch>, a ZIP unpacked as gstack-main): the target's skill
-  # root is a gstack tree if it carries setup + VERSION + bin/.
+  # root is a gstack tree if it carries setup + VERSION + bin/gstack-relink
+  # (a hand-written skill repo with a VERSION file and a setup script does not).
   local root="${t%/*/SKILL.md}"
-  if [ "$root" != "$t" ] && [ -f "$root/VERSION" ] && [ -f "$root/setup" ] && [ -d "$root/bin" ]; then return 0; fi
+  if [ "$root" != "$t" ] && [ -f "$root/VERSION" ] && [ -f "$root/setup" ] && [ -f "$root/bin/gstack-relink" ]; then return 0; fi
   return 1
 }
 _claude_entry_is_ours() {
@@ -165,6 +166,9 @@ _claude_entry_is_ours() {
   # would be linked to, $3 = gstack payload dir
   local entry="$1" src_md="$2" g="$3" render_md
   _claude_entry_owned_strongly "$entry" "$g" && return 0
+  # A symlink that did not resolve into gstack is someone else's; never follow
+  # it into the "unclaimed directory" rule below.
+  [ -L "$entry" ] && return 1
   # No SKILL.md at all: an UNCLAIMED directory (a weak cleanup left the user's
   # other files behind, or it was never a skill). Adding our SKILL.md
   # overwrites nothing, so installing into it is allowed; the cleanup arms
@@ -204,19 +208,35 @@ _claude_entry_owned_strongly() {
 _SKILL_BACKUP_ROOT="${GSTACK_HOME:-$HOME/.gstack}/backups/skills/$(date +%Y%m%dT%H%M%S)"
 _BACKED_UP_SKILL_MDS=()
 _backup_skill_md() {
+  # Returns non-zero when the file could NOT be moved: the caller must then
+  # leave the entry untouched (a failed backup is never a license to overwrite).
   local file="$1" name="$2"
-  mkdir -p "$_SKILL_BACKUP_ROOT/$name" 2>/dev/null || return 0
-  if mv -f "$file" "$_SKILL_BACKUP_ROOT/$name/SKILL.md" 2>/dev/null; then _BACKED_UP_SKILL_MDS+=("$name"); fi
+  mkdir -p "$_SKILL_BACKUP_ROOT/$name" 2>/dev/null || return 1
+  mv -f "$file" "$_SKILL_BACKUP_ROOT/$name/SKILL.md" 2>/dev/null || return 1
+  _BACKED_UP_SKILL_MDS+=("$name")
   return 0
 }
 # _cleanup_weak_dir DIR — remove only what weak proof covers: the SKILL.md and
 # our marker. User files in the directory stay, and so does the directory
 # when it is not empty afterwards.
+# _cleanup_weak_dir DIR GSTACK_DIR [SRC_SKILL_MD NAME] — remove only what weak
+# proof covers. A real SKILL.md that differs from our source (raw, or with its
+# name: line rewritten to NAME, which is how alias and prefixed copies differ)
+# is a customized file: it is moved to the backup root, never deleted, and if
+# the backup fails it stays. Our runtime-asset links go; the user's files stay.
 _cleanup_weak_dir() {
-  local d="$1" g="$2" e dest
-  rm -f "$d/SKILL.md" "$d/.gstack-owned"
-  # Our runtime-asset links (sections/, templates, checklist.md, ...) go too;
-  # anything the user put there stays.
+  local d="$1" g="$2" src="${3:-}" name="${4:-${1##*/}}" e dest
+  if [ -f "$d/SKILL.md" ] && [ ! -L "$d/SKILL.md" ] && [ -n "$src" ] && [ -f "$src" ] \
+     && ! cmp -s "$d/SKILL.md" "$src" \
+     && ! sed "1,/^---\$/ s/^name:[[:space:]].*/name: $name/" "$src" | cmp -s - "$d/SKILL.md"; then
+    if ! _backup_skill_md "$d/SKILL.md" "$name"; then
+      echo "  kept $name/SKILL.md: could not back up the customized file — left untouched" >&2
+      return 0
+    fi
+  else
+    rm -f "$d/SKILL.md"
+  fi
+  rm -f "$d/.gstack-owned"
   for e in "$d"/* "$d"/.[!.]* "$d"/..?*; do
     [ -L "$e" ] || continue
     dest="$(_gstack_link_target_abs "$e")" || continue
@@ -224,23 +244,25 @@ _cleanup_weak_dir() {
   done
   rmdir "$d" 2>/dev/null || echo "  cleaned ${d##*/}/SKILL.md (other files in that directory were left in place)"
 }
-# _gstack_dir_only_links DIR — true when deleting DIR whole loses no real data:
-# every entry is a symlink (ours or not — a link is not content) or our marker.
+# _gstack_dir_only_links DIR GSTACK_DIR — true when deleting DIR whole loses
+# nothing of the user's: every entry is a symlink resolving into gstack, or
+# our marker. A user's own link (notes.md -> ~/notes) makes the dir mixed.
 _gstack_dir_only_links() {
-  local d="$1" e
+  local d="$1" g="$2" e dest
   for e in "$d"/* "$d"/.[!.]* "$d"/..?*; do
     { [ -e "$e" ] || [ -L "$e" ]; } || continue
-    [ -L "$e" ] && continue
     [ "${e##*/}" = ".gstack-owned" ] && continue
-    return 1
+    [ -L "$e" ] || return 1
+    dest="$(_gstack_link_target_abs "$e")" || return 1
+    _gstack_target_is_ours "$dest" "$g" || return 1
   done
   return 0
 }
 # _cleanup_linked_dir DIR GSTACK_DIR — a real dir whose SKILL.md is a symlink
 # into gstack. Whole-directory removal needs the marker (we created it) or a
-# directory holding nothing but links; otherwise only our files go.
+# directory holding nothing but our links; otherwise only our files go.
 _cleanup_linked_dir() {
-  if [ -f "$1/.gstack-owned" ] || _gstack_dir_only_links "$1"; then rm -rf "$1"; else _cleanup_weak_dir "$1" "$2"; fi
+  if [ -f "$1/.gstack-owned" ] || _gstack_dir_only_links "$1" "$2"; then rm -rf "$1"; else _cleanup_weak_dir "$1" "$2"; fi
 }
 # _gstack_generated_header FILE — a pre-marker legacy COPY (Windows, before
 # .gstack-owned existed) is recognized by gen-skill-docs' full two-line banner
@@ -1099,6 +1121,12 @@ mkdir -p "$HOME/.gstack/projects"
 _link_skill_runtime_assets() {
   local src_dir="$1"
   local dst_dir="$2"
+  # $3 = 0 when the destination directory is not provably ours (pre-existed
+  # unclaimed, or only weakly proven where gstack never wrote real assets): its
+  # real files are the user's, so a same-named real asset is kept and reported
+  # instead of replaced (#2119). Symlinks are never content and are always
+  # refreshed. Default 1 = the directory is ours.
+  local replace_real="${3:-1}"
   local asset asset_name
   for asset in "$src_dir"/*; do
     [ -e "$asset" ] || continue  # empty-glob guard
@@ -1106,8 +1134,12 @@ _link_skill_runtime_assets() {
     case "$asset_name" in
       SKILL.md|node_modules|dist|test|*.tmpl) continue ;;
     esac
-    # Refresh unconditionally: rm the old entry (symlink OR real copy — the
-    # Windows install pattern) so re-runs after `git pull` pick up changes.
+    if [ -e "$dst_dir/$asset_name" ] && [ ! -L "$dst_dir/$asset_name" ] && [ "$replace_real" != "1" ]; then
+      echo "  kept ${dst_dir##*/}/$asset_name: a file you own already uses that name — left untouched" >&2
+      continue
+    fi
+    # Refresh: rm the old entry (symlink OR real copy — the Windows install
+    # pattern) so re-runs after `git pull` pick up changes.
     if [ -e "$dst_dir/$asset_name" ] || [ -L "$dst_dir/$asset_name" ]; then
       rm -rf "$dst_dir/$asset_name"
     fi
@@ -1185,8 +1217,21 @@ link_claude_skill_dirs() {
       # provenance marker below make it deletable whole. A directory we merely
       # link into (unclaimed, or a legacy install) never gets one — legacy
       # all-links dirs are removed by the only-links rule instead.
-      _pre_exists=0
-      if [ -e "$target" ] || [ -L "$target" ]; then _pre_exists=1; fi
+      # _assets_replace: may _link_skill_runtime_assets replace a REAL file or
+      # dir already present under the target? Yes for a directory we create or
+      # strongly own (marker, or SKILL.md symlink into gstack). On Windows also
+      # for a weakly-proven real-file copy install (the legacy pre-marker shape,
+      # whose asset copies are ours). Otherwise (unclaimed, or a weak copy on a
+      # platform where gstack never wrote real assets) real files are the
+      # user's and are kept.
+      _pre_exists=0; _assets_replace=1
+      if [ -e "$target" ] || [ -L "$target" ]; then
+        _pre_exists=1
+        if _claude_entry_owned_strongly "$target" "$gstack_dir"; then _assets_replace=1
+        elif [ "$IS_WINDOWS" -eq 1 ] && [ -f "$target/SKILL.md" ] && [ ! -L "$target/SKILL.md" ]; then _assets_replace=1
+        else _assets_replace=0
+        fi
+      fi
       # Upgrade old directory symlinks to real directories
       if [ -L "$target" ]; then
         rm -f "$target"
@@ -1211,7 +1256,11 @@ link_claude_skill_dirs() {
       # differs from what we are about to serve is moved aside, not overwritten.
       if [ -f "$target/SKILL.md" ] && [ ! -L "$target/SKILL.md" ] && ! _claude_entry_owned_strongly "$target" "$gstack_dir" \
          && ! cmp -s "$target/SKILL.md" "$_skill_md_src"; then
-        _backup_skill_md "$target/SKILL.md" "$link_name"
+        if ! _backup_skill_md "$target/SKILL.md" "$link_name"; then
+          echo "  skipped $link_name: could not back up its customized SKILL.md — left untouched" >&2
+          _FOREIGN_SKIPPED_ENTRIES+=("$link_name")
+          continue
+        fi
       fi
       _link_or_copy "$_skill_md_src" "$target/SKILL.md"
       # Provenance marker (#2119) on every platform — path-independent proof
@@ -1227,7 +1276,7 @@ link_claude_skill_dirs() {
       # landed and /review 404'd at "Read .claude/skills/review/checklist.md"
       # on every fresh Claude install. Routes through _link_or_copy so Windows
       # gets real copies refreshed on every ./setup.
-      _link_skill_runtime_assets "$gstack_dir/$dir_name" "$target"
+      _link_skill_runtime_assets "$gstack_dir/$dir_name" "$target" "$_assets_replace"
       linked+=("$link_name")
     fi
   done
@@ -1262,6 +1311,8 @@ _install_alias_skill_md() {
     return 0
   fi
   # Old installs left the alias as a whole-dir symlink — replace it.
+  _alias_pre=0
+  if [ -e "$dst_dir" ] || [ -L "$dst_dir" ]; then _alias_pre=1; fi
   if [ -L "$dst_dir" ]; then rm -f "$dst_dir"; fi
   mkdir -p "$dst_dir"
   # Remove any prior symlinked SKILL.md so the redirect below cannot write
@@ -1269,8 +1320,9 @@ _install_alias_skill_md() {
   rm -f "$dst_dir/SKILL.md"
   sed "1,/^---\$/ s/^name:[[:space:]].*/name: $alias_name/" "$src_skill_md" > "$dst_dir/SKILL.md"
   # A rewritten copy is a real file on every platform; the marker proves it
-  # ours on the next run without leaning on the banner.
-  _write_owned_marker "$dst_dir" "$SOURCE_GSTACK_DIR"
+  # ours on the next run without leaning on the banner — but only for a
+  # directory we created (or already marked), never one we merely wrote into.
+  if [ "$_alias_pre" -eq 0 ] || [ -f "$dst_dir/.gstack-owned" ]; then _write_owned_marker "$dst_dir" "$SOURCE_GSTACK_DIR"; fi
 }
 
 # Claude Code skips the repo-shaped ~/.claude/skills/gstack directory when
@@ -1354,7 +1406,7 @@ cleanup_old_claude_symlinks() {
                || _gstack_generated_header "$old_target/SKILL.md"; }; then
           # Only the marker proves we created the directory; weak proof covers
           # the SKILL.md alone (a user's files next to it survive).
-          if [ -f "$old_target/.gstack-owned" ]; then rm -rf "$old_target"; else _cleanup_weak_dir "$old_target" "$gstack_dir"; fi
+          if [ -f "$old_target/.gstack-owned" ]; then rm -rf "$old_target"; else _cleanup_weak_dir "$old_target" "$gstack_dir" "$skill_dir/SKILL.md" "$skill_name"; fi
           removed+=("$skill_name")
         fi
       fi
@@ -1408,7 +1460,7 @@ cleanup_prefixed_claude_symlinks() {
         && { [ -f "$prefixed_target/.gstack-owned" ] \
              || cmp -s "$prefixed_target/SKILL.md" "$skill_dir/SKILL.md" \
              || _gstack_generated_header "$prefixed_target/SKILL.md"; }; then
-        if [ -f "$prefixed_target/.gstack-owned" ]; then rm -rf "$prefixed_target"; else _cleanup_weak_dir "$prefixed_target" "$gstack_dir"; fi
+        if [ -f "$prefixed_target/.gstack-owned" ]; then rm -rf "$prefixed_target"; else _cleanup_weak_dir "$prefixed_target" "$gstack_dir" "$skill_dir/SKILL.md" "gstack-$skill_name"; fi
         removed+=("gstack-$skill_name")
       fi
     fi

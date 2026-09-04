@@ -24,7 +24,7 @@ function extractFn(name: string): string {
 }
 
 function cleanupBody(): string {
-  return [extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('cleanup_old_claude_symlinks')].join('\n');
+  return [extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('_backup_skill_md'), '_BACKED_UP_SKILL_MDS=()', `_SKILL_BACKUP_ROOT="${os.tmpdir()}/cleanup-orphans-backups-${process.pid}"`, extractFn('cleanup_old_claude_symlinks')].join('\n');
 }
 
 describe('setup: cleanup_old_claude_symlinks — static (#2204)', () => {
@@ -68,7 +68,7 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_old_claude_symlink
     const script = [
       'set -e',
       `IS_WINDOWS=${opts.isWindows ?? '0'}`,
-      extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'),
+      extractFn('_gstack_link_target_abs'), extractFn('_gstack_target_is_ours'), extractFn('_gstack_dir_only_links'), extractFn('_cleanup_linked_dir'), extractFn('_gstack_generated_header'), extractFn('_cleanup_weak_dir'), extractFn('_backup_skill_md'), '_BACKED_UP_SKILL_MDS=()', `_SKILL_BACKUP_ROOT="${tmp}/backups"`,
       extractFn('cleanup_old_claude_symlinks'),
       `cleanup_old_claude_symlinks "${gstackArg}" "${skills}"`,
     ].join('\n');

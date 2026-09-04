@@ -1096,6 +1096,7 @@ describe('gstack-relink: checkout naming, legacy linked dirs, markers (#2119 rev
     fs.mkdirSync(path.join(other, 'bin'));
     fs.writeFileSync(path.join(other, 'VERSION'), '1.0.0.0\n');
     fs.writeFileSync(path.join(other, 'setup'), '#!/bin/bash\n');
+    fs.writeFileSync(path.join(other, 'bin', 'gstack-relink'), '#!/bin/bash\n');
     fs.writeFileSync(path.join(other, 'qa', 'SKILL.md'), '---\nname: qa\n---\n');
     fs.mkdirSync(path.join(skillsDir, 'qa'));
     fs.symlinkSync(path.join(other, 'qa', 'SKILL.md'), path.join(skillsDir, 'qa', 'SKILL.md'));
@@ -1103,9 +1104,12 @@ describe('gstack-relink: checkout naming, legacy linked dirs, markers (#2119 rev
     const out = relink();
     expect(out).not.toContain('skipped');
     expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(installDir, 'qa', 'SKILL.md'));
-    // ...but a plain directory that merely holds a SKILL.md is not a gstack tree.
+    // ...but a hand-written skill repo with VERSION + setup + bin/ (no gstack-relink) is not a gstack tree.
     const plain = path.join(tmpDir, 'plain-tools');
     fs.mkdirSync(path.join(plain, 'ship'), { recursive: true });
+    fs.mkdirSync(path.join(plain, 'bin'));
+    fs.writeFileSync(path.join(plain, 'VERSION'), '0.1\n');
+    fs.writeFileSync(path.join(plain, 'setup'), '#!/bin/bash\n');
     fs.writeFileSync(path.join(plain, 'ship', 'SKILL.md'), '---\nname: ship\n---\n');
     fs.mkdirSync(path.join(installDir, 'ship'));
     fs.writeFileSync(path.join(installDir, 'ship', 'SKILL.md'), '---\nname: ship\n---\n');
@@ -1144,5 +1148,87 @@ describe('gstack-relink: checkout naming, legacy linked dirs, markers (#2119 rev
     expect(fs.readFileSync(path.join(skillsDir, 'gstack-ship', 'my-notes.md'), 'utf-8')).toBe('keep\n');
     expect(out).toContain('cleaned gstack-ship/SKILL.md');
     expect(out).not.toContain('skipped');
+  });
+});
+
+describe('gstack-relink cycle-3 hardening: foreign dir links, failed backups, flip backups, mixed dirs (#2119 review)', () => {
+  const BANNER = '<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n<!-- Regenerate: bun run gen:skill-docs -->';
+  const env = (extra: Record<string, string> = {}) => ({
+    GSTACK_INSTALL_DIR: installDir, GSTACK_SKILLS_DIR: skillsDir,
+    GSTACK_HOME: path.join(tmpDir, 'home'), GSTACK_USER_RENDER_DIR: path.join(tmpDir, 'no-render'), ...extra,
+  });
+  const relink = (extra: Record<string, string> = {}) => run(`${path.join(installDir, 'bin', 'gstack-relink')} 2>&1`, env(extra));
+  const setPrefix = (v: 'true' | 'false') => run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix ${v}`, env());
+  const backups = (home = path.join(tmpDir, 'home')) => {
+    const root = path.join(home, 'backups', 'skills');
+    if (!fs.existsSync(root)) return [] as string[];
+    return fs.readdirSync(root).flatMap((ts) => fs.readdirSync(path.join(root, ts)).map((n) => path.join(root, ts, n, 'SKILL.md')));
+  };
+
+  test('a foreign DIRECTORY symlink whose target has no SKILL.md is foreign, not unclaimed', () => {
+    setupMockInstall(['qa']);
+    const userdir = path.join(tmpDir, 'userdir');
+    fs.mkdirSync(userdir);
+    fs.writeFileSync(path.join(userdir, 'notes.md'), 'mine\n');
+    fs.symlinkSync(userdir, path.join(skillsDir, 'qa'));
+    setPrefix('false');
+    const out = relink();
+    expect(out).toContain('skipped qa');
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa'))).toBe(userdir);
+    expect(fs.existsSync(path.join(userdir, 'SKILL.md'))).toBe(false);
+  });
+
+  test('flip cleanup moves a CUSTOMIZED banner copy to the backup root instead of deleting it', () => {
+    setupMockInstall(['qa']);
+    const custom = `---\nname: gstack-qa\n---\n${BANNER}\n# customized\n`;
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.writeFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), custom);
+    setPrefix('false');
+    relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    const saved = backups();
+    expect(saved.length).toBe(1);
+    expect(fs.readFileSync(saved[0], 'utf-8')).toBe(custom);
+  });
+
+  test('when the backup root cannot be created, the customized file stays and the entry is reported', () => {
+    setupMockInstall(['qa']);
+    const custom = `---\nname: qa\n---\n${BANNER}\n# customized\n`;
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.writeFileSync(path.join(skillsDir, 'qa', 'SKILL.md'), custom);
+    fs.mkdirSync(path.join(tmpDir, 'home'));
+    fs.writeFileSync(path.join(tmpDir, 'home', 'backups'), 'not a dir');
+    setPrefix('false');
+    const out = relink();
+    expect(out).toContain('could not back up');
+    expect(fs.lstatSync(path.join(skillsDir, 'qa', 'SKILL.md')).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(skillsDir, 'qa', 'SKILL.md'), 'utf-8')).toBe(custom);
+  });
+
+  test('a legacy linked dir holding the user\'s OWN symlink is mixed: our links go, theirs stays', () => {
+    setupMockInstall(['qa']);
+    fs.mkdirSync(path.join(installDir, 'qa', 'sections'));
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.symlinkSync(path.join(installDir, 'qa', 'SKILL.md'), path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    fs.symlinkSync(path.join(installDir, 'qa', 'sections'), path.join(skillsDir, 'gstack-qa', 'sections'));
+    fs.writeFileSync(path.join(tmpDir, 'my-notes.md'), 'mine\n');
+    fs.symlinkSync(path.join(tmpDir, 'my-notes.md'), path.join(skillsDir, 'gstack-qa', 'notes.md'));
+    setPrefix('false');
+    relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa', 'sections'))).toBe(false);
+    expect(fs.readlinkSync(path.join(skillsDir, 'gstack-qa', 'notes.md'))).toBe(path.join(tmpDir, 'my-notes.md'));
+  });
+
+  test('the root alias marker is written only for a directory relink creates', () => {
+    setupMockInstall(['qa']);
+    fs.writeFileSync(path.join(installDir, 'SKILL.md'), `---\nname: gstack\n---\n${BANNER}\n# root\n`);
+    fs.mkdirSync(path.join(skillsDir, '_gstack-command'));
+    fs.writeFileSync(path.join(skillsDir, '_gstack-command', 'notes.md'), 'mine\n');
+    setPrefix('false');
+    relink();
+    expect(fs.readFileSync(path.join(skillsDir, '_gstack-command', 'SKILL.md'), 'utf-8')).toContain('name: _gstack-command');
+    expect(fs.existsSync(path.join(skillsDir, '_gstack-command', '.gstack-owned'))).toBe(false);
+    expect(fs.readFileSync(path.join(skillsDir, '_gstack-command', 'notes.md'), 'utf-8')).toBe('mine\n');
   });
 });
