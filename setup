@@ -2021,7 +2021,7 @@ if [ ! -f "$HOME/.gstack/.welcome-seen" ]; then
   log ""
   # Best-effort onboarding telemetry (respects telemetry!=off; never blocks setup).
   if [ -x "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" ]; then
-    "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" --event-type onboarding --skill _setup_welcome --outcome shown >/dev/null 2>&1 || true
+    "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" --event-type onboarding --skill _setup_welcome --outcome shown --no-sweep >/dev/null 2>&1 || true
   fi
   touch "$HOME/.gstack/.welcome-seen"
 fi
@@ -2641,9 +2641,16 @@ if [ -n "${_PW_FAIL_REASON:-}" ]; then
   case "$_PW_FAIL_REASON" in
     *post-install-launch*) log "  Ubuntu 24.04+ (AppArmor user namespaces): GSTACK_CHROMIUM_NO_SANDBOX=1 ./setup (#2157)" ;;
   esac
-  # Reason code only — never a path or command line — so a support thread can
-  # be matched to a code. Telemetry-gated inside gstack-telemetry-log.
+  # Reason code only — never a path, hostname, or the installer's output. The
+  # event is a one-shot with no session of its own, so --no-sweep keeps it
+  # from finalizing other live sessions' in-flight .pending markers as
+  # outcome:unknown. Telemetry-gated inside gstack-telemetry-log.
   if [ -x "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" ]; then
-    "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" --event-type onboarding --skill _setup_playwright --outcome "$_PW_FAIL_REASON" >/dev/null 2>&1 || true
+    "$SOURCE_GSTACK_DIR/bin/gstack-telemetry-log" --event-type onboarding --skill _setup_playwright --outcome "$_PW_FAIL_REASON" --no-sweep >/dev/null 2>&1 || true
   fi
+fi
+if [ ${#_FOREIGN_SKIPPED_ENTRIES[@]} -gt 0 ]; then
+  log ""
+  log "Not registered (a skill you own already uses the name; left untouched): ${_FOREIGN_SKIPPED_ENTRIES[*]}"
+  log "  Rename or move yours, or switch modes (./setup --prefix / --no-prefix) so the names no longer collide."
 fi
