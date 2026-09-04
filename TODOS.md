@@ -243,10 +243,11 @@ The wave's Step-7 coverage audit (5 subsystem agents, ~700 changed paths,
 shipped verified by hand or adjacent tests); each is a cheap pin against
 silent regression:
 
-- **setup Playwright bootstrap block** — `_clear_playwright_quarantine`,
-  `_PW_LOCK` stale-holder reclaim, `_kill_tree`/`_wait_with_deadline`, Ubuntu
-  26.04 platform override: zero test references. The P0 #2554 heal's shell
-  half. Effort S each.
+- **setup Playwright bootstrap block** — `_PW_LOCK` stale-holder reclaim,
+  `_kill_tree`/`_wait_with_deadline`, and the platform override are now pinned
+  by test/setup-playwright-best-effort.test.ts (fork-port Wave A). Still
+  unpinned: `_clear_playwright_quarantine` (the P0 #2554 heal's shell half).
+  Effort S.
 - **redact-prepush `scanAddedLines` slicing** — the >1MiB catch-up-diff chunk
   path (the reason the function exists) is unexercised; a regression
   reintroduces blocking-while-unscanned. Effort S.
