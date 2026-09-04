@@ -10,8 +10,10 @@ Waves B–E2 of that plan are scheduled work, not TODOs; these are the items the
 reviews deliberately deferred, each with rationale:
 
 - **Shared `_gstack_owned_link` helper** — the ownership gate now exists in
-  four places (setup's `_claude_entry_is_ours` used by link_claude_skill_dirs,
-  cleanup_old_claude_symlinks, cleanup_prefixed_claude_symlinks; bin/gstack-relink
+  six places (setup's `_claude_entry_is_ours` / `_claude_entry_owned_strongly`
+  used by link_claude_skill_dirs and _install_alias_skill_md, while
+  cleanup_old_claude_symlinks and cleanup_prefixed_claude_symlinks inline their
+  own marker/cmp/banner chain and readlink `case`; bin/gstack-relink
   `_entry_is_ours`; bin/gstack-uninstall's per-entry loop). Extract one sourced
   helper so the destructive-path guard cannot drift, and while there: make the
   `.gstack-owned` marker's recorded install path load-bearing (today any marker
