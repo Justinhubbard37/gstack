@@ -48,17 +48,22 @@ RENDER_DIR="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claud
 # skill that happened to share a name (a personal `qa`, a fork under another
 # path) was deleted or had its SKILL.md replaced by a symlink into gstack
 # (#2119; Linux replaces a real file with `ln -snf`, macOS refuses by accident).
-# setup:1040 and gstack-uninstall:204 already gate on readlink; this is the
-# same rule for the one remaining unguarded deleter.
+# setup (link_claude_skill_dirs, cleanup_old_claude_symlinks,
+# cleanup_prefixed_claude_symlinks) and gstack-uninstall apply the same rule;
+# keep the four in sync until the shared helper TODOS.md files lands.
 #
 # An entry is OURS when:
-#   - it is a symlink resolving into $INSTALL_DIR or $RENDER_DIR, or
-#   - it is a real dir whose SKILL.md is a symlink resolving into either, or
-#   - it is a real dir carrying the .gstack-owned marker setup writes for
-#     Windows copy installs (no symlinks there to read).
-# Anything else — a foreign symlink, a real dir with a real SKILL.md and no
-# marker, or an entry whose readlink fails — is FOREIGN: never deleted, never
-# linked over, reported on stderr.
+#   - it is a symlink resolving into $INSTALL_DIR or $RENDER_DIR (as written or
+#     as realpath), or into any path with a `gstack` segment — the convention
+#     setup and gstack-uninstall use, so a sibling worktree's entries and a
+#     moved checkout's dangling links still count as ours, or
+#   - it is a real dir whose SKILL.md is such a symlink, or
+#   - it is a real dir with a real-file SKILL.md proven by the .gstack-owned
+#     marker (Windows copy installs), byte-identity with our source, or
+#     gen-skill-docs' generated header (legacy copies made before the marker).
+# Anything else — a foreign symlink, a real dir with a hand-written SKILL.md,
+# or an entry whose readlink fails — is FOREIGN: never deleted, never linked
+# over, reported on stderr.
 # The install/render roots as written AND as resolved: a standalone relink
 # detects INSTALL_DIR as ~/.claude/skills/gstack, which may itself be a symlink
 # to a checkout, while setup linked entries against the checkout's real path.
@@ -72,6 +77,7 @@ _target_is_ours() {
   # matches a /home/u/gstack root.
   case "$1" in
     "$INSTALL_DIR"/*|"$RENDER_DIR"/*|"$_INSTALL_REAL"/*|"$_RENDER_REAL"/*) return 0 ;;
+    gstack/*|*/gstack/*|*/.gstack/render/claude/*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -86,11 +92,17 @@ _link_target_abs() {
   local link="$1" dest d b d_real
   dest="$(readlink "$link" 2>/dev/null || true)"
   [ -n "$dest" ] || return 1
+  # Fast path: the common absolute link setup/relink wrote is decided without
+  # any further fork (relink runs on every ./setup and gstack-config set).
+  case "$dest" in
+    */../*|*/./*|*/..|*/.) ;;  # dot segments: canonicalize before judging (/x/gstack/../foreign)
+    /*) if _target_is_ours "$dest"; then printf '%s\n' "$dest"; return 0; fi ;;
+  esac
   case "$dest" in
     /*) ;;
-    *)  dest="$(dirname "$link")/$dest" ;;
+    *)  dest="${link%/*}/$dest" ;;
   esac
-  d="$(dirname "$dest")"; b="$(basename "$dest")"
+  d="${dest%/*}"; b="${dest##*/}"
   if d_real="$(cd "$d" 2>/dev/null && pwd -P)"; then
     printf '%s\n' "$d_real/$b"
   else
@@ -98,8 +110,10 @@ _link_target_abs() {
   fi
 }
 
+# _entry_is_ours ENTRY SKILL — SKILL names the gstack skill this entry would
+# serve, so a real-file copy can be compared against our own source.
 _entry_is_ours() {
-  local entry="$1" dest
+  local entry="$1" skill="${2:-}" dest src
   if [ -L "$entry" ]; then
     dest="$(_link_target_abs "$entry")" || return 1
     _target_is_ours "$dest"
@@ -111,6 +125,18 @@ _entry_is_ours() {
       dest="$(_link_target_abs "$entry/SKILL.md")" || return 1
       _target_is_ours "$dest"
       return $?
+    fi
+    if [ -f "$entry/SKILL.md" ]; then
+      for src in "$RENDER_DIR/$skill/SKILL.md" "$INSTALL_DIR/$skill/SKILL.md"; do
+        [ -n "$skill" ] && [ -f "$src" ] && cmp -s "$entry/SKILL.md" "$src" && return 0
+      done
+      # Pre-marker legacy copy: gen-skill-docs' full two-line banner near the
+      # top (same rule as setup's _gstack_generated_header), not a one-line
+      # substring another generator could emit. A gstack fork rendering the
+      # same banner is the accepted, filed residual.
+      case "$(head -n 40 "$entry/SKILL.md" 2>/dev/null)" in
+        *'<!-- AUTO-GENERATED from '*'<!-- Regenerate: bun run gen:skill-docs -->'*) return 0 ;;
+      esac
     fi
     return 1
   fi
@@ -126,9 +152,9 @@ _report_foreign() {
 # Helper: remove an OLD skill entry from the opposite prefix mode. Only entries
 # we can prove are ours are removed; anything else is reported and kept.
 _cleanup_skill_entry() {
-  local entry="$1"
+  local entry="$1" skill="${2:-}"
   [ -e "$entry" ] || [ -L "$entry" ] || return 0
-  if ! _entry_is_ours "$entry"; then
+  if ! _entry_is_ours "$entry" "$skill"; then
     _report_foreign "$entry"
     return 0
   fi
@@ -177,13 +203,13 @@ for skill_dir in "$INSTALL_DIR"/*/; do
       *)        link_name="gstack-$skill" ;;
     esac
     # Remove old flat entry if it exists (and isn't the same as the new link)
-    [ "$link_name" != "$skill" ] && _cleanup_skill_entry "$SKILLS_DIR/$skill"
+    [ "$link_name" != "$skill" ] && _cleanup_skill_entry "$SKILLS_DIR/$skill" "$skill"
   else
     link_name="$skill"
     # Don't remove gstack-* dirs that are their real name (e.g., gstack-upgrade)
     case "$skill" in
       gstack-*) ;; # Already the real name, no old prefixed link to clean
-      *)        _cleanup_skill_entry "$SKILLS_DIR/gstack-$skill" ;;
+      *)        _cleanup_skill_entry "$SKILLS_DIR/gstack-$skill" "$skill" ;;
     esac
   fi
   target="$SKILLS_DIR/$link_name"
@@ -191,7 +217,7 @@ for skill_dir in "$INSTALL_DIR"/*/; do
   # shares our name. Never `ln -snf` over its SKILL.md (on Linux that replaces
   # a real file with a symlink into gstack) and never mkdir into it — skip
   # loudly and leave registration of that one name to the user.
-  if { [ -e "$target" ] || [ -L "$target" ]; } && ! _entry_is_ours "$target"; then
+  if { [ -e "$target" ] || [ -L "$target" ]; } && ! _entry_is_ours "$target" "$skill"; then
     _report_foreign "$target"
     continue
   fi
@@ -202,6 +228,11 @@ for skill_dir in "$INSTALL_DIR"/*/; do
   skill_md_src="$INSTALL_DIR/$skill/SKILL.md"
   [ -f "$RENDER_DIR/$skill/SKILL.md" ] && skill_md_src="$RENDER_DIR/$skill/SKILL.md"
   ln -snf "$skill_md_src" "$target/SKILL.md"
+  # On Windows without Developer Mode `ln -snf` degrades to a copy; leave the
+  # same provenance marker setup writes so the next flip can prove ownership.
+  if [ ! -L "$target/SKILL.md" ]; then
+    printf '%s\n' "$_INSTALL_REAL" > "$target/.gstack-owned" 2>/dev/null || true
+  fi
   SKILL_COUNT=$((SKILL_COUNT + 1))
 done
 

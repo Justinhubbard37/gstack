@@ -805,4 +805,175 @@ describe('gstack-relink ownership gate (#2119)', () => {
     expect(fs.readFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), 'utf-8')).toBe(FOREIGN);
     expect(out).toContain('skipped');
   });
+
+  // Before the gate, a stray regular FILE named like a skill made `mkdir -p`
+  // fail under set -e and relink died mid-loop (exit 1, later skills never
+  // linked). A non-dir, non-symlink entry is simply foreign now.
+  test('a stray regular file with a skill name is foreign: relink completes, file untouched, other skills link', () => {
+    setupMockInstall(['qa', 'ship']);
+    fs.writeFileSync(path.join(skillsDir, 'qa'), 'stray notes\n');
+    setPrefix('false');
+    const out = relink();
+    expect(fs.lstatSync(path.join(skillsDir, 'qa')).isFile()).toBe(true);
+    expect(fs.readFileSync(path.join(skillsDir, 'qa'), 'utf-8')).toBe('stray notes\n');
+    expect(fs.lstatSync(path.join(skillsDir, 'ship', 'SKILL.md')).isSymbolicLink()).toBe(true);
+    expect(out).toContain('Relinked 1 skills as flat names');
+    expect(out).toContain('Skipped 1 foreign entry');
+  });
+
+  test('a real dir whose SKILL.md symlink points OUTSIDE install/render is foreign in both the link pass and the flip cleanup', () => {
+    setupMockInstall(['qa']);
+    const elsewhere = path.join(tmpDir, 'elsewhere', 'qa');
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, 'SKILL.md'), FOREIGN);
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.symlinkSync(path.join(elsewhere, 'SKILL.md'), path.join(skillsDir, 'qa', 'SKILL.md'));
+    // Link pass (flat mode): the destination is not ours → never re-pointed.
+    setPrefix('false');
+    let out = relink();
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(elsewhere, 'SKILL.md'));
+    expect(out).toContain('skipped');
+    // Cleanup pass (prefix flip): the stale flat name is not ours → kept.
+    setPrefix('true');
+    out = relink();
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(elsewhere, 'SKILL.md'));
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'))).toBe(true);
+    expect(out).toContain('skipped');
+  });
+
+  test('a sibling directory that merely shares the install dir as a prefix (…/gstack-install-fork) is not ours', () => {
+    setupMockInstall(['qa']);
+    const fork = installDir + '-fork';
+    fs.mkdirSync(path.join(fork, 'qa'), { recursive: true });
+    fs.writeFileSync(path.join(fork, 'qa', 'SKILL.md'), FOREIGN);
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.symlinkSync(path.join(fork, 'qa', 'SKILL.md'), path.join(skillsDir, 'qa', 'SKILL.md'));
+    setPrefix('false');
+    const out = relink();
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(fork, 'qa', 'SKILL.md'));
+    expect(fs.readFileSync(path.join(fork, 'qa', 'SKILL.md'), 'utf-8')).toBe(FOREIGN);
+    expect(out).toContain('skipped');
+  });
+
+  test('several foreign entries: pluralized summary lists every path and the relinked count excludes them', () => {
+    setupMockInstall(['qa', 'ship', 'review']);
+    for (const name of ['qa', 'ship']) {
+      fs.mkdirSync(path.join(skillsDir, name));
+      fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), FOREIGN);
+    }
+    setPrefix('false');
+    const out = relink();
+    expect(out).toContain('Relinked 1 skills as flat names');
+    expect(out).toContain('Skipped 2 foreign entries');
+    expect(out).toContain(path.join(skillsDir, 'qa'));
+    expect(out).toContain(path.join(skillsDir, 'ship'));
+    expect(out).not.toContain('foreign entry ');
+    expect(fs.lstatSync(path.join(skillsDir, 'review', 'SKILL.md')).isSymbolicLink()).toBe(true);
+  });
+
+  test('an opposite-mode WHOLE-DIR symlink into the install (oldest install shape) is ours and is removed on a flip', () => {
+    setupMockInstall(['qa']);
+    fs.symlinkSync(path.join(installDir, 'qa'), path.join(skillsDir, 'gstack-qa'));
+    setPrefix('false');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(fs.lstatSync(path.join(skillsDir, 'gstack-qa'), { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.lstatSync(path.join(skillsDir, 'qa', 'SKILL.md')).isSymbolicLink()).toBe(true);
+    expect(out).not.toContain('skipped');
+  });
+});
+
+describe('gstack-relink ownership gate parity with setup (#2119 review fixes)', () => {
+  const FOREIGN = '---\nname: qa\ndescription: my own qa skill\n---\n# not gstack';
+  function relink(env: Record<string, string> = {}): string {
+    return run(`${path.join(installDir, 'bin', 'gstack-relink')} 2>&1`, {
+      GSTACK_INSTALL_DIR: installDir, GSTACK_SKILLS_DIR: skillsDir, ...env,
+    });
+  }
+  function setPrefix(v: 'true' | 'false') {
+    run(`${path.join(installDir, 'bin', 'gstack-config')} set skill_prefix ${v}`, {
+      GSTACK_INSTALL_DIR: installDir, GSTACK_SKILLS_DIR: skillsDir,
+    });
+  }
+
+  test('a pre-marker legacy COPY carrying the generated header is ours (same rule as setup) and is cleaned on a flip', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.writeFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), '---\nname: gstack-qa\n---\n<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n<!-- Regenerate: bun run gen:skill-docs -->\n# qa\n');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(out).not.toContain('skipped');
+  });
+
+  test('a ONE-line AUTO-GENERATED substring is not provenance (another generator could emit it): entry survives', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.writeFileSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'), '---\nname: gstack-qa\n---\n<!-- AUTO-GENERATED from my-tool -->\n# theirs\n');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'))).toBe(true);
+    expect(out).toContain('skipped');
+  });
+
+  test('an absolute link that walks through a gstack segment with `..` is canonicalized first, not fast-pathed as ours', () => {
+    setupMockInstall(['qa']);
+    const decoy = path.join(tmpDir, 'x', 'gstack');
+    const foreign = path.join(tmpDir, 'x', 'foreign');
+    fs.mkdirSync(decoy, { recursive: true });
+    fs.mkdirSync(foreign, { recursive: true });
+    fs.writeFileSync(path.join(foreign, 'SKILL.md'), FOREIGN);
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.symlinkSync(path.join(decoy, '..', 'foreign', 'SKILL.md'), path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    setPrefix('false');
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa', 'SKILL.md'))).toBe(true);
+    expect(out).toContain('skipped');
+  });
+
+  test('a byte-identical copy of our source SKILL.md is ours even without marker or header', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.copyFileSync(path.join(installDir, 'qa', 'SKILL.md'), path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(out).not.toContain('skipped');
+  });
+
+  test('an entry linked into a SIBLING gstack checkout (path segment `gstack`) is ours, like setup and uninstall treat it', () => {
+    setupMockInstall(['qa']);
+    setPrefix('false');
+    const sibling = path.join(tmpDir, 'worktrees', 'gstack', 'qa');
+    fs.mkdirSync(sibling, { recursive: true });
+    fs.writeFileSync(path.join(sibling, 'SKILL.md'), '---\nname: qa\n---\n');
+    fs.mkdirSync(path.join(skillsDir, 'gstack-qa'));
+    fs.symlinkSync(path.join(sibling, 'SKILL.md'), path.join(skillsDir, 'gstack-qa', 'SKILL.md'));
+    const out = relink();
+    expect(fs.existsSync(path.join(skillsDir, 'gstack-qa'))).toBe(false);
+    expect(out).not.toContain('skipped');
+  });
+
+  test('a fork under a `gstack-fork` directory is NOT ours (segment must be exactly gstack)', () => {
+    setupMockInstall(['qa']);
+    const fork = path.join(tmpDir, 'tools', 'gstack-fork', 'qa');
+    fs.mkdirSync(fork, { recursive: true });
+    fs.writeFileSync(path.join(fork, 'SKILL.md'), FOREIGN);
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.symlinkSync(path.join(fork, 'SKILL.md'), path.join(skillsDir, 'qa', 'SKILL.md'));
+    setPrefix('false');
+    const out = relink();
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(fork, 'SKILL.md'));
+    expect(out).toContain('skipped');
+  });
+
+  test('a DANGLING link from a moved checkout is healed, not reported foreign', () => {
+    setupMockInstall(['qa']);
+    fs.mkdirSync(path.join(skillsDir, 'qa'));
+    fs.symlinkSync(path.join(tmpDir, 'old-checkout', 'gstack', 'qa', 'SKILL.md'), path.join(skillsDir, 'qa', 'SKILL.md'));
+    setPrefix('false');
+    const out = relink();
+    expect(out).not.toContain('skipped');
+    expect(fs.readlinkSync(path.join(skillsDir, 'qa', 'SKILL.md'))).toBe(path.join(installDir, 'qa', 'SKILL.md'));
+  });
 });

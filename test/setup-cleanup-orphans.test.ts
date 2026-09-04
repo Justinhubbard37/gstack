@@ -24,7 +24,7 @@ function extractFn(name: string): string {
 }
 
 function cleanupBody(): string {
-  return extractFn('cleanup_old_claude_symlinks');
+  return extractFn('_gstack_generated_header') + extractFn('cleanup_old_claude_symlinks');
 }
 
 describe('setup: cleanup_old_claude_symlinks — static (#2204)', () => {
@@ -68,6 +68,7 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_old_claude_symlink
     const script = [
       'set -e',
       `IS_WINDOWS=${opts.isWindows ?? '0'}`,
+      extractFn('_gstack_generated_header'),
       extractFn('cleanup_old_claude_symlinks'),
       `cleanup_old_claude_symlinks "${gstackArg}" "${skills}"`,
     ].join('\n');
@@ -264,7 +265,7 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_old_claude_symlink
   // marker, a byte-identical copy of the payload source, or gen-skill-docs'
   // AUTO-GENERATED header (legacy copies made before the marker existed).
   test('Windows real-file leftover is removed only when provably gstack-owned', () => {
-    const generated = '---\nname: ship\n---\n<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n# ship\n';
+    const generated = '---\nname: ship\n---\n<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n<!-- Regenerate: bun run gen:skill-docs -->\n# ship\n';
     const r = runCleanup({
       isWindows: '1',
       payload: true,
@@ -292,6 +293,32 @@ describe.skipIf(process.platform === 'win32')('setup: cleanup_old_claude_symlink
       expect(r.status).toBe(0);
       expect(r.names).toEqual(['gstack', 'my-own', 'review']);
       expect(fs.readFileSync(path.join(r.tmp, 'skills', 'review', 'SKILL.md'), 'utf-8')).toContain('user-owned');
+    } finally {
+      fs.rmSync(r.tmp, { recursive: true, force: true });
+    }
+  });
+
+  // The Windows arm is the ONLY path that touches a real-file SKILL.md. On
+  // Unix a same-name real-file skill must survive even when the payload names
+  // it and even when its bytes are identical to the payload source.
+  test('Unix (IS_WINDOWS=0): a same-name real-file skill is never reaped, even if byte-identical to the payload', () => {
+    const r = runCleanup({
+      isWindows: '0',
+      payload: true,
+      plant(skills, payload) {
+        fs.mkdirSync(path.join(payload, 'qa'));
+        fs.writeFileSync(path.join(payload, 'qa', 'SKILL.md'), '---\nname: qa\n---\n');
+        fs.mkdirSync(path.join(skills, 'qa'));
+        fs.copyFileSync(path.join(payload, 'qa', 'SKILL.md'), path.join(skills, 'qa', 'SKILL.md'));
+        fs.mkdirSync(path.join(skills, 'ship'));
+        fs.writeFileSync(path.join(skills, 'ship', 'SKILL.md'), '---\nname: ship\n---\n');
+        fs.writeFileSync(path.join(skills, 'ship', '.gstack-owned'), '');
+      },
+    });
+    try {
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe('');
+      expect(r.names).toEqual(['gstack', 'qa', 'ship']);
     } finally {
       fs.rmSync(r.tmp, { recursive: true, force: true });
     }

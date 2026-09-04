@@ -116,6 +116,79 @@ _link_or_copy() {
   fi
 }
 
+# ─── Ownership gate for skill entries (#2119) ─────────────────────────────────
+# setup and gstack-relink must never delete or link over a skill they do not
+# own. This is the single rule both use (relink carries the same logic — keep
+# them in sync until the shared helper TODOS.md files lands). An entry is OURS
+# when: it is a symlink resolving into the gstack payload / render dir (or any
+# path with a `gstack` segment, the convention cleanup and gstack-uninstall
+# already use, so entries from a sibling worktree still count), a real dir
+# whose SKILL.md is such a symlink, or a real-file copy proven by the
+# .gstack-owned marker, byte-identity with the source, or gen-skill-docs'
+# generated header. Anything else is FOREIGN: skipped, reported, listed in
+# the final summary.
+_FOREIGN_SKIPPED_ENTRIES=()
+_gstack_link_target_abs() {
+  # readlink of a relative link is relative to the link's directory; anchor it
+  # there and canonicalize the directory part (`..`, symlinked components).
+  local link="$1" dest d b d_real
+  dest="$(readlink "$link" 2>/dev/null || true)"
+  [ -n "$dest" ] || return 1
+  case "$dest" in /*) ;; *) dest="$(dirname "$link")/$dest" ;; esac
+  d="${dest%/*}"; b="${dest##*/}"
+  if d_real="$(cd "$d" 2>/dev/null && pwd -P)"; then printf '%s\n' "$d_real/$b"; else printf '%s\n' "$dest"; fi
+}
+_gstack_target_is_ours() {
+  # $1 = absolute target path, $2 = gstack payload dir
+  local t="$1" g="$2" g_real render render_real
+  g_real="$(cd "$g" 2>/dev/null && pwd -P || printf '%s' "$g")"
+  render="${GSTACK_USER_RENDER_DIR:-${GSTACK_HOME:-$HOME/.gstack}/render/claude}"
+  render_real="$(cd "$render" 2>/dev/null && pwd -P || printf '%s' "$render")"
+  case "$t" in
+    "$g"/*|"$g_real"/*|"$render"/*|"$render_real"/*|gstack/*|*/gstack/*|*/.gstack/render/claude/*) return 0 ;;
+  esac
+  return 1
+}
+_claude_entry_is_ours() {
+  # $1 = existing entry (dir or symlink), $2 = the gstack source SKILL.md it
+  # would be linked to, $3 = gstack payload dir
+  local entry="$1" src_md="$2" g="$3" dest
+  if [ -L "$entry" ]; then
+    dest="$(_gstack_link_target_abs "$entry")" || return 1
+    _gstack_target_is_ours "$dest" "$g"; return $?
+  fi
+  [ -d "$entry" ] || return 1
+  [ -f "$entry/.gstack-owned" ] && return 0
+  if [ -L "$entry/SKILL.md" ]; then
+    dest="$(_gstack_link_target_abs "$entry/SKILL.md")" || return 1
+    _gstack_target_is_ours "$dest" "$g"; return $?
+  fi
+  if [ -f "$entry/SKILL.md" ]; then
+    [ -n "$src_md" ] && [ -f "$src_md" ] && cmp -s "$entry/SKILL.md" "$src_md" && return 0
+    _gstack_generated_header "$entry/SKILL.md" && return 0
+  fi
+  return 1
+}
+# _gstack_generated_header FILE — a pre-marker legacy COPY (Windows, before
+# .gstack-owned existed) is recognized by gen-skill-docs' full two-line banner
+# near the top, not by a one-line substring another generator could plausibly
+# emit. Still forgeable by a gstack fork that renders the same banner — that
+# residual is accepted and filed; the marker is the load-bearing signal.
+_gstack_generated_header() {
+  local f="$1" head40
+  head40="$(head -n 40 "$f" 2>/dev/null)" || return 1
+  case "$head40" in
+    *'<!-- AUTO-GENERATED from '*'<!-- Regenerate: bun run gen:skill-docs -->'*) return 0 ;;
+  esac
+  return 1
+}
+_write_owned_marker() {
+  # Windows copy installs have no symlink to readlink; the marker proves
+  # provenance. Records the owning payload's real path for forensics.
+  local dir="$1" g="$2"
+  printf '%s\n' "$(cd "$g" 2>/dev/null && pwd -P || printf '%s' "$g")" > "$dir/.gstack-owned" 2>/dev/null || true
+}
+
 # ─── Ownership gates for the Windows refresh bypass (#2444 → #2142) ─────────
 # On Windows a refresh means rm -rf + re-copy (_link_or_copy). The host
 # skills dirs are SHARED namespaces (~/.codex/skills, ~/.factory/skills,
@@ -798,7 +871,16 @@ _pw_fail() {
   echo "  Chromium bootstrap: $code — $*" >&2
 }
 _PW_INSTALL_TIMEOUT="${GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT:-600}"
+# Positive seconds only: 0 would kill the install on the first poll, so it
+# (and anything non-numeric) falls back to the default.
 case "$_PW_INSTALL_TIMEOUT" in ''|*[!0-9]*) _PW_INSTALL_TIMEOUT=600 ;; esac
+# Normalize to a plain positive integer: "000"/"0" mean the default (never
+# kill-on-first-poll), "0600" is 600, and anything past nine digits is garbage
+# rather than a deadline (a value bash cannot compare would leave the install
+# unbounded — the exact failure the bound exists to prevent).
+[ "${#_PW_INSTALL_TIMEOUT}" -le 9 ] || _PW_INSTALL_TIMEOUT=600
+_PW_INSTALL_TIMEOUT=$((10#$_PW_INSTALL_TIMEOUT))
+[ "$_PW_INSTALL_TIMEOUT" -gt 0 ] || _PW_INSTALL_TIMEOUT=600
 
 if [ "${GSTACK_SKIP_PLAYWRIGHT:-0}" = "1" ]; then
   _pw_fail skipped "GSTACK_SKIP_PLAYWRIGHT=1 — Chromium install skipped by request (#913)"
@@ -833,8 +915,14 @@ elif ! ensure_playwright_browser; then
         bunx playwright install chromium
       fi
     ) &
+    _PW_PID=$!
+    # Ctrl-C during the download: a backgrounded child ignores SIGINT, so
+    # without this the installer would keep running as an orphan while the
+    # EXIT trap frees the lock — the #2136 pile-up the lock exists to prevent.
+    trap '_kill_tree "$_PW_PID" 2>/dev/null; rm -rf "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun; exit 130' INT TERM
     _PW_RC=0
-    _wait_with_deadline $! "$_PW_INSTALL_TIMEOUT" || _PW_RC=$?
+    _wait_with_deadline "$_PW_PID" "$_PW_INSTALL_TIMEOUT" || _PW_RC=$?
+    trap - INT TERM
     if [ "$_PW_RC" -eq 124 ]; then
       _pw_fail chromium-install-timeout "bunx playwright install chromium exceeded ${_PW_INSTALL_TIMEOUT}s and was killed (raise with GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>)"
     elif [ "$_PW_RC" -ne 0 ]; then
@@ -857,12 +945,14 @@ elif ! ensure_playwright_browser; then
       echo "Windows detected — verifying Node.js can load Playwright..."
       if ! (
         cd "$SOURCE_GSTACK_DIR"
-        # Bun's node_modules already has playwright; verify Node can require it
-        node -e "require('playwright')" 2>/dev/null || npm install --no-save playwright
-        # @ngrok/ngrok is externalized in server-node.mjs and resolved at runtime.
-        # Verify the platform-specific native binary is installed so /pair-agent
+        # Bun's node_modules already has playwright; verify Node can require it.
+        # @ngrok/ngrok is externalized in server-node.mjs and resolved at runtime;
+        # verify the platform-specific native binary is installed so /pair-agent
         # tunnels don't fail later with a cryptic module-not-found error.
-        node -e "require('@ngrok/ngrok')" 2>/dev/null || npm install --no-save @ngrok/ngrok
+        # &&-chained: errexit is off inside an `if` condition, so a failed npm
+        # install on the first line must not be masked by the second.
+        { node -e "require('playwright')" 2>/dev/null || npm install --no-save playwright; } &&
+        { node -e "require('@ngrok/ngrok')" 2>/dev/null || npm install --no-save @ngrok/ngrok; }
       ); then
         _pw_fail windows-node-modules "npm could not install playwright / @ngrok/ngrok for Node.js"
       fi
@@ -969,6 +1059,13 @@ link_claude_skill_dirs() {
         link_name="$skill_name"
       fi
       target="$skills_dir/$link_name"
+      # #2119: a destination that exists and is NOT ours is a user's skill that
+      # shares our name. Never rm/mkdir/ln into it — skip and report.
+      if { [ -e "$target" ] || [ -L "$target" ]; } && ! _claude_entry_is_ours "$target" "$gstack_dir/$dir_name/SKILL.md" "$gstack_dir"; then
+        echo "  skipped $link_name: existing entry is not gstack-managed (foreign skill with the same name) — left untouched" >&2
+        _FOREIGN_SKIPPED_ENTRIES+=("$link_name")
+        continue
+      fi
       # Upgrade old directory symlinks to real directories
       if [ -L "$target" ]; then
         rm -f "$target"
@@ -993,7 +1090,7 @@ link_claude_skill_dirs() {
       # Ownership marker for Windows COPY installs (#2119): there is no symlink
       # to readlink, so gstack-relink and the mode-flip cleanup below prove
       # provenance by this marker instead of by name.
-      if [ "$IS_WINDOWS" -eq 1 ]; then : > "$target/.gstack-owned" 2>/dev/null || true; fi
+      if [ "$IS_WINDOWS" -eq 1 ]; then _write_owned_marker "$target" "$gstack_dir"; fi
       # Link every runtime asset the skill ships next to its SKILL.md (#2317,
       # #2454): sections/ for carved skills, review's checklist.md +
       # specialists/, qa's templates/ + references/, gstack-upgrade's
@@ -1027,6 +1124,14 @@ _install_alias_skill_md() {
   local dst_dir="$2"
   local alias_name="$3"
   [ -f "$src_skill_md" ] || return 0
+  # #2119: an existing alias-named entry that is not ours is a user's skill.
+  # (Ours: a whole-dir symlink into gstack, or a copy carrying the generated
+  # header — every alias copy does.)
+  if { [ -e "$dst_dir" ] || [ -L "$dst_dir" ]; } && ! _claude_entry_is_ours "$dst_dir" "$src_skill_md" "$SOURCE_GSTACK_DIR"; then
+    echo "  skipped $alias_name: existing entry is not gstack-managed (foreign skill with the same name) — left untouched" >&2
+    _FOREIGN_SKIPPED_ENTRIES+=("$alias_name")
+    return 0
+  fi
   # Old installs left the alias as a whole-dir symlink — replace it.
   if [ -L "$dst_dir" ]; then rm -f "$dst_dir"; fi
   mkdir -p "$dst_dir"
@@ -1114,7 +1219,7 @@ cleanup_old_claude_symlinks() {
           && [ -f "$old_target/SKILL.md" ] && [ ! -L "$old_target/SKILL.md" ] \
           && { [ -f "$old_target/.gstack-owned" ] \
                || cmp -s "$old_target/SKILL.md" "$skill_dir/SKILL.md" \
-               || grep -q 'AUTO-GENERATED from SKILL.md.tmpl' "$old_target/SKILL.md" 2>/dev/null; }; then
+               || _gstack_generated_header "$old_target/SKILL.md"; }; then
           rm -rf "$old_target"
           removed+=("$skill_name")
         fi
@@ -1141,11 +1246,13 @@ cleanup_prefixed_claude_symlinks() {
       # (e.g., remove gstack-qa but NOT gstack-upgrade which is the real dir name)
       case "$skill_name" in gstack-*) continue ;; esac
       prefixed_target="$skills_dir/gstack-$skill_name"
-      # Remove directory symlinks pointing into gstack/
+      # Remove directory symlinks pointing into gstack/ — anchored path
+      # segments, same as cleanup_old_claude_symlinks and gstack-uninstall: a
+      # bare *gstack* substring would wipe a user skill under ~/tools/gstack-fork/.
       if [ -L "$prefixed_target" ]; then
         link_dest="$(readlink "$prefixed_target" 2>/dev/null || true)"
         case "$link_dest" in
-          gstack/*|*/gstack/*)
+          gstack/*|*/gstack/*|*/.gstack/render/claude/*)
             rm -f "$prefixed_target"
             removed+=("gstack-$skill_name")
             ;;
@@ -1154,15 +1261,19 @@ cleanup_prefixed_claude_symlinks() {
       elif [ -d "$prefixed_target" ] && [ -L "$prefixed_target/SKILL.md" ]; then
         link_dest="$(readlink "$prefixed_target/SKILL.md" 2>/dev/null || true)"
         case "$link_dest" in
-          *gstack*)
+          gstack/*|*/gstack/*|*/.gstack/render/claude/*)
             rm -rf "$prefixed_target"
             removed+=("gstack-$skill_name")
             ;;
         esac
-      # Windows install pattern: real dir with real-file SKILL.md. Same
-      # reasoning as cleanup_old_claude_symlinks — directory name match plus
-      # IS_WINDOWS is safe during a mode flip.
-      elif [ "$IS_WINDOWS" -eq 1 ] && [ -d "$prefixed_target" ] && [ -f "$prefixed_target/SKILL.md" ]; then
+      # Windows install pattern: real dir with real-file SKILL.md. Provenance
+      # must be PROVEN (#2119), never assumed from the name: the marker
+      # link_claude_skill_dirs writes, a byte-identical copy of the source, or
+      # gen-skill-docs' generated header (legacy copies made before the marker).
+      elif [ "$IS_WINDOWS" -eq 1 ] && [ -d "$prefixed_target" ] && [ -f "$prefixed_target/SKILL.md" ] && [ ! -L "$prefixed_target/SKILL.md" ] \
+        && { [ -f "$prefixed_target/.gstack-owned" ] \
+             || cmp -s "$prefixed_target/SKILL.md" "$skill_dir/SKILL.md" \
+             || _gstack_generated_header "$prefixed_target/SKILL.md"; }; then
         rm -rf "$prefixed_target"
         removed+=("gstack-$skill_name")
       fi
@@ -1721,7 +1832,10 @@ if [ "$INSTALL_CLAUDE" -eq 1 ]; then
     # setup, stale git state, or gen:skill-docs left name: fields out of sync.
     GSTACK_RELINK="$SOURCE_GSTACK_DIR/bin/gstack-relink"
     if [ -x "$GSTACK_RELINK" ]; then
-      GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" >/dev/null 2>&1 || true
+      # relink's own "skipped" lines (foreign entries) must reach the user;
+      # everything else it prints is noise here.
+      _RELINK_OUT="$(GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" 2>&1 || true)"
+      printf '%s\n' "$_RELINK_OUT" | grep '^  skipped ' >&2 || true
     fi
     # Backwards-compat alias: /connect-chrome → /open-gstack-browser
     # Rewritten copy, not a symlink: a symlinked alias re-serves the canonical
@@ -1794,7 +1908,8 @@ if [ "$INSTALL_CLAUDE" -eq 1 ]; then
       _CLAUDE_SKILLS_LINKED=1
       GSTACK_RELINK="$SOURCE_GSTACK_DIR/bin/gstack-relink"
       if [ -x "$GSTACK_RELINK" ]; then
-        GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" >/dev/null 2>&1 || true
+        _RELINK_OUT="$(GSTACK_SKILLS_DIR="$INSTALL_SKILLS_DIR" GSTACK_INSTALL_DIR="$SOURCE_GSTACK_DIR" "$GSTACK_RELINK" 2>&1 || true)"
+        printf '%s\n' "$_RELINK_OUT" | grep '^  skipped ' >&2 || true
       fi
       # Rewritten copy, not a symlink: a symlinked alias re-serves the
       # canonical name: open-gstack-browser, so one of the two silently
@@ -2630,10 +2745,16 @@ fi
 
 # ─── Chromium bootstrap summary (best-effort browser, see # 2) ───────────────
 # Printed LAST so it is the thing the user sees, after every skill registered.
-if [ -n "${_PW_FAIL_REASON:-}" ]; then
+_PW_BROWSER_SKILLS="/qa, /qa-only, /design-review, /browse, make-pdf, /pair-agent"
+if [ "${_PW_FAIL_REASON:-}" = "skipped" ]; then
+  # An explicit opt-out is not a failure: say what is unavailable and stop.
+  log ""
+  log "Chromium install skipped by request (GSTACK_SKIP_PLAYWRIGHT=1)."
+  log "  Browser skills ($_PW_BROWSER_SKILLS) need it; re-run ./setup without the flag when you want them."
+elif [ -n "${_PW_FAIL_REASON:-}" ]; then
   log ""
   log "Browser unavailable: Chromium bootstrap did not complete ($_PW_FAIL_REASON)."
-  log "  Skills that need it: /qa, /qa-only, /design-review, /browse, make-pdf, /pair-agent."
+  log "  Skills that need it: $_PW_BROWSER_SKILLS."
   log "  Everything else is installed and works. Fix the cause and re-run ./setup."
   case "$_PW_FAIL_REASON" in
     *chromium-install-timeout*) log "  Slow link? Raise the bound: GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=1800 ./setup" ;;

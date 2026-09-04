@@ -46,8 +46,13 @@ const codeLines = block.split('\n').filter((l) => !l.trim().startsWith('#')).joi
 
 describe('setup: Chromium bootstrap static invariants', () => {
   test('no exit inside the bootstrap block (skills must always register)', () => {
-    expect(codeLines).not.toMatch(/\bexit 1\b/);
-    expect(codeLines).not.toMatch(/\bexit\b/);
+    // The only `exit` allowed is inside the INT/TERM trap string (Ctrl-C must
+    // still terminate setup after killing the installer); a bare statement is not.
+    const statements = codeLines.split('\n').filter((l) => !/^\s*trap /.test(l)).join('\n');
+    expect(statements).not.toMatch(/\bexit 1\b/);
+    expect(statements).not.toMatch(/\bexit\b/);
+    expect(codeLines).toMatch(/trap '_kill_tree "\$_PW_PID".*exit 130' INT TERM/);
+    expect(codeLines).toContain('trap - INT TERM');
   });
 
   test('every failure arm records a reason code', () => {
@@ -60,15 +65,19 @@ describe('setup: Chromium bootstrap static invariants', () => {
   });
 
   test('the download is deadline-bounded through the shared helper and env knob', () => {
-    expect(codeLines).toContain('_wait_with_deadline $! "$_PW_INSTALL_TIMEOUT"');
+    expect(codeLines).toContain('_wait_with_deadline "$_PW_PID" "$_PW_INSTALL_TIMEOUT"');
     expect(codeLines).toContain('GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT');
-    // Non-numeric knob falls back to the default instead of breaking arithmetic.
+    // Non-numeric and 0 fall back to the default instead of breaking arithmetic
+    // or killing the install on the first poll.
     expect(codeLines).toMatch(/case "\$_PW_INSTALL_TIMEOUT" in ''\|\*\[!0-9\]\*\)/);
+    expect(codeLines).toContain('_PW_INSTALL_TIMEOUT=$((10#$_PW_INSTALL_TIMEOUT))');
+    expect(codeLines).toContain('[ "$_PW_INSTALL_TIMEOUT" -gt 0 ] || _PW_INSTALL_TIMEOUT=600');
+    expect(codeLines).toContain('[ "${#_PW_INSTALL_TIMEOUT}" -le 9 ] || _PW_INSTALL_TIMEOUT=600');
   });
 
   test('lock contention is a reason code, not a fatal', () => {
-    const lockElse = codeLines.slice(codeLines.indexOf('else\n    _pw_fail chromium-install-locked'));
-    expect(lockElse.length).toBeGreaterThan(0);
+    expect(codeLines).toContain('_pw_fail chromium-install-locked');
+    expect(codeLines).not.toMatch(/another gstack setup is already installing[\s\S]*exit 1/);
     expect(block).toContain('GSTACK_SKIP_PLAYWRIGHT');
   });
 
@@ -102,11 +111,14 @@ describe('setup: Chromium bootstrap static invariants', () => {
  * can prove setup continued past the block.
  */
 function runBlock(opts: {
-  probe: 'ok' | 'fail';
+  probe: 'ok' | 'fail' | 'fail-then-ok';  // fail-then-ok = fresh install: probe fails, install runs, probe passes
   bunx: string;             // body of the bunx stub
   env?: Record<string, string>;
   preLockPid?: string;      // pre-create the install lock held by this pid
   markKill?: boolean;       // record _kill_tree invocations to $MARK
+  isWindows?: '0' | '1';
+  prelude?: string;         // extra shell lines (node/npm stubs) injected before the block
+  platformOverride?: string; // value for _PLAYWRIGHT_PLATFORM_OVERRIDE (Ubuntu 26.04 path)
 }): { stdout: string; stderr: string; status: number; elapsedMs: number; tmp: string } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pw-block-'));
   const mark = path.join(tmp, 'mark');
@@ -119,21 +131,29 @@ function runBlock(opts: {
     fs.mkdirSync(lock);
     fs.writeFileSync(path.join(lock, 'pid'), opts.preLockPid);
   }
+  const probeFn = opts.probe === 'fail-then-ok'
+    ? 'ensure_playwright_browser() { if [ -f "$MARK.probed" ]; then return 0; fi; : > "$MARK.probed"; return 1; }'
+    : `ensure_playwright_browser() { ${opts.probe === 'ok' ? 'return 0' : 'return 1'}; }`;
   const script = [
     'set -e',
-    'IS_WINDOWS=0',
+    `IS_WINDOWS=${opts.isWindows ?? '0'}`,
     `SOURCE_GSTACK_DIR="${tmp}"`,
     `TMPDIR="${tmp}"`,
     `MARK="${mark}"`,
-    '_PLAYWRIGHT_PLATFORM_OVERRIDE=""',
-    'cleanup_copied_bun() { :; }',
+    `_PLAYWRIGHT_PLATFORM_OVERRIDE="${opts.platformOverride ?? ''}"`,
+    // EXIT-trap witness: the block chains its lock trap onto cleanup_copied_bun
+    // and must leave cleanup_copied_bun installed when it is done.
+    'cleanup_copied_bun() { echo cleanup >> "$MARK.exit"; }',
     'trap cleanup_copied_bun EXIT',
     '_clear_playwright_quarantine() { :; }',
-    `ensure_playwright_browser() { ${opts.probe === 'ok' ? 'return 0' : 'return 1'}; }`,
-    `bunx() { echo bunx-called >> "$MARK"; ${opts.bunx}; }`,
+    probeFn,
+    opts.prelude ?? '',
+    `bunx() { echo "bunx-called override=${'$'}{PLAYWRIGHT_HOST_PLATFORM_OVERRIDE:-unset}" >> "$MARK"; ${opts.bunx}; }`,
     killTree,
     extractFn('_wait_with_deadline'),
-    block,
+    // The block opens with the /etc/os-release probe that RESETS the override
+    // variable; a test that injects an override must start after that probe.
+    opts.platformOverride !== undefined ? slice('# Chromium is BEST-EFFORT', BLOCK_END) : block,
     'echo "REASON=$_PW_FAIL_REASON"',
     'echo "REACHED_END=1"',
   ].join('\n');
@@ -214,5 +234,320 @@ describe('setup: Chromium bootstrap block executes best-effort', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('REASON=skipped\n');
     expect(fs.existsSync(path.join(r.tmp, 'mark'))).toBe(false);
+  });
+});
+
+/** A PATH that carries the tools the block needs but NO node — `command -v`
+ *  also finds shell functions, so hiding node from PATH is the only faithful
+ *  way to stand in for a Windows box without Node.js. */
+function pathWithoutNode(): { bin: string; cleanup: () => void } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-nonode-'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  for (const name of ['bash', 'mkdir', 'rm', 'sleep', 'cat', 'pgrep', 'grep', 'cut', 'tr', 'dirname', 'basename']) {
+    const real = (spawnSync('which', [name], { encoding: 'utf-8', timeout: 10_000 }).stdout ?? '').trim();
+    if (real) fs.symlinkSync(real, path.join(bin, name));
+  }
+  return { bin, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+describe('setup: Chromium bootstrap block — fresh install, lock hygiene, override, Windows arms', () => {
+  test('fresh install happy path: probe fails, install succeeds, re-probe passes → no reason, lock released, EXIT trap restored', () => {
+    const r = runBlock({ probe: 'fail-then-ok', bunx: 'exit 0' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('REASON=\n');
+    expect(r.stdout).toContain('REACHED_END=1');
+    // Installer ran exactly once (no override on a non-26.04 path).
+    const mark = fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8');
+    expect(mark.split('\n').filter((l) => l.startsWith('bunx-called')).length).toBe(1);
+    expect(mark).toContain('override=unset');
+    // The mkdir-mutex is released for the next setup...
+    expect(fs.existsSync(path.join(r.tmp, 'gstack-playwright-install.lock'))).toBe(false);
+    // ...and the chained trap was restored, so cleanup_copied_bun still fires at exit.
+    expect(fs.readFileSync(path.join(r.tmp, 'mark.exit'), 'utf-8')).toContain('cleanup');
+  });
+
+  test('failed install still releases the lock and keeps cleanup_copied_bun on the EXIT trap', () => {
+    const r = runBlock({ probe: 'fail', bunx: 'exit 7' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('REASON=chromium-install\n');
+    expect(fs.existsSync(path.join(r.tmp, 'gstack-playwright-install.lock'))).toBe(false);
+    expect(fs.readFileSync(path.join(r.tmp, 'mark.exit'), 'utf-8')).toContain('cleanup');
+  });
+
+  test('Ubuntu 26.04 override reaches the installer as PLAYWRIGHT_HOST_PLATFORM_OVERRIDE (#2101)', () => {
+    const r = runBlock({ probe: 'fail-then-ok', bunx: 'exit 0', platformOverride: 'ubuntu24.04-x64' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('REASON=\n');
+    expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('override=ubuntu24.04-x64');
+  });
+
+  test('Windows without Node.js: reason windows-no-node, setup continues (was: exit 1), post-install probe skipped', () => {
+    const { bin, cleanup } = pathWithoutNode();
+    try {
+      const r = runBlock({ probe: 'fail', bunx: 'exit 0', isWindows: '1', env: { PATH: bin } });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('REASON=windows-no-node\n');
+      expect(r.stdout).toContain('REACHED_END=1');
+      expect(r.stderr).toContain('nodejs.org');
+      // The install itself ran; only the Node verification failed.
+      expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('bunx-called');
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('Windows with Node.js but npm cannot install playwright/@ngrok: reason windows-node-modules, setup continues', () => {
+    const r = runBlock({
+      probe: 'fail', bunx: 'exit 0', isWindows: '1',
+      prelude: 'node() { return 1; }\nnpm() { echo "npm $*" >> "$MARK"; return 1; }',
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('REASON=windows-node-modules\n');
+    expect(r.stdout).toContain('REACHED_END=1');
+    expect(r.stdout).toContain('Windows detected');
+    expect(fs.readFileSync(path.join(r.tmp, 'mark'), 'utf-8')).toContain('npm install --no-save playwright');
+  });
+
+  test('Windows with Node.js loading Playwright but the launch probe failing: Windows-specific post-install-launch hint', () => {
+    const r = runBlock({ probe: 'fail', bunx: 'exit 0', isWindows: '1', prelude: 'node() { return 0; }' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('REASON=post-install-launch\n');
+    expect(r.stderr).toContain('via Node.js');
+    expect(r.stderr).toContain('oven-sh/bun#4253');
+    // The Linux userns hint belongs to the other arm.
+    expect(r.stderr).not.toContain('GSTACK_CHROMIUM_NO_SANDBOX');
+  });
+});
+
+/** The 2b emoji-font step: the daemon font refresh must only run when the
+ *  browser actually works — otherwise setup prints a second failure line. */
+function runEmojiStep(reason: string, fontOk: boolean): { stdout: string; stderr: string; status: number } {
+  const emoji = slice(BLOCK_END, '# 3. Ensure ~/.gstack global state directory exists');
+  const script = [
+    'set -e',
+    `_PW_FAIL_REASON="${reason}"`,
+    `ensure_emoji_font() { return ${fontOk ? 0 : 1}; }`,
+    'refresh_browse_daemon_for_fonts() { echo REFRESHED; }',
+    emoji,
+    'echo "REACHED_END=1"',
+  ].join('\n');
+  const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
+  return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1 };
+}
+
+describe('setup: emoji-font daemon refresh is gated on Chromium availability', () => {
+  test('font installed + Chromium usable → daemon refreshed; font installed + Chromium unavailable → no refresh; font missing → note, no refresh', () => {
+    const usable = runEmojiStep('', true);
+    expect(usable.status).toBe(0);
+    expect(usable.stdout).toContain('REFRESHED');
+    expect(usable.stdout).toContain('REACHED_END=1');
+
+    const unavailable = runEmojiStep('chromium-install', true);
+    expect(unavailable.status).toBe(0);
+    expect(unavailable.stdout).not.toContain('REFRESHED');
+    expect(unavailable.stdout).toContain('REACHED_END=1');
+
+    const noFont = runEmojiStep('', false);
+    expect(noFont.status).toBe(0);
+    expect(noFont.stdout).not.toContain('REFRESHED');
+    expect(noFont.stderr).toContain('could not auto-install a color-emoji font');
+    expect(noFont.stdout).toContain('REACHED_END=1');
+  });
+});
+
+/** The final summary block, executed with a recording telemetry stub. */
+function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing'): { stdout: string; stderr: string; status: number; argv: string } {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pw-summary-'));
+  try {
+    const argvFile = path.join(tmp, 'telemetry.argv');
+    if (telemetry !== 'missing') {
+      fs.mkdirSync(path.join(tmp, 'bin'));
+      const stub = path.join(tmp, 'bin', 'gstack-telemetry-log');
+      fs.writeFileSync(stub, `#!/usr/bin/env bash\necho "$@" >> "${argvFile}"\nexit ${telemetry === 'ok' ? 0 : 1}\n`);
+      fs.chmodSync(stub, 0o755);
+    }
+    const tail = SETUP_SRC.slice(SETUP_SRC.indexOf('# ─── Chromium bootstrap summary'));
+    const script = [
+      'set -e',
+      'QUIET=0',
+      'log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }',
+      `SOURCE_GSTACK_DIR="${tmp}"`,
+      `_PW_FAIL_REASON="${reason}"`,
+      tail,
+      'echo "REACHED_END=1"',
+    ].join('\n');
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
+    const argv = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, 'utf-8') : '';
+    return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1, argv };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+describe('setup: Chromium bootstrap summary block executes', () => {
+  test('names the reason and the affected skills; hints are reason-specific; telemetry gets the reason code only', () => {
+    const timeout = runSummary('chromium-install-timeout', 'ok');
+    expect(timeout.status).toBe(0);
+    expect(timeout.stdout).toContain('Browser unavailable: Chromium bootstrap did not complete (chromium-install-timeout)');
+    for (const skill of ['/qa', '/qa-only', '/design-review', '/browse', 'make-pdf', '/pair-agent']) {
+      expect(timeout.stdout).toContain(skill);
+    }
+    expect(timeout.stdout).toContain('GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=1800');
+    expect(timeout.stdout).not.toContain('GSTACK_CHROMIUM_NO_SANDBOX');
+    // Reason code only, never a path or command line; a synthetic session id
+    // keeps the one-shot event from sweeping other sessions' pending markers.
+    expect(timeout.argv.trim()).toBe('--event-type onboarding --skill _setup_playwright --outcome chromium-install-timeout --no-sweep');
+
+    const launch = runSummary('post-install-launch', 'ok');
+    expect(launch.stdout).toContain('GSTACK_CHROMIUM_NO_SANDBOX=1');
+    expect(launch.stdout).not.toContain('GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=1800');
+    expect(launch.argv).toContain('--outcome post-install-launch');
+
+    const offline = runSummary('chromium-install', 'ok');
+    expect(offline.stdout).toContain('Browser unavailable');
+    expect(offline.stdout).not.toContain('GSTACK_CHROMIUM_NO_SANDBOX');
+    expect(offline.stdout).not.toContain('GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=1800');
+  });
+
+  test('silent when Chromium is fine; a missing or failing telemetry binary never breaks the tail of setup', () => {
+    const fine = runSummary('', 'ok');
+    expect(fine.status).toBe(0);
+    expect(fine.stdout).toBe('REACHED_END=1\n');
+    expect(fine.argv).toBe('');
+
+    const missing = runSummary('chromium-install', 'missing');
+    expect(missing.status).toBe(0);
+    expect(missing.stdout).toContain('Browser unavailable');
+    expect(missing.stdout).toContain('REACHED_END=1');
+
+    const failing = runSummary('chromium-install', 'fail');
+    expect(failing.status).toBe(0);
+    expect(failing.stdout).toContain('REACHED_END=1');
+    expect(failing.argv).toContain('--outcome chromium-install');
+  });
+
+  test('an explicit opt-out (skipped) is reported as a choice, not a failure, and sends no telemetry', () => {
+    const skipped = runSummary('skipped', 'ok');
+    expect(skipped.status).toBe(0);
+    expect(skipped.stdout).toContain('Chromium install skipped by request (GSTACK_SKIP_PLAYWRIGHT=1)');
+    expect(skipped.stdout).not.toContain('Browser unavailable');
+    expect(skipped.stdout).not.toContain('Fix the cause');
+    expect(skipped.argv).toBe('');
+  });
+
+  test('GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=0, 000, or a value past nine digits means the default, not kill-on-first-poll or unbounded', () => {
+    for (const v of ['0', '000', '99999999999999999999', 'abc', '']) {
+      const r = runBlock({ probe: 'fail', bunx: 'exit 3', env: { GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: v } });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('REASON=chromium-install\n');
+    }
+    // A wedged installer under "000" is still bounded by the DEFAULT, so with a
+    // 1s override written as "0001" it is killed and classified as a timeout.
+    const bounded = runBlock({ probe: 'fail', bunx: 'sleep 30', env: { GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: '0001' } });
+    expect(bounded.stdout).toContain('REASON=chromium-install-timeout\n');
+  }, 30_000);
+});
+
+/**
+ * .gstack-owned marker (#2119): Windows installs COPY SKILL.md, so there is no
+ * symlink to readlink. link_claude_skill_dirs writes the marker; gstack-relink
+ * and cleanup_old_claude_symlinks prove provenance by it instead of by name.
+ */
+function runLinker(opts: {
+  isWindows: '0' | '1';
+  payload: string[];
+  plant?: (skills: string, payload: string) => void;
+}): { status: number; stdout: string; stderr: string; skills: string; payload: string; tmp: string } {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-marker-'));
+  const skills = path.join(tmp, 'skills');
+  const payload = path.join(skills, 'gstack');
+  fs.mkdirSync(payload, { recursive: true });
+  for (const name of opts.payload) {
+    fs.mkdirSync(path.join(payload, name));
+    fs.writeFileSync(path.join(payload, name, 'SKILL.md'), `---\nname: ${name}\n---\n<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n<!-- Regenerate: bun run gen:skill-docs -->\n# ${name}\n`);
+  }
+  opts.plant?.(skills, payload);
+  const script = [
+    'set -e',
+    `IS_WINDOWS=${opts.isWindows}`,
+    'SKILL_PREFIX=0',
+    // Keep the operator's real render dir out of the picture.
+    `GSTACK_USER_RENDER_DIR="${path.join(tmp, 'no-render')}"`,
+    '_link_skill_runtime_assets() { :; }',
+    '_print_windows_copy_note_once() { :; }',
+    '_FOREIGN_SKIPPED_ENTRIES=()',
+    extractFn('_link_or_copy'),
+    extractFn('_gstack_link_target_abs'),
+    extractFn('_gstack_target_is_ours'),
+    extractFn('_claude_entry_is_ours'),
+    extractFn('_write_owned_marker'),
+    extractFn('_gstack_generated_header'),
+    extractFn('link_claude_skill_dirs'),
+    extractFn('cleanup_old_claude_symlinks'),
+    `link_claude_skill_dirs "${payload}" "${skills}"`,
+    'echo "FOREIGN=${_FOREIGN_SKIPPED_ENTRIES[*]:-}"',
+  ].join('\n');
+  const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000, env: { PATH: process.env.PATH ?? '', HOME: tmp } });
+  return { status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', skills, payload, tmp };
+}
+
+describe.skipIf(process.platform === 'win32')('setup: .gstack-owned ownership marker for Windows copy installs (#2119)', () => {
+  test('IS_WINDOWS=1 writes the marker beside a COPIED SKILL.md; IS_WINDOWS=0 writes no marker beside a symlinked one', () => {
+    const win = runLinker({ isWindows: '1', payload: ['qa', 'ship'] });
+    try {
+      expect(win.status).toBe(0);
+      for (const name of ['qa', 'ship']) {
+        const md = path.join(win.skills, name, 'SKILL.md');
+        expect(fs.lstatSync(md).isSymbolicLink()).toBe(false);
+        expect(fs.existsSync(path.join(win.skills, name, '.gstack-owned'))).toBe(true);
+      }
+      expect(win.stdout).toContain('linked skills: qa ship');
+    } finally {
+      fs.rmSync(win.tmp, { recursive: true, force: true });
+    }
+
+    const unix = runLinker({ isWindows: '0', payload: ['qa'] });
+    try {
+      expect(unix.status).toBe(0);
+      expect(fs.lstatSync(path.join(unix.skills, 'qa', 'SKILL.md')).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(path.join(unix.skills, 'qa', '.gstack-owned'))).toBe(false);
+    } finally {
+      fs.rmSync(unix.tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('marker writer → cleanup reader: copies the Windows linker marked are reaped on a mode flip; an unmarked same-name skill survives', () => {
+    // Phase 1: a Windows install links qa + ship (copies + markers).
+    const r = runLinker({ isWindows: '1', payload: ['qa', 'ship'] });
+    try {
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(path.join(r.skills, 'qa', '.gstack-owned'))).toBe(true);
+      expect(fs.existsSync(path.join(r.skills, 'ship', '.gstack-owned'))).toBe(true);
+      // Phase 2: the payload now also ships `review`, and the user has their
+      // OWN hand-written `review` (no marker, not byte-identical, no generated
+      // header) plus an unrelated `my-own`. A mode flip runs the cleanup.
+      fs.mkdirSync(path.join(r.payload, 'review'));
+      fs.writeFileSync(path.join(r.payload, 'review', 'SKILL.md'), '---\nname: review\n---\n<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->\n<!-- Regenerate: bun run gen:skill-docs -->\n# review\n');
+      fs.mkdirSync(path.join(r.skills, 'review'));
+      fs.writeFileSync(path.join(r.skills, 'review', 'SKILL.md'), '---\nname: review\n---\n# mine, hand-written\n');
+      fs.mkdirSync(path.join(r.skills, 'my-own'));
+      fs.writeFileSync(path.join(r.skills, 'my-own', 'SKILL.md'), '---\nname: my-own\n---\n');
+      const flip = spawnSync('bash', ['-c', [
+        'set -e', 'IS_WINDOWS=1',
+        extractFn('_gstack_generated_header'),
+        extractFn('cleanup_old_claude_symlinks'),
+        `cleanup_old_claude_symlinks "${r.payload}" "${r.skills}"`,
+      ].join('\n')], { encoding: 'utf-8', timeout: 10_000 });
+      expect(flip.status).toBe(0);
+      expect(flip.stdout).toContain('cleaned up old entries:');
+      expect(flip.stdout).toContain('qa');
+      expect(flip.stdout).toContain('ship');
+      expect(flip.stdout).not.toContain('review');
+      expect(fs.readdirSync(r.skills).sort()).toEqual(['gstack', 'my-own', 'review']);
+      expect(fs.readFileSync(path.join(r.skills, 'review', 'SKILL.md'), 'utf-8')).toContain('mine, hand-written');
+    } finally {
+      fs.rmSync(r.tmp, { recursive: true, force: true });
+    }
   });
 });
