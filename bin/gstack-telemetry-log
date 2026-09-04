@@ -102,8 +102,8 @@ fi
 # between concurrent sessions. Finalize any that don't match our session.
 # --no-sweep (one-shot events from setup) skips this: a marker that is not
 # ours is another live session's, not a stale one.
+if [ -z "$NO_SWEEP" ]; then
 for PFILE in "$PENDING_DIR"/.pending-*; do
-  [ -z "$NO_SWEEP" ] || break
   [ -f "$PFILE" ] || continue
   # Skip our own session's marker (it's still in-flight)
   PFILE_BASE="$(basename "$PFILE")"
@@ -127,6 +127,7 @@ for PFILE in "$PENDING_DIR"/.pending-*; do
       "$P_TS" "$P_SKILL" "$P_SID" "$P_VER" "$P_OS" "$P_ARCH" >> "$JSONL_FILE" 2>/dev/null || true
   fi
 done
+fi
 
 # Clear our own session's pending marker (we're about to log the real event)
 [ -n "$SESSION_ID" ] && rm -f "$PENDING_DIR/.pending-$SESSION_ID" 2>/dev/null || true
