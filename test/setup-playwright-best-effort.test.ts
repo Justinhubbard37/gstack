@@ -429,7 +429,7 @@ describe('setup: emoji-font daemon refresh is gated on Chromium availability', (
 });
 
 /** The final summary block, executed with a recording telemetry stub. */
-function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing'): { stdout: string; stderr: string; status: number; argv: string } {
+function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing', prelude: string[] = []): { stdout: string; stderr: string; status: number; argv: string } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pw-summary-'));
   try {
     const argvFile = path.join(tmp, 'telemetry.argv');
@@ -446,12 +446,12 @@ function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing'): { std
       'log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }',
       `SOURCE_GSTACK_DIR="${tmp}"`,
       `_PW_FAIL_REASON="${reason}"`,
+      ...prelude,
       tail,
       'echo "REACHED_END=1"',
     ].join('\n');
     const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: 10_000 });
     if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
-  if (/command not found/.test(r.stderr ?? '')) throw new Error(`harness drift (missing extracted helper):\n${r.stderr}`);
     const argv = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, 'utf-8') : '';
     return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1, argv };
   } finally {
@@ -499,6 +499,19 @@ describe('setup: Chromium bootstrap summary block executes', () => {
     expect(failing.status).toBe(0);
     expect(failing.stdout).toContain('REACHED_END=1');
     expect(failing.argv).toContain('--outcome chromium-install');
+  });
+
+  test('the summary names foreign entries left untouched and customized SKILL.md files moved to the backup root', () => {
+    const r = runSummary('', 'missing', ['_FOREIGN_SKIPPED_ENTRIES=(qa)', '_BACKED_UP_SKILL_MDS=(ship review)', '_SKILL_BACKUP_ROOT="/tmp/gstack-bk/20260904"']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('Not registered (a skill you own already uses the name; left untouched): qa');
+    expect(r.stdout).toContain("Moved 2 customized SKILL.md file(s) to /tmp/gstack-bk/20260904 before installing gstack's: ship review");
+    expect(r.stdout).not.toContain('Browser unavailable');
+    expect(r.stdout).toContain('REACHED_END=1');
+    // Nothing to report → neither line.
+    const quiet = runSummary('', 'missing');
+    expect(quiet.stdout).not.toContain('Not registered');
+    expect(quiet.stdout).not.toContain('Moved ');
   });
 
   test('an explicit opt-out (skipped) is reported as a choice, not a failure, and sends no telemetry', () => {

@@ -2982,3 +2982,8 @@ if [ ${#_FOREIGN_SKIPPED_ENTRIES[@]} -gt 0 ]; then
   log "Not registered (a skill you own already uses the name; left untouched): ${_FOREIGN_SKIPPED_ENTRIES[*]}"
   log "  Rename or move yours, or switch modes (./setup --prefix / --no-prefix) so the names no longer collide."
 fi
+if [ ${#_BACKED_UP_SKILL_MDS[@]} -gt 0 ]; then
+  log ""
+  log "Moved ${#_BACKED_UP_SKILL_MDS[@]} customized SKILL.md file(s) to $_SKILL_BACKUP_ROOT before installing gstack's: ${_BACKED_UP_SKILL_MDS[*]}"
+  log "  Those were gstack-generated files you had edited; restore anything you meant to keep under a different skill name."
+fi
