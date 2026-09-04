@@ -99,8 +99,8 @@ set -e
 # Unparseable payload (or no parser available): DENY. A boundary hook that
 # allows what it cannot read is not a boundary.
 if [ "$EXTRACT_RC" -ne 0 ] && [ -n "$INPUT" ]; then
-  _FREEZE_DECIDED=1
   gstack_hook_decision deny "[freeze] Could not parse the tool payload to check the freeze boundary. Blocked (fail closed). Freeze boundary: $FREEZE_DIR"
+  _FREEZE_DECIDED=1
   exit 0
 fi
 
@@ -163,7 +163,7 @@ case "$FILE_PATH" in
     # The reason is JSON-encoded by the shared helper. Never interpolate paths
     # into hand-built JSON: a path containing a quote or newline produced
     # malformed JSON here, and the deny silently no-oped.
-    _FREEZE_DECIDED=1
     gstack_hook_decision deny "[freeze] Blocked: $FILE_PATH is outside the freeze boundary ($FREEZE_DIR). Only edits within the frozen directory are allowed."
+    _FREEZE_DECIDED=1
     ;;
 esac
